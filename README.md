@@ -1,0 +1,209 @@
+# mail-relay
+
+> 内部邮件中转服务：DSH 会话不直接发信，而是把邮件交给本服务，由本服务负责安全审查、投递，以及回收并审查回复。
+>
+> ⚠️ **`mail-relay`（发行名）与 `mail_relay`（Python 导入包名）都是占位名，最终命名尚未确定。** 改名成本随代码量上升，确定后需要一次性替换。
+
+---
+
+## 状态声明
+
+**当前处于骨架阶段：业务逻辑尚未实现。**
+
+仓库里目前只有目录骨架、工程配置、AI 协作规则，以及一个能响应 `/healthz` 的最小 FastAPI 入口。四条轮询流、数据库表结构、审查逻辑、SMTP/IMAP 对接均为待实现或待确认。
+
+- 尚未定案的问题清单见 **`docs/open-questions.md`**（未定项不允许自行拍默认值）。
+- 特性需求与验收标准见 **`specs/`**。
+- 已冻结的技术决策见 **`docs/adr/`**。
+- AI 协同规则见 **`AGENTS.md`**。
+
+---
+
+## 系统在做什么
+
+一句话：**一个只对内提供 HTTP 接口、自己不直接发信的邮件中转服务。**
+
+DSH 会话通过 `POST /v1/messages` 把邮件内容交给本服务；邮件先落入**待审表**，由四条相互独立、并发运行的进程内轮询流逐步推进——先做安全审查，过审后写入**邮件表**并投递；对方回复被专用回复邮箱收下后，再由 IMAP 拉回、同样过一遍审查，最终由 `GET /v1/messages/{id}/replies` 供 DSH 会话取回。审查不通过的邮件进入**拒审表**，不投递、不外发。
+
+```
+   DSH 会话
+      │  POST /v1/messages
+      ▼
+  待审表 (pending)
+      │
+      │  流① 安全审查出站邮件（敏感信息 / 病毒）
+      ├── 通过 ──► 邮件表 (queued)
+      └── 不通过 ─► 拒审表 (rejected)
+                      │
+                      │  流② 发送邮件（SMTP 投递）
+                      ▼
+                外部收件人
+                      │  回复
+                      ▼
+                 专用回复邮箱
+                      │
+                      │  流③ 拉取入站回复（IMAP，UID 游标增量拉取）
+                      ▼
+                 待审表 (inbound)
+                      │
+                      │  流④ 安全审查回复
+                      ├── 通过 ──► 邮件表 (received)
+                      └── 不通过 ─► 拒审表
+                                      │
+                                      │  GET /v1/messages/{id}/replies
+                                      ▼
+                                  DSH 会话取回回复
+```
+
+四条流全部由**进程内 asyncio 任务**驱动，随 FastAPI 的 lifespan 启停，间隔相互独立、当前默认均为 **10 秒**；间隔是配置项，不硬编码。
+
+---
+
+## 技术栈
+
+| 项 | 选型 |
+|---|---|
+| 语言 / 运行时 | Python 3.13（`requires-python = ">=3.13,<3.14"`，由 `.python-version` 锁定） |
+| 依赖与解释器管理 | [`uv`](https://docs.astral.sh/uv/) |
+| 构建后端 | hatchling（单包、`src` 布局） |
+| Web 框架 | FastAPI + uvicorn |
+| 数据库 | PostgreSQL |
+| 配置 | pydantic-settings，唯一入口 `mail_relay.config` |
+| 日志 | structlog（禁止 `print`） |
+| 调度 | 进程内 asyncio，四条独立循环 |
+| 静态检查 | ruff（format + lint）、mypy |
+| 测试 | pytest + pytest-asyncio（`asyncio_mode = "auto"`） |
+| 提交规范 | Conventional Commits，描述用中文，commitizen 校验 |
+| 质量门禁 | pre-commit + `scripts/check.*`（**不跑 CI**） |
+| 生产部署 | CentOS 8 完全离线 + Docker 容器 |
+
+---
+
+## 目录结构
+
+```
+.
+├── src/mail_relay/        应用源码（src 布局：api / flows / providers / schemas / db / core）
+├── tests/                 测试（unit 纯逻辑，integration 需真实 PostgreSQL / 邮件服务）
+├── docs/                  架构、数据模型、API、配置、部署、测试说明；docs/adr/ 放架构决策记录
+├── specs/                 规格驱动开发：每个特性一个 <NNNN-slug>/ 目录（spec.md / plan.md / tasks.md）
+├── skills/                可复用的固定流程
+├── deploy/                镜像构建、离线交付、迁移、启动脚本与预演环境
+├── scripts/               本地开发与门禁脚本（开发依赖编排、一键检查）
+├── migrations/            Alembic 迁移
+├── .env.example           环境变量模板（真实的 .env 不入库）
+└── pyproject.toml         Python 工程配置与工具配置的唯一入口
+```
+
+> 各目录「放什么 / 不放什么」以 `AGENTS.md` 的目录职责表为准。
+
+---
+
+## 快速开始
+
+**前置条件**
+
+1. Python **3.13**（`uv` 会依据 `.python-version` 自动准备，无需手工安装）。
+2. [`uv`](https://docs.astral.sh/uv/) 已安装并可用。
+
+**安装依赖**
+
+```powershell
+uv sync
+```
+
+**（可选）启动开发依赖**
+
+需要真实 PostgreSQL（以及本地收发回路验证用的邮件服务）时：
+
+```powershell
+./scripts/dev-up.ps1        # Windows
+bash scripts/dev-up.sh      # Linux / CentOS 8
+```
+
+**配置**
+
+```powershell
+Copy-Item .env.example .env   # Linux: cp .env.example .env
+```
+
+然后按 `.env` 中注释填写真实连接参数。
+
+**本地起服务**
+
+```powershell
+uv run uvicorn mail_relay.main:app --reload
+```
+
+---
+
+## 配置说明
+
+所有可变配置集中在一个文件：**`.env.example`**（模板）/ **`.env`**（本地实际值）。
+
+- 环境变量是**唯一**的配置来源：监听地址与端口、数据库连接串、发件人与回复地址、SMTP / IMAP 主机端口账号口令、四条流的轮询间隔，全部只从环境变量读取。
+- 代码内部统一通过 `mail_relay.config` 读取，**禁止**在业务模块里直接 `os.environ[...]` 或再写一份默认值。
+- `.env` 已被 `.gitignore` 忽略（`.env.example` 例外保留）；模板里的口令一律是 `change-me` 这类明显假值。
+- SMTP / IMAP 的主机、端口、账号、口令等**实际值由所有者后续提供**，当前模板中的 `smtp.example.com` / `imap.example.com` / `change-me` 均为占位。
+- 四条轮询流间隔（`POLL_*_SECONDS`）**当前均为 10 秒**。
+- 变量名清单被 `src/mail_relay/config.py` 严格依赖，**改名前请同步两侧**，否则服务起不来。
+
+---
+
+## 质量门禁
+
+本项目**没有 CI workflow，也不会新建**——门禁只能靠自己跑。
+
+**一键脚本**（依次执行 `ruff format --check`、`ruff check`、`mypy src`、`pytest`）：
+
+```powershell
+./scripts/check.ps1        # Windows
+bash scripts/check.sh      # Linux / CentOS 8
+```
+
+**pre-commit**（提交时自动拦下格式、lint、提交信息问题）：
+
+```powershell
+uv run pre-commit install --install-hooks
+uv run pre-commit install --hook-type commit-msg
+uv run pre-commit run --all-files   # 手动全量跑一次
+```
+
+提交信息由 commitizen 在 `commit-msg` 阶段校验：Conventional Commits 格式 + 中文描述，例如 `feat: 新增出站审查流`。
+
+> 提交前请务必跑过 `scripts/check.*`。不跑 CI 就意味着没有任何自动兜底。
+
+---
+
+## 部署
+
+开发机（Windows）构建镜像 → `docker save` 导出离线包 → 生产服务器（CentOS 8，**完全离线**）`docker load` 导入并启动；生产 PostgreSQL 与应用同机，数据落在宿主机数据卷上。
+
+详细的构建、导出、导入、升级与回滚步骤见 **`deploy/README.md`**——部署入口全部在 `deploy/` 下，**不要另起一套部署脚本**。
+
+---
+
+## 已知风险
+
+1. **`httpx` 在 Python 3.13 上的官方声明缺失。** `httpx` 0.28.1 的 PyPI classifier 只声明到 Python 3.12，在 3.13 上实际可用，但官方未声明支持。`httpx` 是 FastAPI `TestClient` 的必需依赖，开发环境需要它；若未来出现兼容问题，替代方案是等上游补齐声明或改用其他测试客户端。
+2. **包名是占位。** `mail-relay` / `mail_relay` 尚未最终定名。发行名、导入包名、目录名、Docker 镜像名、配置项前缀都可能随之变更，越晚改名成本越高。
+3. **CentOS 8 已 EOL。** CentOS 8 于 2021-12-31 停止维护，官方仓库已下线，镜像与系统补丁均不再更新。生产环境**完全离线**，因此无法在线打补丁；系统级安全更新需要靠离线包手工完成。基础镜像与依赖版本应固定，并在 `deploy/` 中记录来源。
+4. **审查一期是空实现占位。** 一期审查逻辑必定通过，真实的敏感信息 / 病毒审查来源尚未定案（见 `docs/open-questions.md`），在此之前不要把它当作安全边界。
+5. **数据库驱动与 IMAP 客户端尚未选型。** `asyncpg` 与 `psycopg3`、`imapclient` 与 `aioimaplib` 均未定案（见 `docs/open-questions.md` 的依赖与工具选型一节）。因此本阶段 `pyproject.toml` 的运行时依赖**只列了骨架最小集**（fastapi / uvicorn / pydantic-settings / structlog），**尚未包含任何数据库驱动与 IMAP 客户端**；选定后需先补 ADR，再补依赖。同理，`.env.example` 里的 `DATABASE_URL` 目前以 `postgresql+asyncpg://` 为占位形态，驱动定案后需同步调整。
+
+---
+
+## 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| `AGENTS.md` | AI 协同开发规则（唯一真源） |
+| `docs/open-questions.md` | 尚未定案的问题清单——**动代码前先看这里** |
+| `docs/adr/` | 架构决策记录（不可逆决策必须留档） |
+| `specs/` | 规格驱动开发：需求、计划、任务与验收标准 |
+| `docs/` | 架构、数据模型、API 契约、配置、部署与测试说明 |
+| `skills/` | 可复用的固定流程 |
+| `deploy/README.md` | 镜像构建与离线交付全流程 |
+| `CONTRIBUTING.md` | 提交规范、规格驱动流程与本地门禁 |
+| `SECURITY.md` | 漏洞报告渠道与本项目特有的安全约束 |
+| `CHANGELOG.md` | 版本变更记录（手工维护） |

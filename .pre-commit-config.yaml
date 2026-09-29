@@ -1,0 +1,42 @@
+# ============================================================================
+# mail-relay pre-commit 配置
+# 本仓库不跑 CI，门禁全靠这里 + scripts/check.*，请务必先装：
+#   uv run pre-commit install --install-hooks
+#   uv run pre-commit install --hook-type commit-msg
+# ============================================================================
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  # --- 通用文件卫生 ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Markdown 行尾双空格是硬换行语法，排除掉。
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: mixed-line-ending
+        # .ps1/.bat 由 .gitattributes 强制 CRLF，其余一律 LF。
+        args: ["--fix=lf"]
+        exclude: \.(ps1|psm1|bat|cmd)$
+
+  # --- 格式化与 lint（ruff）---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  # --- 提交信息校验（Conventional Commits，中文描述）---
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.19.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+        args: ["--allow-abort", "--commit-msg-file"]

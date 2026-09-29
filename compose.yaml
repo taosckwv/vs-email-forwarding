@@ -1,0 +1,136 @@
+# =============================================================================
+# mail-relay 生产编排（应用 + 同机 PostgreSQL，同一个 compose 管理）
+#
+# 用法（在服务器交付目录里，与 .env、deploy/ 同级）：
+#   docker compose -f compose.yaml up -d
+# 或者直接用仓库自带的脚本：deploy/run.sh
+#
+# 交付方式：开发机构建镜像 -> docker save -> 介质 -> 服务器 docker load。
+# 所以本文件**只写 image、不写 build**：
+#   * 服务器完全离线，任何触发 build 的路径都会失败；
+#   * 开发机构建走 deploy/build-image.ps1，不靠 compose 触发构建。
+# 镜像名用 ${MAIL_RELAY_IMAGE} 是为了离线 load 后能指定具体版本 tag（便于回滚）。
+#
+# 前提：服务器上必须是 Docker Compose v2（`docker compose` 子命令）。
+#   本文件不含 `version:` 字段（Compose Spec），并且用到了
+#   depends_on.condition: service_healthy —— compose v1（python 版
+#   docker-compose）不支持这两点。上服务器先跑 `docker compose version` 确认。
+#
+# 服务名与容器名一律 ASCII；日志、凭据、收件人地址不进本文件（见 AGENTS.md §8）。
+# =============================================================================
+
+name: mail-relay
+
+services:
+  # ---------------------------------------------------------------------------
+  # 应用：FastAPI + 4 条进程内 asyncio 轮询流（间隔由 .env 里的配置项控制）
+  # ---------------------------------------------------------------------------
+  app:
+    # 离线服务器上镜像已 load 到本地，用变量指定具体版本 tag；
+    # 回滚 = 改这个变量成旧 tag 再 up -d（见 deploy/README.md「回滚」）。
+    # ⚠️ MAIL_RELAY_IMAGE 也不在当前 .env.example 里，交付前要加进 .env
+    #    （例如 MAIL_RELAY_IMAGE=mail-relay:0.1.0）。不写则退回下面的 latest 默认值。
+    image: ${MAIL_RELAY_IMAGE:-mail-relay:latest}
+    container_name: mail-relay-app
+    # 架构固定 linux/amd64：与 deploy/build-image.ps1 的 -Platform、save/load 的
+    # --platform 保持一致，保证「开发机存的」就是「服务器跑的」；
+    # 将来开发机换成 arm64（例如 Apple Silicon）时也不会静默产出错架构镜像。
+    platform: linux/amd64
+    # 应用的全部可变配置都收敛在 .env（HTTP_PORT、数据库连接、SMTP/IMAP、
+    # 四条流的轮询间隔等），仓库里只提交 .env.example。
+    env_file:
+      - .env
+    # 容器内**覆盖** DATABASE_URL：主机名必须是 compose 服务名 `postgres`。
+    # 为什么在这里覆盖而不是让 .env 直接写 postgres：.env 里的 DATABASE_URL 是给
+    # 「开发机直接跑 uv run pytest / 本地调试」用的（那时库在 127.0.0.1），
+    # 而容器里的 127.0.0.1 指向应用自己。在这里覆盖后，同一份 .env 同时适用于
+    # 宿主机与容器，不必维护两份配置。
+    # 注意：environment 的优先级高于 env_file，所以这里的值一定会生效。
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-mail_relay}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置：请先在 .env 中填写数据库口令}@postgres:5432/${POSTGRES_DB:-mail_relay}"
+    ports:
+      # 宿主机端口由 .env 的 HTTP_PORT 决定，容器内固定 8000（见 Dockerfile EXPOSE）
+      - "${HTTP_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        # 等数据库真的能接受连接，而不是"容器起来了"。
+        # 这样应用启动时不会因为 Postgres 还在 initdb 而反复报连接错误。
+        condition: service_healthy
+    # 服务器重启、容器崩溃后自动拉起（除非是运维手动 stop）
+    restart: unless-stopped
+    # 停服时先给应用时间收尾（asyncio 循环与 HTTP 连接的优雅关闭）
+    stop_grace_period: 30s
+    # 继承 Dockerfile 里的 HEALTHCHECK（用 Python 标准库打 /healthz）
+    networks:
+      - mail-relay
+
+  # ---------------------------------------------------------------------------
+  # 数据库：与应用同机，官方 postgres 镜像，锁主版本 17
+  #   * 锁主版本而不锁 latest：17 的小版本升级是兼容的（可以直接 docker load 新
+  #     小版本镜像原地替换），主版本升级需要 pg_upgrade，必须是有意识的动作。
+  #   * 为什么停在 17、不跟 18：postgres:18 对数据目录做了**破坏性调整**——
+  #       ENV PGDATA /var/lib/postgresql/18/docker
+  #       VOLUME /var/lib/postgresql            （不再是 /var/lib/postgresql/data）
+  #     也就是说 18 的挂载点与 17 不同，照抄 17 的挂载写法会把数据放到匿名卷里、
+  #     出现「数据不在宿主机目录、重启后像丢库」这类事故。
+  #     本项目一期不追新，继续用 17 + /var/lib/postgresql/data 的老写法（最省事、
+  #     与现有运维习惯一致）。若将来要升 18，必须同时改挂载点与 README 的权限说明，
+  #     并先补 ADR。
+  #   * 数据落在宿主机目录 ./data/postgres（不是命名卷）：备份 = 打包该目录，
+  #     运维能直接看到文件；代价是要自己处理目录属主与 SELinux 标签。
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17
+    container_name: mail-relay-postgres
+    # 与 app 保持同架构，避免 amd64/arm64 混用导致 volume 里的数据文件不可读
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      # 这三个键由 compose 从 .env 插值（compose 会自动读取项目目录下的 .env），
+      # 官方 postgres 镜像做 initdb 时必须拿到它们。
+      # 三个键必须与 .env 里 DATABASE_URL 的用户 / 口令 / 库名一致，否则应用连不上库。
+      # .env.example 已包含这三个键，照它复制即可。
+      POSTGRES_USER: ${POSTGRES_USER:-mail_relay}
+      # 密码没有默认值：没设就直接失败，避免悄悄用弱口令把库跑起来。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置：请先在 .env 中填写数据库口令（键名与 initdb 用的口令，必须与 DATABASE_URL 一致）}
+      POSTGRES_DB: ${POSTGRES_DB:-mail_relay}
+      # 应用按 UTC 存取（见 AGENTS.md §7），数据库容器也固定 UTC，避免排查时区错乱
+      TZ: UTC
+    # 生产**不**把 5432 暴露到宿主机。应用与库在同一个 compose 网络里，
+    # 用服务名 postgres 互访即可，宿主机与外部网络都不需要这个端口。
+    #
+    # 如果确实要从宿主机连库排查，只绑回环地址，绝不要写 "5432:5432"
+    # （那等于把数据库暴露到服务器所有网卡上）：
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    volumes:
+      # 宿主机目录挂载（postgres:17 的数据目录是 /var/lib/postgresql/data）。
+      # 首次启动前必须保证该目录存在且属主是容器内的 postgres（uid/gid 999）：
+      #   mkdir -p ./data/postgres && chown -R 999:999 ./data/postgres
+      # CentOS 8 若 SELinux 为 enforcing，还需要给该目录重打标签；具体是
+      # :z/:Z 挂载选项还是 chcon（svirt_sandbox_file_t），尚未取得官方原文，
+      # **标注为待确认**，交付前按 deploy/README.md 的排查章节实测一次。
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready 是官方镜像自带工具，不需要额外装包
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mail_relay} -d ${POSTGRES_DB:-mail_relay} -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - mail-relay
+
+# -----------------------------------------------------------------------------
+# 自定义网络：应用与数据库只在这张 bridge 网络里互访；
+# 只有 app 的 HTTP_PORT 映射到宿主机，数据库不对外暴露。
+# 显式命名（mail-relay-net）便于排查与将来跨 compose 接入。
+# -----------------------------------------------------------------------------
+networks:
+  mail-relay:
+    name: mail-relay-net
+    driver: bridge
+
+# 说明：本文件**故意**不声明命名卷。
+#   生产数据放宿主机目录 ./data/postgres（见上），运维侧"备份/迁移"就是拷目录，
+#   不需要额外理解 docker volume 的生命周期（`docker compose down -v` 不会误删数据）。

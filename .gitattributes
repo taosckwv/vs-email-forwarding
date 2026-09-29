@@ -1,0 +1,50 @@
+# ============================================================================
+# mail-relay .gitattributes
+# 开发机是 Windows，生产部署在 CentOS 8 容器内。
+# 若换行符不做强制约束，.sh 带 CRLF 进容器后会直接报
+# "bad interpreter: No such file or directory"。这里把规则钉死。
+# ============================================================================
+
+# 默认：由 git 自动判定文本文件，统一按 LF 检出。
+* text=auto eol=lf
+
+# --- 脚本换行符（关键，勿改）---
+*.sh   text eol=lf
+*.bash text eol=lf
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# --- 文本类显式声明 ---
+*.py    text eol=lf
+*.pyi   text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.sql   text eol=lf
+Dockerfile text eol=lf
+*.env   text eol=lf
+.env.example text eol=lf
+
+# --- 二进制：不要做任何换行符或 diff 处理 ---
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.zip  binary
+*.tar  binary
+*.tar.gz binary
+*.tgz  binary
+*.gz   binary
+*.whl  binary
+*.so   binary
+*.dll  binary
+*.exe  binary
+
+# --- 锁文件：强制 LF，且不计入语言统计 ---
+uv.lock text eol=lf linguist-generated=true

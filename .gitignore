@@ -1,0 +1,56 @@
+# ============================================================================
+# mail-relay .gitignore
+# 原则：仓库里只保留源码、配置模板与文档；任何真实凭据都不许进版本库。
+# ============================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# --- uv ---
+.uv/
+
+# --- 环境变量文件（必须保留 .env.example）---
+.env
+.env.*
+!.env.example
+
+# --- IDE / 编辑器 ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- Windows ---
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# --- macOS（开发者可能跨平台协作）---
+.DS_Store
+
+# --- 本项目特有 ---
+data/
+*.tar
+.tools/

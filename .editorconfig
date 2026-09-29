@@ -1,0 +1,41 @@
+# ============================================================================
+# mail-relay .editorconfig
+# 让不同编辑器（VS Code / PyCharm / Vim）产出一致的缩进与换行。
+# ============================================================================
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+[*.{yaml,yml,toml,json,jsonc,cfg,ini}]
+indent_size = 2
+
+[*.md]
+# Markdown 里行尾两个空格是"硬换行"语法，不能被自动清除。
+trim_trailing_whitespace = false
+indent_size = 2
+
+[*.{sh,bash}]
+indent_size = 2
+
+[*.{ps1,psm1}]
+indent_size = 4
+end_of_line = crlf
+
+[*.{bat,cmd}]
+indent_size = 4
+end_of_line = crlf
+
+[Makefile]
+indent_style = tab
+indent_size = 4

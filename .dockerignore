@@ -1,0 +1,57 @@
+# ============================================================================
+# mail-relay .dockerignore
+# 构建上下文来自仓库根，这里只排除构建镜像时不需要的东西。
+# 注意：uv.lock / pyproject.toml / src / README.md / LICENSE 必须保留。
+# ============================================================================
+
+# --- 版本控制与 AI 协作元数据 ---
+.git
+.gitignore
+.gitattributes
+.github/
+
+# --- 测试与文档（镜像内不需要）---
+tests/
+docs/
+specs/
+skills/
+*.md
+!README.md
+
+# --- 本地开发脚本与部署脚本 ---
+scripts/
+deploy/*.ps1
+Makefile
+
+# --- Python 缓存与虚拟环境 ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# --- 开发机与本地产物 ---
+.env
+.env.*
+!.env.example
+data/
+.tools/
+*.tar
+*.tar.gz
+*.zip
+
+# --- 编辑器与系统垃圾 ---
+.idea/
+.vscode/
+.vscode-test/
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
