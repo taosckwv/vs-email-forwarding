@@ -26,7 +26,7 @@ services:
     image: postgres:17
     container_name: vs-email-forwarding-dev-postgres
     # platform 只是**运行期保险**（开发机上与生产同架构，行为更可比）；
-    # 真正决定镜像架构的是构建期（deploy/build-image.ps1 的 `docker build --platform`）。
+    # 真正决定镜像架构的是构建期（服务器侧构建脚本的 `docker build --platform`）。
     # 该字段依赖 compose v2（`docker compose version` 确认）。在 arm64 开发机
     # （Apple Silicon）上会走模拟，慢一些但结果可比。
     platform: linux/amd64

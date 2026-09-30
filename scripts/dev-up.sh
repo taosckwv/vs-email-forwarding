@@ -9,8 +9,8 @@
 # 用法（可以从任意目录调用，脚本自己推导仓库根）：
 #     bash scripts/dev-up.sh
 #
-# 前置条件：**已安装 Docker**（Windows 上是 Docker Desktop，见
-#   docs/open-questions.md D3）。没装的话本脚本只打印安装提示并退出。
+# 前置条件：宿主机能跑 Docker。**本项目那台开发机（Windows）跑不了**——它装不了 Docker Desktop，
+#   所以本脚本要在能跑 Docker 的 Linux 机器上执行（见 docs/research/05-dev-and-build-environment.md）。
 # =============================================================================
 set -euo pipefail
 
@@ -22,15 +22,15 @@ cd "${REPO_ROOT}"
 # --- 前置检查：Docker ---------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
     echo "[阻塞] 找不到 docker 命令。" >&2
-    echo "请先安装 Docker（Windows 上是 Docker Desktop，需要 WSL2，可能需要管理员权限并重启）：" >&2
-    echo "  https://docs.docker.com/desktop/setup/install/windows-install/" >&2
-    echo "装好后启动 Docker，确认 \`docker info\` 正常，再重跑本脚本。" >&2
+    echo "请先在这台机器上安装 Docker（Linux 上的 Docker 不需要硬件虚拟化）：" >&2
+    echo "  https://docs.docker.com/engine/install/" >&2
+    echo "装好后启动 docker，确认 \`docker info\` 正常，再重跑本脚本。" >&2
     exit 127
 fi
 
 if ! docker info >/dev/null 2>&1; then
     echo "[阻塞] docker 命令存在，但连不上 Docker 守护进程。" >&2
-    echo "请先启动 Docker Desktop / dockerd，再重跑本脚本。" >&2
+    echo "请先启动 docker 守护进程（dockerd），再重跑本脚本。" >&2
     exit 1
 fi
 

@@ -12,8 +12,9 @@
     .\scripts\dev-up.ps1
 
 .NOTES
-    前置条件：**已安装 Docker Desktop**。本机目前尚未安装（见 docs/open-questions.md D3），
-    没装的话本脚本只会打印安装提示并退出，不会做任何事。
+    前置条件：宿主机能跑 Docker。**这台开发机（Windows）跑不了**——它是未暴露嵌套虚拟化的虚拟机，
+    装不了 Docker Desktop（见 docs/research/05-dev-and-build-environment.md）；本脚本要在能跑
+    Docker 的 Linux 机器上执行，否则只会打印提示并退出。
 #>
 [CmdletBinding()]
 param()
@@ -32,13 +33,13 @@ Set-Location -LiteralPath $repoRoot
 # --- 前置检查：Docker ---------------------------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Host '[阻塞] 找不到 docker 命令。' -ForegroundColor Red
-    Write-Host '本机需要先安装 Docker Desktop（Windows 需要 WSL2，安装过程可能需要管理员权限并重启）：' -ForegroundColor Yellow
-    Write-Host '  https://docs.docker.com/desktop/setup/install/windows-install/' -ForegroundColor Yellow
-    Write-Host '装好后启动 Docker Desktop，等托盘图标变为运行中，再重跑本脚本。' -ForegroundColor Yellow
+    Write-Host '这台开发机装不了 Docker Desktop（未暴露嵌套虚拟化，WSL2 / Hyper-V 两个后端都不可用）。' -ForegroundColor Yellow
+    Write-Host '  见 docs/research/05-dev-and-build-environment.md' -ForegroundColor Yellow
+    Write-Host '请在能跑 Docker 的 Linux 机器上执行 bash scripts/dev-up.sh，而不是本机。' -ForegroundColor Yellow
     exit 127
 }
 
-# 守护进程可能没起来（Docker Desktop 未启动）
+# 守护进程可能没起来（Docker 未启动）
 $daemonOk = $true
 try {
     & docker info *> $null
@@ -48,7 +49,7 @@ try {
 }
 if (-not $daemonOk) {
     Write-Host '[阻塞] docker 命令存在，但连不上 Docker 守护进程。' -ForegroundColor Red
-    Write-Host '请先启动 Docker Desktop（等托盘图标变为运行中）再重跑本脚本。' -ForegroundColor Yellow
+    Write-Host '请先启动 docker 守护进程，再重跑本脚本。' -ForegroundColor Yellow
     exit 1
 }
 

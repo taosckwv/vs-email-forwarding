@@ -2,7 +2,7 @@
 # =============================================================================
 # vs-email-forwarding 生产镜像
 #
-# 用途（见 docs/adr/0013）：镜像**在目标服务器（CentOS 8）上本地构建** ->
+# 用途（见 docs/research/01-delivery-and-deploy.md）：镜像**在目标服务器（CentOS 8）上本地构建** ->
 #       docker compose up -d；基础镜像以镜像 tar 形式从外部带入并 `docker load`。
 # 环境前提：**与公网隔离、可达内网镜像源**——构建期可达内网 PyPI 源（装 wheel）、
 #       宿主可达内网 yum 源；**运行时不得依赖任何外部网络**。
@@ -10,7 +10,7 @@
 #
 # 需要 BuildKit（本文件用了 --mount=type=cache 与多阶段 ARG）：
 #   构建在目标服务器（CentOS 8 / Docker 26.1.3）上进行，BuildKit 是该版本 Docker
-#   的默认构建器，无需额外开关；本机的开发机装不了 Docker Desktop（见 docs/adr/0013），
+#   的默认构建器，无需额外开关；本机的开发机装不了 Docker Desktop（见 docs/research/01-delivery-and-deploy.md），
 #   也不在开发机构建。
 # =============================================================================
 
@@ -23,7 +23,7 @@
 #       2025-08-14 的 3.13.6-slim = Debian 13 trixie  （glibc 2.41）
 #     tag 名字一个字没变，glibc 从 2.36 跳到 2.41。
 #   * 本项目是「镜像在目标服务器上本地构建，基础镜像以 tar 带入」（见
-#     `docs/adr/0013`）：基础镜像 tar 由外部机器产出后带入，浮动 tag 意味着
+#     `docs/research/01-delivery-and-deploy.md`）：基础镜像 tar 由外部机器产出后带入，浮动 tag 意味着
 #     今天带入的与下次带入的可能是两套 ABI，而现场无法判断差异从哪来、
 #     更无法回退重建。所以 codename 必须钉死。
 #   * 为什么不用 latest：latest 会在无通知的情况下升级 Python 小版本，
@@ -31,7 +31,7 @@
 #   * digest 需在固化前自行复核（2026-09-29 抓到的 amd64 digest 为
 #     sha256:37134a49d21d2120e4c4d73bb76f8a4ab9aef31f096f7ec2ead48c2feead4332）
 #   * 保守备选：python:3.13-slim-bookworm（Debian 12 / glibc 2.36）。若担心 trixie
-#     上某些二进制轮子覆盖不全，用它是更稳的选择，但要在 ADR 里写明这是**有意的
+#     上某些二进制轮子覆盖不全，用它是更稳的选择，但要在 `docs/research/01-delivery-and-deploy.md` 里写明这是**有意的
 #     保守选择**，而不是随手写的一个 tag。
 #   * 为什么不用 alpine（python:3.13-alpine）：理由**不是**「没有 musl 轮子」——
 #     已核实 psycopg-binary / asyncpg / greenlet 都有 cp313 musllinux_1_2 轮子。
@@ -41,13 +41,14 @@
 #     一旦某个版本缺轮子就要临时处置（服务器可达内网源、可在现场构建，但缺轮子
 #     仍意味着要么换版本、要么就地编译，排查面会变大）。
 #
-# 镜像架构固定 linux/amd64，且**只在构建期钉死**：见 deploy/build-image.ps1 的
-# -Platform（`docker build --platform linux/amd64`）与 compose 服务里的 platform 字段
-# （后者只是运行期保险）。
+# 镜像架构固定 linux/amd64，且**只在构建期钉死**：由服务器侧构建脚本传
+# `docker build --platform linux/amd64`（构建脚本尚未实现，见 docs/open-questions.md D2），
+# compose 服务里的 platform 字段只是运行期保险。
 #   * `docker save` / `docker load` **不带** `--platform`：该参数需要 API 1.48
 #     （Engine v28），而生产服务器实测为 **26.1.3 / API 1.45**，传了会因未知参数直接失败。
-#   * 平台改由「保存前校验 + 载入后校验」保证，并可用 `deploy/check-image-archive.py`
-#     在交付前对归档做不依赖 Docker 的自检。理由与否决方案见 docs/adr/0006。
+#   * 平台改由「保存前校验 + 载入后校验」保证：镜像归档在进入服务器之前，必须先用**不依赖 Docker**
+#     的工具自检（单平台 linux/amd64、不含 image index / manifest list、不含 attestation）。
+#     理由与被否决方案见 docs/research/01-delivery-and-deploy.md。
 #
 # ghcr.io/astral-sh/uv:0.12.20
 #   * uv 官方容器镜像，0.12.20 是正式发布版本（非 pre-release），已核实该 tag
@@ -65,7 +66,7 @@ FROM ${UV_IMAGE} AS uv-source
 # 为什么要多阶段：编译期产物与缓存（编译器、头文件、uv 下载缓存、wheel 构建中间
 # 文件）都不该进运行镜像。运行镜像只保留 .venv + src，镜像更小、攻击面更小。
 # 注意：应用镜像已不再以 tar 形式外传（现在外传的是**基础镜像** tar，见
-# docs/adr/0013），所以「镜像更小」的理由只剩攻击面与构建/加载耗时，与传输介质无关。
+# docs/research/01-delivery-and-deploy.md），所以「镜像更小」的理由只剩攻击面与构建/加载耗时，与传输介质无关。
 # =============================================================================
 FROM ${PYTHON_IMAGE} AS builder
 

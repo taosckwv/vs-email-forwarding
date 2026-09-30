@@ -1,8 +1,8 @@
 # ============================================================================
 # vs-email-forwarding 工程配置
-# 说明：包名 vs_email_forwarding / vs-email-forwarding 已于 2026-09-30 定名，见 docs/adr/0014。
+# 说明：包名 vs_email_forwarding / vs-email-forwarding 的定名结论见 docs/research/06-naming-licensing-and-governance.md。
 # 任何对本文件的修改（依赖、lint 规则、门禁开关）都属于不可逆决策，
-# 请先在 docs/adr/ 留下决策记录。
+# 请先在 docs/research/ 下对应的主题册留下决策记录（见 AGENTS.md §6）。
 # ============================================================================
 
 [build-system]
@@ -30,7 +30,7 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 
-# 运行时依赖：预研阶段只保留最小集，新增依赖前先补 ADR。
+# 运行时依赖：预研阶段只保留最小集，新增依赖前先在 docs/research/03-dependencies-and-toolchain.md 记录结论。
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -79,9 +79,10 @@ ignore = [
     "E501",
     # 中文标点例外：本仓库强制要求注释、docstring 与面向用户的描述字符串使用中文，
     # 而这三条规则把全角中文标点（：；，（））判定为「与 ASCII 混淆的歧义字符」。
-    # 实测首次跑门禁时 176 处告警全部来自中文注释/docstring，零处来自代码逻辑。
+    # 默认配置下 `ruff check` 无告警；把这三条从 ignore 中暂时移出后，同一份代码命中 314 处
+    # （RUF002 191 / RUF001 92 / RUF003 31），零处来自其他规则——这正是只 ignore 这三条的依据。
     # 这是「中文内容」这一既定决策与规则前提的冲突，不是「为了过门禁而放宽」，
-    # 决策与代价记录在 docs/adr/0011-chinese-punctuation-and-ruf-rules.md。
+    # 决策与代价记录在 docs/research/03-dependencies-and-toolchain.md（「ruff 的规则取舍」一节里的 RUF001/002/003 例外）。
     # 除这三条外，其余 lint 规则一律不放宽。
     "RUF001",
     "RUF002",
@@ -117,7 +118,7 @@ warn_unused_configs = true
 ignore_missing_imports = false
 
 # 说明：预研阶段暂不放宽任何第三方库的类型检查。
-# 若某个库确实缺少类型存根，必须先在 docs/adr/ 记录理由，
+# 若某个库确实缺少类型存根，必须先在 docs/research/ 下对应的主题册记录理由（见 AGENTS.md §6），
 # 再在 [[tool.mypy.overrides]] 中按 module 精确放行，不要整体关闭。
 
 # ---------------------------------------------------------------------------
