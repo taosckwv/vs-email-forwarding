@@ -10,12 +10,13 @@
 |---|---|
 | `README.md` | 本文件：文档索引与写作规范 |
 | `open-questions.md` | **待决问题清单**：尚未决策的事项，及每条阻塞了什么 |
+| `pre-research-summary.md` | **预研结果总览**：一页纸的导航性快照（结论索引 + 真源指针）。**不是真源**，与真源冲突时以真源为准；真源一变即需重新生成 |
 | `adr/README.md` | ADR（架构决策记录）的编号规则、状态取值与新增时机 |
 | `adr/0001-technology-stack.md` | 技术栈：Python 3.13 + uv + FastAPI |
 | `adr/0002-single-package-src-layout.md` | 仓库形态：单包 + `src/` 布局 |
 | `adr/0003-license-and-governance.md` | 许可证与开源治理：MIT + 私有仓库按开源规范 |
 | `adr/0004-spec-driven-ai-collaboration.md` | AI 协同开发模型：规格驱动 + `AGENTS.md` 唯一真源 |
-| `adr/0005-offline-docker-deployment-on-centos8.md` | 部署形态：CentOS 8 + 完全离线 + Docker |
+| `adr/0005-offline-docker-deployment-on-centos8.md` | 部署形态：CentOS 8 + 完全离线 + Docker（**注意**：其中「完全离线」的前提已由 `adr/0013` 更正为「与公网隔离、可达内网镜像源」；本 ADR 正文作为历史依据保留不改） |
 | `adr/0006-production-base-image-and-rehearsal.md` | 生产基础镜像选型（`python:3.13-slim-trixie`）与 CentOS 8 部署预演（`almalinux:8`） |
 | `adr/0007-in-process-asyncio-scheduler.md` | 进程内 asyncio 四流调度 |
 | `adr/0008-postgresql-and-idempotent-claim.md` | PostgreSQL 与幂等抢占 |
@@ -23,6 +24,8 @@
 | `adr/0010-no-ci-local-gates.md` | 不跑 CI，门禁落在本地 |
 | `adr/0011-chinese-punctuation-and-ruf-rules.md` | 中文标点与 ruff RUF001/002/003 规则例外（记录例外，不是为过门禁而放宽） |
 | `adr/0012-sender-identity-and-reply-routing.md` | 发件人身份与回复路由：`From` 固定取配置 + 服务端显式写 `Reply-To` |
+| `adr/0013-local-build-on-production-server.md` | 交付形态变更：镜像改为在 CentOS 8 服务器上本地构建 + 基础镜像以 tar 带入；环境前提由「生产完全离线」更正为「与公网隔离、可达内网镜像源」 |
+| `adr/0014-project-naming.md` | 项目定名：`vs-email-forwarding`（含发行名 / 导入包 / 镜像名 / env 前缀 / 数据库默认名的映射表） |
 
 ### 计划中、尚未创建的文档
 
