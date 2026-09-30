@@ -1,8 +1,8 @@
-# mail-relay
+# vs-email-forwarding
 
 > 内部邮件中转服务：DSH 会话不直接发信，而是把邮件交给本服务，由本服务负责安全审查、投递，以及回收并审查回复。
 >
-> ⚠️ **`mail-relay`（发行名）与 `mail_relay`（Python 导入包名）都是占位名，最终命名尚未确定。** 改名成本随代码量上升，确定后需要一次性替换。
+> **发行名 `vs-email-forwarding`，Python 导入包名 `vs_email_forwarding`**（2026-09-30 定名，见 **`docs/adr/0014`**）。
 
 ---
 
@@ -70,7 +70,7 @@ DSH 会话通过 `POST /v1/messages` 把邮件内容交给本服务；邮件先�
 | 构建后端 | hatchling（单包、`src` 布局） |
 | Web 框架 | FastAPI + uvicorn |
 | 数据库 | PostgreSQL |
-| 配置 | pydantic-settings，唯一入口 `mail_relay.config` |
+| 配置 | pydantic-settings，唯一入口 `vs_email_forwarding.config` |
 | 日志 | structlog（禁止 `print`） |
 | 调度 | 进程内 asyncio，四条独立循环 |
 | 静态检查 | ruff（format + lint）、mypy |
@@ -85,7 +85,7 @@ DSH 会话通过 `POST /v1/messages` 把邮件内容交给本服务；邮件先�
 
 ```
 .
-├── src/mail_relay/        应用源码（src 布局：api / flows / providers / schemas / db / core）
+├── src/vs_email_forwarding/        应用源码（src 布局：api / flows / providers / schemas / db / core）
 ├── tests/                 测试（unit 纯逻辑，integration 需真实 PostgreSQL / 邮件服务）
 ├── docs/                  架构、数据模型、API、配置、部署、测试说明；docs/adr/ 放架构决策记录
 ├── specs/                 规格驱动开发：每个特性一个 <NNNN-slug>/ 目录（spec.md / plan.md / tasks.md）
@@ -134,7 +134,7 @@ Copy-Item .env.example .env   # Linux: cp .env.example .env
 **本地起服务**
 
 ```powershell
-uv run uvicorn mail_relay.main:app --reload
+uv run uvicorn vs_email_forwarding.main:app --reload
 ```
 
 ---
@@ -144,11 +144,11 @@ uv run uvicorn mail_relay.main:app --reload
 所有可变配置集中在一个文件：**`.env.example`**（模板）/ **`.env`**（本地实际值）。
 
 - 环境变量是**唯一**的配置来源：监听地址与端口、数据库连接串、发件人与回复地址、SMTP / IMAP 主机端口账号口令、四条流的轮询间隔，全部只从环境变量读取。
-- 代码内部统一通过 `mail_relay.config` 读取，**禁止**在业务模块里直接 `os.environ[...]` 或再写一份默认值。
+- 代码内部统一通过 `vs_email_forwarding.config` 读取，**禁止**在业务模块里直接 `os.environ[...]` 或再写一份默认值。
 - `.env` 已被 `.gitignore` 忽略（`.env.example` 例外保留）；模板里的口令一律是 `change-me` 这类明显假值。
 - SMTP / IMAP 的主机、端口、账号、口令等**实际值由所有者后续提供**，当前模板中的 `smtp.example.com` / `imap.example.com` / `change-me` 均为占位。
 - 四条轮询流间隔（`POLL_*_SECONDS`）**当前均为 10 秒**。
-- 变量名清单被 `src/mail_relay/config.py` 严格依赖，**改名前请同步两侧**，否则服务起不来。
+- 变量名清单被 `src/vs_email_forwarding/config.py` 严格依赖，**改名前请同步两侧**，否则服务起不来。
 
 ---
 
@@ -190,7 +190,7 @@ uv run pre-commit run --all-files   # 手动全量跑一次
 ## 已知风险
 
 1. **测试客户端面临 `httpx` → `httpx2` 迁移。** `httpx` 0.28.1 的 PyPI classifier 只声明到 Python 3.12，但在 3.13 上**实测可用**（本项目测试已通过），因此「能不能用」的风险已排除。真正的问题在上游：FastAPI 的 `TestClient` 已发出弃用警告，提示改用 `httpx2`（`StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead`）。**现在就迁移，还是等上游正式移除 `httpx` 支持时再迁，尚未决定**（见 `docs/open-questions.md` 的 E2）。
-2. **包名是占位。** `mail-relay` / `mail_relay` 尚未最终定名。发行名、导入包名、目录名、Docker 镜像名、配置项前缀都可能随之变更，越晚改名成本越高。
+2. **开发环境的数据库名已随定名改变。** 项目已于 2026-09-30 定名为 `vs-email-forwarding` / `vs_email_forwarding`（见 `docs/adr/0014`），**开发环境的 PostgreSQL 默认用户名与库名随之变化**（`vs_email_forwarding` / `vs_email_forwarding_dev` / `vs_email_forwarding_test`）。当前尚无部署实例、无数据迁移成本；但此前按旧名初始化过的本地数据卷需要重建或改名。
 3. **CentOS 8 已 EOL。** CentOS 8 于 2021-12-31 停止维护，官方仓库已下线，镜像与系统补丁均不再更新。生产环境的前提已按 `docs/adr/0013` 更正为「**与公网隔离、可达内网镜像源**」，本条据此更正，并请注意区分两件不同的事：
 
    - **可达性**：内网 yum 源可用（已实测），宿主包**可以**从内网源安装与更新——此前「完全装不了包」的说法不再成立；

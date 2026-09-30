@@ -1,4 +1,4 @@
-# mail-relay 离线部署手册
+# vs-email-forwarding 离线部署手册
 
 > ⚠️ **已过时：本文件描述的交付链已被取代，不要照此执行。**
 > 交付形态已按 [`docs/adr/0013`](../docs/adr/0013-local-build-on-production-server.md) 变更：镜像改为**在 CentOS 8 生产服务器上本地构建**，
@@ -50,10 +50,10 @@ deploy\save-image.ps1    保存前校验架构 -> docker save（**不带 --platf
 
 | # | 交付物 | 来源 | 说明 |
 |---|---|---|---|
-| 1 | `mail-relay-images-<版本>.tar` | 开发机 `deploy/save-image.ps1` | 一个 tar 里同时含 `mail-relay:<版本>`、`mail-relay:latest`、`postgres:17`（预演时还有 `almalinux:8`）。基础镜像必须一起打包，原因见 §3.2 与 `save-image.ps1` 注释。 |
-| 2 | `mail-relay-images-<版本>.tar.sha256` | 同上（自动生成） | 传输完整性校验；`load-image.sh` 会自动用它做 `sha256sum -c`。 |
+| 1 | `vs-email-forwarding-images-<版本>.tar` | 开发机 `deploy/save-image.ps1` | 一个 tar 里同时含 `vs-email-forwarding:<版本>`、`vs-email-forwarding:latest`、`postgres:17`（预演时还有 `almalinux:8`）。基础镜像必须一起打包，原因见 §3.2 与 `save-image.ps1` 注释。 |
+| 2 | `vs-email-forwarding-images-<版本>.tar.sha256` | 同上（自动生成） | 传输完整性校验；`load-image.sh` 会自动用它做 `sha256sum -c`。 |
 | 3 | `compose.yaml` | 仓库根 | 生产编排。**只写 `image`，不写 `build`**：服务器无网，任何构建路径都会失败。 |
-| 4 | `.env` | 由 `.env.example` 复制后填真实值 | **不进版本库**。含数据库口令、SMTP/IMAP 账号、`HTTP_PORT`、`MAIL_RELAY_IMAGE`。 |
+| 4 | `.env` | 由 `.env.example` 复制后填真实值 | **不进版本库**。含数据库口令、SMTP/IMAP 账号、`HTTP_PORT`、`VS_EMAIL_FORWARDING_IMAGE`。 |
 | 5 | `deploy/` 目录 | 仓库 | 至少含 `load-image.sh`、`migrate.sh`、`run.sh`（`build-image.ps1`/`save-image.ps1`/`check-image-archive.py` 是**开发机**用的：前两个构建与打包，第三个做归档自检，可一带也可不带）。 |
 | 6 | `README` 类文档 | 仓库 | 本文件 + `offline-deploy.md`，便于现场无人可问时自己查。 |
 
@@ -96,13 +96,13 @@ deploy\save-image.ps1    保存前校验架构 -> docker save（**不带 --platf
 
 ```bash
 # Windows（开发机）
-py -3.13 deploy/check-image-archive.py dist\mail-relay-images-<版本>.tar
+py -3.13 deploy/check-image-archive.py dist\vs-email-forwarding-images-<版本>.tar
 
 # 带预演镜像时（多打了一个 almalinux:8，共 4 个镜像）：
-py -3.13 deploy/check-image-archive.py dist\mail-relay-images-<版本>.tar --include-rehearsal
+py -3.13 deploy/check-image-archive.py dist\vs-email-forwarding-images-<版本>.tar --include-rehearsal
 
 # Linux / macOS：
-python3 deploy/check-image-archive.py dist/mail-relay-images-<版本>.tar
+python3 deploy/check-image-archive.py dist/vs-email-forwarding-images-<版本>.tar
 ```
 
 判读标准（脚本自身的输出是权威版本，本表是它的固化说明）：
@@ -170,7 +170,7 @@ manifest / index 相关的 load 错误，就回到 §2.5 自检并重新导出�
 
 ```bash
 cd <交付目录>
-sha256sum -c mail-relay-images-<版本>.tar.sha256
+sha256sum -c vs-email-forwarding-images-<版本>.tar.sha256
 ```
 
 `OK` 才继续。失败说明传输损坏，**重新传**，不要试图加载。
@@ -179,13 +179,13 @@ sha256sum -c mail-relay-images-<版本>.tar.sha256
 
 ```bash
 bash deploy/load-image.sh            # 默认在当前目录找 *.tar
-sudo bash deploy/load-image.sh /opt/mail-relay    # 或指定交付目录
+sudo bash deploy/load-image.sh /opt/vs-email-forwarding    # 或指定交付目录
 ```
 
 脚本会：检查 docker 与权限 → 打印 `docker version` 的 **Server 段**版本与 Storage Driver
 → 逐个 `sha256sum -c` → `docker image load`（**不带 `--platform`**）→ **载入后校验**：
 用 `docker image inspect --format '{{.Os}}/{{.Architecture}}'` 逐个确认架构是
-`linux/amd64`，并确认 `mail-relay:<版本>`、`mail-relay:latest`、`postgres:17` 都在本地。
+`linux/amd64`，并确认 `vs-email-forwarding:<版本>`、`vs-email-forwarding:latest`、`postgres:17` 都在本地。
 任何一项不满足即非 0 退出（**不要**带着失败继续往下走）。
 
 为什么 `load` 不带 `--platform`：该参数需要 **API 1.48（Engine v28）**，服务器实测
@@ -210,7 +210,7 @@ vi .env     # 填真实值：数据库口令、SMTP/IMAP 账号、HTTP_PORT 等
 
 本次交付必须确认的键：
 
-- `MAIL_RELAY_IMAGE=mail-relay:<版本>` —— 指向本次交付的版本 tag。
+- `VS_EMAIL_FORWARDING_IMAGE=vs-email-forwarding:<版本>` —— 指向本次交付的版本 tag。
   **不要依赖 `latest`**：回滚时靠的就是这个变量换成旧 tag（见 §5）。
 - `HTTP_PORT` —— 对外监听端口，默认 8000。
 
@@ -224,12 +224,12 @@ vi .env     # 填真实值：数据库口令、SMTP/IMAP 账号、HTTP_PORT 等
 # 官方 postgres 镜像做 initdb 时用的三件套；
 # 必须与 DATABASE_URL 里的用户/口令/库名**完全一致**，否则会出现
 # 「容器建了 A 库，应用拿 B 凭据去连」这类只报"认证失败"的怪问题。
-POSTGRES_USER=mail_relay
+POSTGRES_USER=vs_email_forwarding
 POSTGRES_PASSWORD=<与 DATABASE_URL 中的口令相同，不要提交进版本库>
-POSTGRES_DB=mail_relay
+POSTGRES_DB=vs_email_forwarding
 
 # 本次交付的镜像 tag（离线服务器上指向已 load 的具体版本）
-MAIL_RELAY_IMAGE=mail-relay:0.1.0
+VS_EMAIL_FORWARDING_IMAGE=vs-email-forwarding:0.1.0
 ```
 
 另外**必须改掉** `DATABASE_URL` 的主机名：`.env.example` 里写的是 `127.0.0.1`，
@@ -237,7 +237,7 @@ MAIL_RELAY_IMAGE=mail-relay:0.1.0
 `127.0.0.1` 指向应用自己，正确写法是用 compose 服务名：
 
 ```ini
-DATABASE_URL=postgresql+asyncpg://mail_relay:<口令>@postgres:5432/mail_relay
+DATABASE_URL=postgresql+asyncpg://vs_email_forwarding:<口令>@postgres:5432/vs_email_forwarding
 ```
 
 （开发机为了直连本地开发库保留 `127.0.0.1` 无所谓——那种场景下应用确实跑在宿主机上。）
@@ -333,7 +333,7 @@ docker compose -f compose.yaml down                   # 停止（保留 ./data/p
 2. 修改 `.env`：
 
    ```ini
-   MAIL_RELAY_IMAGE=mail-relay:<上一个版本>
+   VS_EMAIL_FORWARDING_IMAGE=vs-email-forwarding:<上一个版本>
    ```
 
 3. 重新起：
@@ -354,7 +354,7 @@ docker compose -f compose.yaml down                   # 停止（保留 ./data/p
 
 | 症状 | 可能原因 | 处理 |
 |---|---|---|
-| `docker compose up -d` 报「pull access denied / no such image」 | tar 里没带基础镜像，或 `MAIL_RELAY_IMAGE` 写错 | 确认 tar 内含 `postgres:17`（`py -3.13 deploy/check-image-archive.py <tar>` 会打印条目与引用，或在服务器上 `tar -tf <tar> \| grep manifest`）；确认 `MAIL_RELAY_IMAGE` 指向已 load 的 tag |
+| `docker compose up -d` 报「pull access denied / no such image」 | tar 里没带基础镜像，或 `VS_EMAIL_FORWARDING_IMAGE` 写错 | 确认 tar 内含 `postgres:17`（`py -3.13 deploy/check-image-archive.py <tar>` 会打印条目与引用，或在服务器上 `tar -tf <tar> \| grep manifest`）；确认 `VS_EMAIL_FORWARDING_IMAGE` 指向已 load 的 tag |
 | `docker load` 报 `unknown flag: --platform` | 用了带 `--platform` 的旧版脚本（该参数需 API 1.48 / Engine v28，服务器是 1.45） | 用本仓库的 `deploy/load-image.sh`（已**不带**该参数）；不要手工加回去 |
 | `exec format error` / 容器起一秒就退 | 镜像架构不是 `linux/amd64`（开发机是 arm64 时易发） | `docker image inspect --format '{{.Os}}/{{.Architecture}}' <镜像>`；在**开发机**重新 `.\deploy\build-image.ps1 -Platform linux/amd64` 构建、重跑 `save-image.ps1`（含归档自检）后重传 |
 | `docker load` 报 manifest / index 相关错误 | 归档是带 image index / manifest list 的多平台包，而 classic image store 不支持 image index | 回开发机按 §2.5 跑归档自检并**重新导出单平台归档**；服务器侧无法就地修复（无网、不能重建） |

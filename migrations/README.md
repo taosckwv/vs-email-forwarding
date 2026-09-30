@@ -30,4 +30,4 @@ uv run alembic upgrade head
 - `docs/adr/` — 表结构相关的决策记录
 - `specs/` — 定义表结构的需求与验收标准
 - `deploy/migrate.sh` — 部署时执行迁移的入口
-- `src/mail_relay/db/` — ORM 模型与仓储层（`env.py` 的 `target_metadata` 将来自这里）
+- `src/vs_email_forwarding/db/` — ORM 模型与仓储层（`env.py` 的 `target_metadata` 将来自这里）

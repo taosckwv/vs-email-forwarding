@@ -7,8 +7,8 @@ from typing import Literal
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from mail_relay import __version__
-from mail_relay.config import get_settings
+from vs_email_forwarding import __version__
+from vs_email_forwarding.config import get_settings
 
 router = APIRouter(tags=["health"])
 

@@ -1,5 +1,5 @@
 # ============================================================================
-# mail-relay pre-commit 配置
+# vs-email-forwarding pre-commit 配置
 # 本仓库不跑 CI，门禁全靠这里 + scripts/check.*，请务必先装：
 #   uv run pre-commit install --install-hooks
 #   uv run pre-commit install --hook-type commit-msg

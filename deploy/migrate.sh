@@ -4,7 +4,7 @@
 #
 # 用法（从仓库根或任意目录都可，脚本自己定位 compose.yaml）：
 #     bash deploy/migrate.sh
-#     COMPOSE_FILE=/opt/mail-relay/compose.yaml bash deploy/migrate.sh
+#     COMPOSE_FILE=/opt/vs-email-forwarding/compose.yaml bash deploy/migrate.sh
 #
 # 做的事：在应用镜像里跑一次性容器执行 `uv run alembic upgrade head`。
 #   * 用 `docker compose run --rm` 而不是 exec：不依赖应用容器正在运行，
@@ -50,7 +50,7 @@ if ! docker compose -f "${COMPOSE_FILE}" run --rm app uv run alembic upgrade hea
       这是**预期行为** —— Alembic 尚未初始化，等数据模型规格落地后才有 migrations/。
       此时可以先跑 `bash deploy/run.sh` 把服务起起来验证镜像与数据库连通性。
   若错误是连接数据库失败：
-      检查 .env 里的数据库连接参数与 MAIL_RELAY_IMAGE；并确认 postgres 容器 healthy：
+      检查 .env 里的数据库连接参数与 VS_EMAIL_FORWARDING_IMAGE；并确认 postgres 容器 healthy：
       docker compose -f compose.yaml ps
 EOF
     exit 1

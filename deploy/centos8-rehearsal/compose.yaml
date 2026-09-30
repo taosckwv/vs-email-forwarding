@@ -17,7 +17,7 @@
 #     （仍可 pull，但实为 8.4.2105，且全部 tag EOL、只剩 vault、无安全更新）。
 # =============================================================================
 
-name: mail-relay-rehearsal
+name: vs-email-forwarding-rehearsal
 
 services:
   # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ services:
   # ---------------------------------------------------------------------------
   rehearsal:
     image: almalinux:8
-    container_name: mail-relay-rehearsal
+    container_name: vs-email-forwarding-rehearsal
     # 与交付镜像同架构，避免在 arm64 开发机上得出不可比的结论。
     # 该字段只是运行期保险（架构由构建期决定），并依赖 compose v2。
     platform: linux/amd64
@@ -52,7 +52,7 @@ services:
 
 networks:
   rehearsal:
-    name: mail-relay-rehearsal-net
+    name: vs-email-forwarding-rehearsal-net
     driver: bridge
 
 # 说明：本文件**不包含** app / postgres 服务。

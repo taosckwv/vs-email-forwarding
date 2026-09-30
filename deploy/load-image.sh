@@ -4,7 +4,7 @@
 #
 # 用法：
 #     bash deploy/load-image.sh [镜像目录]        # 默认当前目录
-#     sudo bash deploy/load-image.sh /opt/mail-relay
+#     sudo bash deploy/load-image.sh /opt/vs-email-forwarding
 #
 # 做的事：
 #     1) 检查 docker 与守护进程权限；
@@ -38,8 +38,8 @@ set -euo pipefail
 # 该变量只用于**校验**，不再传给 docker load（服务器 API 1.45 < 1.48）。
 PLATFORM="linux/amd64"
 
-# 应用镜像仓库名：必须与开发机 save-image.ps1 -ImageName 一致（默认 mail-relay）。
-IMAGE_NAME="mail-relay"
+# 应用镜像仓库名：必须与开发机 save-image.ps1 -ImageName 一致（默认 vs-email-forwarding）。
+IMAGE_NAME="vs-email-forwarding"
 
 # 镜像目录：默认当前工作目录（通常就是交付目录，tar 与 compose.yaml、.env 放一起）
 IMAGES_DIR="${1:-$(pwd)}"
@@ -197,7 +197,7 @@ cat <<'EOF'
 
 下一步：
   1) 准备 .env：从 .env.example 复制并填真实值（数据库口令、SMTP/IMAP 账号等），
-     并把 MAIL_RELAY_IMAGE 指向本次交付的版本 tag（例如 mail-relay:0.2.0）。
+     并把 VS_EMAIL_FORWARDING_IMAGE 指向本次交付的版本 tag（例如 vs-email-forwarding:0.2.0）。
   2) 初始化数据目录属主（首次部署）：
        mkdir -p ./data/postgres && chown -R 999:999 ./data/postgres
   3) 跑数据库迁移：bash deploy/migrate.sh

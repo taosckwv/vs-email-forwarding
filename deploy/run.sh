@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 在**离线服务器**上启动 mail-relay，并对 /healthz 做健康检查轮询。
+# 在**离线服务器**上启动 vs-email-forwarding，并对 /healthz 做健康检查轮询。
 #
 # 用法：
 #     bash deploy/run.sh
-#     COMPOSE_FILE=/opt/mail-relay/compose.yaml bash deploy/run.sh
+#     COMPOSE_FILE=/opt/vs-email-forwarding/compose.yaml bash deploy/run.sh
 #
 # 做的事：
 #     1) docker compose up -d（应用 + 同机 PostgreSQL）
@@ -97,9 +97,9 @@ if [ "${HEALTH_OK}" -ne 1 ]; then
        - 数据目录属主不对：chown -R 999:999 ./data/postgres
        - 端口被占用：ss -lntp | grep ${HTTP_PORT}，或改 .env 里的 HTTP_PORT
        - 防火墙未放行：firewall-cmd --list-ports（放行命令见 deploy/README.md）
-       - 镜像架构不匹配：docker image inspect --format '{{.Os}}/{{.Architecture}}' \${MAIL_RELAY_IMAGE}
+       - 镜像架构不匹配：docker image inspect --format '{{.Os}}/{{.Architecture}}' \${VS_EMAIL_FORWARDING_IMAGE}
          （必须是 linux/amd64；架构错了会 exec format error）
-  4) 回滚：把 .env 里的 MAIL_RELAY_IMAGE 改回上一个版本 tag，再执行本脚本。
+  4) 回滚：把 .env 里的 VS_EMAIL_FORWARDING_IMAGE 改回上一个版本 tag，再执行本脚本。
 EOF
     exit 1
 fi

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# mail-relay 开发依赖一键启动（Linux / macOS 版，CentOS 8 可用）
+# vs-email-forwarding 开发依赖一键启动（Linux / macOS 版，CentOS 8 可用）
 #
 # 用 compose.dev.yaml 起开发用基础设施：PostgreSQL 17 + Mailpit（SMTP/IMAP/Web UI）。
 # 应用本体不在容器里跑，用 uv 在宿主机跑：
-#     uv run uvicorn mail_relay.main:app --reload
+#     uv run uvicorn vs_email_forwarding.main:app --reload
 #
 # 用法（可以从任意目录调用，脚本自己推导仓库根）：
 #     bash scripts/dev-up.sh
@@ -46,15 +46,15 @@ cat <<'EOF'
   SMTP           : 127.0.0.1:1025          （应用发信走这里）
   IMAP           : 127.0.0.1:1143          （应用拉取入站回复走这里）
   PostgreSQL     : 127.0.0.1:5432
-    开发库       : mail_relay_dev  (用户 mail_relay / 口令 mail_relay_dev)
-    测试库       : mail_relay_test （需手工创建，命令见 compose.dev.yaml 末尾说明）
+    开发库       : vs_email_forwarding_dev  (用户 vs_email_forwarding / 口令 vs_email_forwarding_dev)
+    测试库       : vs_email_forwarding_test （需手工创建，命令见 compose.dev.yaml 末尾说明）
 
 Mailpit 的用途：验证「发出去 -> 被拉回来 -> 关联上原邮件」的完整回路，
 不需要真实邮箱账号，也不会把测试邮件发到外网。
 
 接下来（应用本体在宿主机跑，不在容器里）：
   uv sync
-  uv run uvicorn mail_relay.main:app --reload
+  uv run uvicorn vs_email_forwarding.main:app --reload
 
 停止依赖：docker compose -f compose.dev.yaml down
 连数据一起清掉：docker compose -f compose.dev.yaml down -v

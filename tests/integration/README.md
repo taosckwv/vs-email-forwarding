@@ -13,7 +13,7 @@ docker compose -f compose.dev.yaml up -d          # 通用 / Linux
 
 ## 数据库隔离
 
-测试库为 `mail_relay_test`，与开发库 `mail_relay_dev` **分离**：集成测试允许清表，
+测试库为 `vs_email_forwarding_test`，与开发库 `vs_email_forwarding_dev` **分离**：集成测试允许清表，
 但绝不允许碰开发库。连接串通过环境变量 / `.env` 覆盖为测试库，不要改仓库里的配置文件。
 
 ## 覆盖重点

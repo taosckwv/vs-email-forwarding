@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     http_port: int = 8000
 
     # 数据库连接串（异步驱动）；表结构与迁移方案尚未定案，见 docs/open-questions.md。
-    database_url: str = "postgresql+asyncpg://mail_relay:change-me@127.0.0.1:5432/mail_relay"
+    database_url: str = (
+        "postgresql+asyncpg://vs_email_forwarding:change-me@127.0.0.1:5432/vs_email_forwarding"
+    )
 
     # 发件人地址与回复地址（Reply-To）：服务端发信时使用。
     mail_from_address: str = "noreply@example.com"

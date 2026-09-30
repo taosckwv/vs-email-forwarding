@@ -22,7 +22,7 @@
 
 | 文件 | 动作 | 说明 |
 |---|---|---|
-| `src/mail_relay/<...>.py` | `新增` / `修改` | `<职责>` |
+| `src/vs_email_forwarding/<...>.py` | `新增` / `修改` | `<职责>` |
 
 ## 3. 数据模型变更
 
@@ -61,7 +61,7 @@
 |---|---|---|
 | `<ENV_NAME>` | `<...>` | `<...>` |
 
-同步更新：`.env.example`、`src/mail_relay/config.py`、`docs/configuration.md`。
+同步更新：`.env.example`、`src/vs_email_forwarding/config.py`、`docs/configuration.md`。
 
 ## 7. 测试策略
 

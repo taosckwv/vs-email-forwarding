@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# mail-relay 一键门禁（Linux / macOS 版，CentOS 8 可用）
+# vs-email-forwarding 一键门禁（Linux / macOS 版，CentOS 8 可用）
 #
 # 与 scripts/check.ps1 **行为完全一致**：按固定顺序执行 4 步，任何一步失败立即
 # 以非零退出码结束，后续步骤不再执行。

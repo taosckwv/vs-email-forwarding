@@ -69,3 +69,4 @@
 | [0011](0011-chinese-punctuation-and-ruf-rules.md) | 中文标点与 ruff RUF001/002/003 规则例外 | 已接受 |
 | [0012](0012-sender-identity-and-reply-routing.md) | 发件人身份与回复路由 | 已接受 |
 | [0013](0013-local-build-on-production-server.md) | 交付形态变更：在生产服务器上本地构建 + 基础镜像以 tar 带入 | 已接受 |
+| [0014](0014-project-naming.md) | 项目定名：vs-email-forwarding | 已接受 |

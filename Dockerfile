@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
-# mail-relay 生产镜像
+# vs-email-forwarding 生产镜像
 #
 # 用途（见 docs/adr/0013）：镜像**在目标服务器（CentOS 8）上本地构建** ->
 #       docker compose up -d；基础镜像以镜像 tar 形式从外部带入并 `docker load`。
@@ -9,7 +9,9 @@
 # 构建产物里 **不含** 任何需要联网才能启动的东西（见 AGENTS.md §8.5）。
 #
 # 需要 BuildKit（本文件用了 --mount=type=cache 与多阶段 ARG）：
-#   Docker Desktop 默认开启；Linux 上可用 DOCKER_BUILDKIT=1 显式打开。
+#   构建在目标服务器（CentOS 8 / Docker 26.1.3）上进行，BuildKit 是该版本 Docker
+#   的默认构建器，无需额外开关；本机的开发机装不了 Docker Desktop（见 docs/adr/0013），
+#   也不在开发机构建。
 # =============================================================================
 
 # --- 基础镜像 tag 的取法（两处都锁死，不用 latest、不用裸 slim） --------------
@@ -36,7 +38,8 @@
 #     真正的理由是两条：一是 musl 与生产宿主的 glibc 是两套 libc ABI，出问题时
 #     排查面翻倍；二是 psycopg 官方明确说二进制包是 best-effort
 #     （"Binary packages are produced on a best-effort basis"），离线环境里
-#     一旦某个版本缺轮子就再也装不上（服务器无网、无法现场编译）。
+#     一旦某个版本缺轮子就要临时处置（服务器可达内网源、可在现场构建，但缺轮子
+#     仍意味着要么换版本、要么就地编译，排查面会变大）。
 #
 # 镜像架构固定 linux/amd64，且**只在构建期钉死**：见 deploy/build-image.ps1 的
 # -Platform（`docker build --platform linux/amd64`）与 compose 服务里的 platform 字段
@@ -60,8 +63,9 @@ FROM ${UV_IMAGE} AS uv-source
 # =============================================================================
 # 阶段 1：builder —— 只负责把依赖装进 /app/.venv
 # 为什么要多阶段：编译期产物与缓存（编译器、头文件、uv 下载缓存、wheel 构建中间
-# 文件）都不该进运行镜像。运行镜像只保留 .venv + src，镜像更小、攻击面更小，
-# 离线 tar 也更小（传输介质友好）。
+# 文件）都不该进运行镜像。运行镜像只保留 .venv + src，镜像更小、攻击面更小。
+# 注意：应用镜像已不再以 tar 形式外传（现在外传的是**基础镜像** tar，见
+# docs/adr/0013），所以「镜像更小」的理由只剩攻击面与构建/加载耗时，与传输介质无关。
 # =============================================================================
 FROM ${PYTHON_IMAGE} AS builder
 
@@ -88,8 +92,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # --frozen：严格按 uv.lock 安装，绝不解析/改写 lock。
-#   离线交付要求「开发机装了什么，服务器就跑什么」，lock 一旦被就地改写，
-#   交付物与门禁跑过的依赖就不是同一份了。
+#   构建与运行同在目标服务器上，lock 一旦被就地改写，
+#   实际安装的依赖与门禁跑过的那一份就不是同一份了。
 # --no-install-project：本层还不拷 src，装不了项目本体，先只装第三方依赖。
 # --no-dev：运行镜像不装 dev 依赖（ruff/mypy/pytest 等）。
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -162,4 +166,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["python", "-c", "import sys,urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=3).status == 200 else 1)"]
 
 # 用 `uv run` 而不是直接调 uvicorn：保证运行的就是 .venv 里锁定的那一份解释器与依赖。
-CMD ["uv", "run", "uvicorn", "mail_relay.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "vs_email_forwarding.main:app", "--host", "0.0.0.0", "--port", "8000"]

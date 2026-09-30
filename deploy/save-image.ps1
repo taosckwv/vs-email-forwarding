@@ -5,8 +5,8 @@
 
 .DESCRIPTION
     一次 docker save 会把这些镜像写进同一个 tar：
-      * mail-relay:<版本>   （应用镜像本体）
-      * mail-relay:latest   （便利 tag，让 compose.yaml 的默认镜像名开箱可用）
+      * vs-email-forwarding:<版本>   （应用镜像本体）
+      * vs-email-forwarding:latest   （便利 tag，让 compose.yaml 的默认镜像名开箱可用）
       * postgres:17         （**必须一起打包**，见下面的说明）
       * almalinux:8         （仅在 -IncludeRehearsal 时，用于 CentOS 8 离线部署预演）
 
@@ -21,7 +21,7 @@
     读不到退回 0.0.0-dev（预研阶段的预期情况）。
 
 .PARAMETER ImageName
-    应用镜像仓库名，默认 mail-relay。
+    应用镜像仓库名，默认 vs-email-forwarding。
 
 .PARAMETER OutDir
     输出目录，默认 <仓库根>\dist。dist/ 已在 .gitignore 里，
@@ -59,7 +59,7 @@
 [CmdletBinding()]
 param(
     [string]$Version,
-    [string]$ImageName = 'mail-relay',
+    [string]$ImageName = 'vs-email-forwarding',
     [string]$OutDir,
     [string]$Platform = 'linux/amd64',
     [switch]$IncludeRehearsal

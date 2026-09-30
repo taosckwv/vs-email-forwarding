@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from mail_relay import __version__
+from vs_email_forwarding import __version__
 
 
 def test_healthz_returns_ok(client: TestClient) -> None:

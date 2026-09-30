@@ -7,7 +7,7 @@
 
 ## 1. 项目是什么
 
-`mail-relay`（**占位名，最终名未定**，见 §2）是一个内部邮件中转服务。DSH 会话不直接发邮件，而是调用本服务的 HTTP API 把要发送的内容交给它，由本服务负责安全审查、投递，以及回收并审查回复。
+`vs-email-forwarding`（**2026-09-30 定名，见 `docs/adr/0014`**）是一个内部邮件中转服务。DSH 会话不直接发邮件，而是调用本服务的 HTTP API 把要发送的内容交给它，由本服务负责安全审查、投递，以及回收并审查回复。
 
 主流程：
 
@@ -82,8 +82,6 @@ DSH 会话
 
 > ⚠️ **A1–A5 数据模型**：三张邮件表的字段清单、`sync_state` 与 `imap_cursors` 的取舍、审查通过后待审行是否物理删除、孤儿邮件的状态取值——这些直接决定首次 Alembic 迁移与整个仓储层。
 >
-> ⚠️ **C1 最终包名**：`mail-relay` / `mail_relay` 是**占位名**。改名成本 = 一次目录 rename + 一次全局替换，代码量越大越贵；镜像名、容器服务名、logger 名都会跟着改。
->
 > ⚠️ **E1 / E3 依赖选型**：IMAP 客户端（`imapclient` 同步但支持 3.14 vs `aioimaplib` 异步但未声明 3.14）与数据库驱动（`asyncpg` vs `psycopg3`）**均未定案**。选定前不要写 `pyproject.toml` 的运行时依赖。
 >
 > ⚠️ **B3 重试与终态**：3 次 / 15s-30s-60s 已定；但 SMTP 返回码的分类（永久性错误是否直接置 `failed` 而不重试）与达标后是否通知调用方**未定**。
@@ -106,7 +104,8 @@ DSH 会话
 
 - **不支持附件**（一期明确不支持）。
 - **无 Web 管理后台**，纯后台服务。
-- **API 鉴权先不做**，只预留位置。
+- **API 鉴权先不做**：服务**仅内网可达**，内网环境因而**不需要鉴权**；但**在 API 层预留鉴权位置**，后续实现时直接接入，**不需要重排路由结构**。
+- **审查一期只做占位**：**定义接口与输出**，**不做任何真实检测**（不做敏感信息检测、不引入病毒扫描引擎、不接外部审查 API）；细节后续再实现。
 - 发信走 **SMTP 直连**（企业邮箱 / 自建 MTA），参数全部来自 `.env`。
 - 收信走 **IMAP**：单专用回复邮箱 + UID 游标增量拉取 + 用 `References` / `In-Reply-To` 关联原邮件；关联不上的标记为孤儿但**仍然入库，不丢数据**。
 - 发信失败重试 **3 次**，退避 **15s / 30s / 60s**，之后进入终态失败。
@@ -121,7 +120,7 @@ DSH 会话
 uv sync
 
 # 本地起服务
-uv run uvicorn mail_relay.main:app --reload
+uv run uvicorn vs_email_forwarding.main:app --reload
 
 # 一键门禁：ruff format --check + ruff check + mypy src + pytest
 ./scripts/check.ps1        # Windows
@@ -140,13 +139,13 @@ bash scripts/dev-up.sh     # Linux
 
 | 路径 | 放什么 | 不放什么 |
 |---|---|---|
-| `src/mail_relay/api/` | HTTP 路由层：请求/响应编排、依赖注入 | SQL、业务规则、直接调用 SMTP/IMAP |
-| `src/mail_relay/flows/` | 四条轮询流的实现与调度器 | HTTP 路由、SQL 字符串 |
-| `src/mail_relay/providers/` | 外部能力适配器：`review/`（审查）、`smtp/`、`imap/`，各自 `base.py` 定接口 | 业务状态流转 |
-| `src/mail_relay/schemas/` | Pydantic 请求 / 响应模型 | ORM 模型 |
-| `src/mail_relay/db/` | ORM 模型、引擎与会话、**仓储层（所有 SQL 都在这）** | 业务规则 |
-| `src/mail_relay/core/` | 纯逻辑：消息 ID 生成、状态机、重试策略 | I/O 与数据库访问 |
-| `src/mail_relay/config.py` | 唯一的配置入口（pydantic-settings，读 `.env`） | 别处再读一次环境变量 |
+| `src/vs_email_forwarding/api/` | HTTP 路由层：请求/响应编排、依赖注入 | SQL、业务规则、直接调用 SMTP/IMAP |
+| `src/vs_email_forwarding/flows/` | 四条轮询流的实现与调度器 | HTTP 路由、SQL 字符串 |
+| `src/vs_email_forwarding/providers/` | 外部能力适配器：`review/`（审查）、`smtp/`、`imap/`，各自 `base.py` 定接口 | 业务状态流转 |
+| `src/vs_email_forwarding/schemas/` | Pydantic 请求 / 响应模型 | ORM 模型 |
+| `src/vs_email_forwarding/db/` | ORM 模型、引擎与会话、**仓储层（所有 SQL 都在这）** | 业务规则 |
+| `src/vs_email_forwarding/core/` | 纯逻辑：消息 ID 生成、状态机、重试策略 | I/O 与数据库访问 |
+| `src/vs_email_forwarding/config.py` | 唯一的配置入口（pydantic-settings，读 `.env`） | 别处再读一次环境变量 |
 | `tests/unit/` | 纯逻辑单测，不依赖数据库与网络 | 需要真实 Postgres 的用例 |
 | `tests/integration/` | 需要真实 PostgreSQL / 邮件服务的用例 | 纯逻辑断言 |
 | `docs/` | 架构、数据模型、API、配置、部署、测试说明；`docs/adr/` 放架构决策记录 | 需求与验收标准（那属于 `specs/`） |
@@ -160,7 +159,7 @@ bash scripts/dev-up.sh     # Linux
 
 Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它不会进仓库，队友克隆下来是空的，AI agent 也读不到。因此**新建目录必须在其内部放占位文件**，本仓库约定：
 
-- **Python 包目录**（也就是含 `__init__.py` 的目录，如 `src/mail_relay/api/`）→ 放 `__init__.py`。
+- **Python 包目录**（也就是含 `__init__.py` 的目录，如 `src/vs_email_forwarding/api/`）→ 放 `__init__.py`。
 - **非包目录**（如 `docs/`、`specs/`、`deploy/`、`scripts/`、`tests/unit/`）→ 放一份 **3–5 行的职责 `README.md`**，写明**这层放什么、不放什么**。
 - **禁止使用 `.gitkeep`**：空文件对人和 AI 都不携带任何信息；而职责 README 能让 agent 走到任意一层就知道边界在哪——这是本仓库 AI 协同设计的核心手段之一。
 
@@ -204,8 +203,8 @@ ADR 只记录**决策与理由**，不写实现细节。已经冻结的决策（
 - **类型标注必须完整**：`mypy src` 是门禁的一部分，不允许用 `# type: ignore` 兜底。
 - **格式与静态检查**：ruff 负责格式化与 lint，不要手工和它对抗；提交前必须跑过 `scripts/check.*`。
 - **日志用 structlog**，禁止 `print`。日志中不得出现邮件正文、账号口令、收件人地址（见 §8）。
-- **配置只从 `mail_relay.config` 读**，禁止在模块里直接 `os.environ[...]`。所有可变项（监听地址、SMTP/IMAP 主机与账号、数据库连接串、发件人地址、轮询间隔）都收敛在 `.env`，仓库里只有 `.env.example` 占位。
-- **数据库访问必须走仓储层**（`mail_relay/db/`）。流处理层与路由层**不得裸写 SQL**，也不得直接拼 ORM 查询。
+- **配置只从 `vs_email_forwarding.config` 读**，禁止在模块里直接 `os.environ[...]`。所有可变项（监听地址、SMTP/IMAP 主机与账号、数据库连接串、发件人地址、轮询间隔）都收敛在 `.env`，仓库里只有 `.env.example` 占位。
+- **数据库访问必须走仓储层**（`vs_email_forwarding/db/`）。流处理层与路由层**不得裸写 SQL**，也不得直接拼 ORM 查询。
 - **外部能力一律通过 `providers/` 的接口访问**，不允许在业务流程里直接 `import` 具体实现库。
 - 时间一律使用带时区的 `datetime`（按 UTC 存储），不要用裸的 `datetime.now()`。
 - **文件编码与换行符是硬约定，不是风格偏好**——写错会让脚本直接跑不起来，而不是显示难看一点：

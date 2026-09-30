@@ -1,6 +1,6 @@
 # ============================================================================
-# mail-relay 工程配置
-# 说明：包名 mail_relay / mail-relay 为占位名，最终命名尚未确定。
+# vs-email-forwarding 工程配置
+# 说明：包名 vs_email_forwarding / vs-email-forwarding 已于 2026-09-30 定名，见 docs/adr/0014。
 # 任何对本文件的修改（依赖、lint 规则、门禁开关）都属于不可逆决策，
 # 请先在 docs/adr/ 留下决策记录。
 # ============================================================================
@@ -10,7 +10,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mail-relay"
+name = "vs-email-forwarding"
 version = "0.1.0"
 description = "邮件中转服务：接收投递请求，经安全审查与定时轮询后完成收发与回复回收。"
 readme = "README.md"
@@ -89,7 +89,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["mail_relay"]
+known-first-party = ["vs_email_forwarding"]
 
 [tool.ruff.format]
 # 使用 ruff format 默认风格。

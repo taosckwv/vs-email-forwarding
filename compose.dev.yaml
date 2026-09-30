@@ -1,7 +1,7 @@
 # =============================================================================
-# mail-relay 开发依赖编排 —— 只起基础设施，不起应用
+# vs-email-forwarding 开发依赖编排 —— 只起基础设施，不起应用
 #
-# 为什么不起应用：开发时服务在宿主机上用 uv 跑（`uv run uvicorn mail_relay.main:app
+# 为什么不起应用：开发时服务在宿主机上用 uv 跑（`uv run uvicorn vs_email_forwarding.main:app
 # --reload`），代码改动即时生效；把应用塞进容器会让热重载与调试变麻烦。
 # 一键起依赖：scripts/dev-up.ps1（Windows）/ scripts/dev-up.sh（Linux/macOS）。
 #
@@ -14,7 +14,7 @@
 #    并同步调整 .env.example 里的 SMTP/IMAP 指向。
 # =============================================================================
 
-name: mail-relay-dev
+name: vs-email-forwarding-dev
 
 services:
   # ---------------------------------------------------------------------------
@@ -24,33 +24,33 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:17
-    container_name: mail-relay-dev-postgres
+    container_name: vs-email-forwarding-dev-postgres
     # platform 只是**运行期保险**（开发机上与生产同架构，行为更可比）；
     # 真正决定镜像架构的是构建期（deploy/build-image.ps1 的 `docker build --platform`）。
     # 该字段依赖 compose v2（`docker compose version` 确认）。在 arm64 开发机
     # （Apple Silicon）上会走模拟，慢一些但结果可比。
     platform: linux/amd64
     environment:
-      POSTGRES_USER: mail_relay
+      POSTGRES_USER: vs_email_forwarding
       # 仅本地开发用的固定弱口令，禁止出现在生产 .env 里
-      POSTGRES_PASSWORD: mail_relay_dev
-      # 开发主库。测试库 mail_relay_test 见文件末尾的"开发/测试库初始化"说明。
-      POSTGRES_DB: mail_relay_dev
+      POSTGRES_PASSWORD: vs_email_forwarding_dev
+      # 开发主库。测试库 vs_email_forwarding_test 见文件末尾的"开发/测试库初始化"说明。
+      POSTGRES_DB: vs_email_forwarding_dev
       TZ: UTC
     ports:
       # 开发机需要从宿主机（uv 跑的应用、本机 psql/DBeaver）连库，所以这里暴露 5432。
       # 只绑回环，避免同一个 Wi-Fi 下的其他人连进你的开发库。
       - "127.0.0.1:5432:5432"
     volumes:
-      - mail-relay-dev-postgres:/var/lib/postgresql/data
+      - vs-email-forwarding-dev-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mail_relay -d mail_relay_dev -h 127.0.0.1"]
+      test: ["CMD-SHELL", "pg_isready -U vs_email_forwarding -d vs_email_forwarding_dev -h 127.0.0.1"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 20s
     networks:
-      - mail-relay-dev
+      - vs-email-forwarding-dev
 
   # ---------------------------------------------------------------------------
   # Mailpit：一个容器同时提供 SMTP + IMAP + Web UI，是本项目回路验证的核心工具
@@ -67,7 +67,7 @@ services:
     # 锁到具体小版本 v1.31.3（撰写时最新稳定版）。开发依赖也锁版本：
     # Mailpit 的 IMAP 行为在小版本之间有过变化，不锁会让"本机能过、同事跑不过"。
     image: axllent/mailpit:v1.31.3
-    container_name: mail-relay-dev-mailpit
+    container_name: vs-email-forwarding-dev-mailpit
     # 与生产同架构的**运行期保险**（架构由构建期决定），并依赖 compose v2
     platform: linux/amd64
     environment:
@@ -86,59 +86,59 @@ services:
       # Web UI：人工看邮件 / 手工回信
       - "127.0.0.1:8025:8025"
     networks:
-      - mail-relay-dev
+      - vs-email-forwarding-dev
 
 # -----------------------------------------------------------------------------
 # 开发用命名卷（与生产不同：生产数据在宿主机目录 ./data/postgres，见 compose.yaml）
 # -----------------------------------------------------------------------------
 volumes:
-  mail-relay-dev-postgres:
-    name: mail-relay-dev-postgres
+  vs-email-forwarding-dev-postgres:
+    name: vs-email-forwarding-dev-postgres
 
 networks:
-  mail-relay-dev:
-    name: mail-relay-dev-net
+  vs-email-forwarding-dev:
+    name: vs-email-forwarding-dev-net
     driver: bridge
 
 # =============================================================================
 # 开发库与测试库的初始化
 #
-#   * 开发库 mail_relay_dev：由 POSTGRES_DB 在**首次**初始化数据卷时自动创建。
-#   * 测试库 mail_relay_test：官方 postgres 镜像**不支持** POSTGRES_MULTIPLE_DATABASES
+#   * 开发库 vs_email_forwarding_dev：由 POSTGRES_DB 在**首次**初始化数据卷时自动创建。
+#   * 测试库 vs_email_forwarding_test：官方 postgres 镜像**不支持** POSTGRES_MULTIPLE_DATABASES
 #     这种多库参数（那是 bitnami 等第三方镜像的扩展）。只有一个库会被自动建出来，
 #     第二个库用下面两条命令之一手工建（只做一次，数据卷在就不用重做）：
 #
 #       docker compose -f compose.dev.yaml exec postgres \
-#         psql -U mail_relay -d postgres -c "CREATE DATABASE mail_relay_test OWNER mail_relay;"
+#         psql -U vs_email_forwarding -d postgres -c "CREATE DATABASE vs_email_forwarding_test OWNER vs_email_forwarding;"
 #
 #     或者从宿主机连（需要本机装了 psql 客户端）：
 #
-#       psql "postgresql://mail_relay:mail_relay_dev@127.0.0.1:5432/postgres" \
-#         -c "CREATE DATABASE mail_relay_test OWNER mail_relay;"
+#       psql "postgresql://vs_email_forwarding:vs_email_forwarding_dev@127.0.0.1:5432/postgres" \
+#         -c "CREATE DATABASE vs_email_forwarding_test OWNER vs_email_forwarding;"
 #
 #   * 注意：docker-entrypoint-initdb.d 里的初始化脚本只在数据卷**首次**初始化时执行，
 #     卷已存在时再改脚本不会生效——要么手工执行上面的 SQL，要么 down -v 重建卷。
-#   * 集成测试（tests/integration/）用 mail_relay_test，避免把开发数据洗掉；
+#   * 集成测试（tests/integration/）用 vs_email_forwarding_test，避免把开发数据洗掉；
 #     测试用的连接串同样从 .env 读（键名以 .env.example 为准）。
 #
 # 应用本体在开发机上怎么跑（不通过本文件）：
 #
 #   uv sync
-#   uv run uvicorn mail_relay.main:app --reload
+#   uv run uvicorn vs_email_forwarding.main:app --reload
 #
 #   注意 .env 里的 DATABASE_URL 要指向本地开发库（应用跑在宿主机上，
 #   所以主机名用 127.0.0.1，与生产用服务名 postgres 的写法不同）：
-#     DATABASE_URL=postgresql+asyncpg://mail_relay:mail_relay_dev@127.0.0.1:5432/mail_relay_dev
+#     DATABASE_URL=postgresql+asyncpg://vs_email_forwarding:vs_email_forwarding_dev@127.0.0.1:5432/vs_email_forwarding_dev
 #   同理 SMTP/IMAP 指向 Mailpit：
 #     SMTP_HOST=127.0.0.1  SMTP_PORT=1025  SMTP_STARTTLS=false
 #     IMAP_HOST=127.0.0.1  IMAP_PORT=1143
 #
 #   # 如果确实想连容器里的应用冒烟（可选，需先在本机构建镜像）：
 #   # app:
-#   #   image: ${MAIL_RELAY_IMAGE:-mail-relay:latest}
+#   #   image: ${VS_EMAIL_FORWARDING_IMAGE:-vs-email-forwarding:latest}
 #   #   env_file: [.env]
 #   #   ports: ["${HTTP_PORT:-8000}:8000"]
 #   #   depends_on:
 #   #     postgres: { condition: service_healthy }
-#   #   networks: [mail-relay-dev]
+#   #   networks: [vs-email-forwarding-dev]
 # =============================================================================

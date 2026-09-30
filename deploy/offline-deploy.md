@@ -216,7 +216,7 @@ CLI 限制，但本项目刻意让交付链**任何一环都不依赖**这个版
 | 7 | **`postgres:18` 升级路径** | 18 的 `PGDATA` / 挂载点变更需要一次有计划的迁移（`pg_upgrade`），不是换个 tag 就行 | 将来另开 ADR |
 | 8 | **Mailpit 是否最终采用** | 影响 `compose.dev.yaml` 的 SMTP/IMAP 指向与集成测试写法 | 见 `docs/open-questions.md` D6 |
 | 9 | **对外端口（`HTTP_PORT`）与是否需要对外放行** | 影响 firewalld 步骤与健康检查地址 | 所有者 |
-| 10 | **`.env.example` 需要补 4 个键**：`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`（官方 postgres 镜像 initdb 用，且必须与 `DATABASE_URL` 一致）与 `MAIL_RELAY_IMAGE`（离线指定版本 tag）；同时生产 `.env` 里 `DATABASE_URL` 的主机要改成 compose 服务名 `postgres`。这 4 个键当前在 `.env.example` 里**都不存在**，不改的话 `compose.yaml` 直接起不来 | 直接决定部署能否成功 | 根配置维护者（`deploy/` 无权改 `.env.example`） |
+| 10 | **`.env.example` 需要补 4 个键**：`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`（官方 postgres 镜像 initdb 用，且必须与 `DATABASE_URL` 一致）与 `VS_EMAIL_FORWARDING_IMAGE`（离线指定版本 tag）；同时生产 `.env` 里 `DATABASE_URL` 的主机要改成 compose 服务名 `postgres`。这 4 个键当前在 `.env.example` 里**都不存在**，不改的话 `compose.yaml` 直接起不来 | 直接决定部署能否成功 | 根配置维护者（`deploy/` 无权改 `.env.example`） |
 | 11 | **服务器侧 Docker 是否有可升级路径**（`docs/open-questions.md` D8） | 当前 Engine 无官方支持、构建于 2024-05-16，容器运行时补丁停在该时点。**不阻塞交付**，属中长期运维与安全风险；不预设存在任何具体漏洞 | 所有者评估 |
 
 注：`docs/README.md` 的写作规范要求"不写没验证过的具体值"。本目录里出现的 tag

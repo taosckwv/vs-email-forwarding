@@ -14,7 +14,7 @@ labels: bug
 - [ ] 生产（CentOS 8 + Docker，离线）
 - [ ] 其他：
 
-`mail-relay` 版本 / 镜像 tag：
+`vs-email-forwarding` 版本 / 镜像 tag：
 Python 版本（`uv run python --version`）：
 PostgreSQL 版本：
 

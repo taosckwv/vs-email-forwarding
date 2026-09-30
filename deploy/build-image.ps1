@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    在**开发机**（Windows）上构建 mail-relay 应用镜像。
+    在**开发机**（Windows）上构建 vs-email-forwarding 应用镜像。
 
 .DESCRIPTION
     流程：读版本号 -> docker build（linux/amd64）-> 打版本 tag 与 latest tag
@@ -23,7 +23,7 @@
     读不到就退回 0.0.0-dev 并给出警告（预研阶段 pyproject 可能还没就位）。
 
 .PARAMETER ImageName
-    镜像仓库名，默认 mail-relay。最终 tag 形如 mail-relay:1.2.3 与 mail-relay:latest。
+    镜像仓库名，默认 vs-email-forwarding。最终 tag 形如 vs-email-forwarding:1.2.3 与 vs-email-forwarding:latest。
 
 .PARAMETER Platform
     目标架构，默认 linux/amd64。**不要随便改**：生产宿主是 CentOS 8 x86_64。
@@ -46,7 +46,7 @@
 [CmdletBinding()]
 param(
     [string]$Version,
-    [string]$ImageName = 'mail-relay',
+    [string]$ImageName = 'vs-email-forwarding',
     [string]$Platform = 'linux/amd64',
     [switch]$NoCache
 )
@@ -196,6 +196,6 @@ Write-Host ''
 Write-Host '下一步（生成离线交付包）：' -ForegroundColor Green
 Write-Host ("  .\deploy\save-image.ps1 -Version " + $Version)
 Write-Host 'save-image.ps1 会先校验架构、再 docker save、然后跑归档自检（必须是单平台 linux/amd64）。' -ForegroundColor Cyan
-Write-Host '提示：latest 只是开发机上的便利 tag；离线服务器用 .env 里的 MAIL_RELAY_IMAGE' -ForegroundColor Cyan
+Write-Host '提示：latest 只是开发机上的便利 tag；离线服务器用 .env 里的 VS_EMAIL_FORWARDING_IMAGE' -ForegroundColor Cyan
 Write-Host '      指定具体版本 tag（便于回滚），不要依赖 latest。' -ForegroundColor Cyan
 exit 0

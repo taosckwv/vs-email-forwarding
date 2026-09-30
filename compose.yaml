@@ -1,5 +1,5 @@
 # =============================================================================
-# mail-relay 生产编排（应用 + 同机 PostgreSQL，同一个 compose 管理）
+# vs-email-forwarding 生产编排（应用 + 同机 PostgreSQL，同一个 compose 管理）
 #
 # 用法（在服务器交付目录里，与 .env、deploy/ 同级）：
 #   docker compose -f compose.yaml up -d
@@ -10,7 +10,7 @@
 # 环境前提：**与公网隔离、可达内网镜像源；运行时不得依赖任何外部网络**。
 # 所以本文件**只写 image、不写 build**：构建在服务器上单独进行（`deploy/` 下
 # 脚本尚未同步更新），compose 只负责把已 load 到本地的镜像跑起来。
-# 镜像名用 ${MAIL_RELAY_IMAGE} 是为了 load 后能指定具体版本 tag（便于回滚）。
+# 镜像名用 ${VS_EMAIL_FORWARDING_IMAGE} 是为了 load 后能指定具体版本 tag（便于回滚）。
 #
 # 前提：服务器上必须是 Docker Compose v2（`docker compose` 子命令）。
 #   本文件不含 `version:` 字段（Compose Spec），并且用到了
@@ -20,7 +20,7 @@
 # 服务名与容器名一律 ASCII；日志、凭据、收件人地址不进本文件（见 AGENTS.md §8）。
 # =============================================================================
 
-name: mail-relay
+name: vs-email-forwarding
 
 services:
   # ---------------------------------------------------------------------------
@@ -29,10 +29,10 @@ services:
   app:
     # 离线服务器上镜像已 load 到本地，用变量指定具体版本 tag；
     # 回滚 = 改这个变量成旧 tag 再 up -d（见 deploy/README.md「回滚」）。
-    # ⚠️ MAIL_RELAY_IMAGE 也不在当前 .env.example 里，交付前要加进 .env
-    #    （例如 MAIL_RELAY_IMAGE=mail-relay:0.1.0）。不写则退回下面的 latest 默认值。
-    image: ${MAIL_RELAY_IMAGE:-mail-relay:latest}
-    container_name: mail-relay-app
+    # ⚠️ VS_EMAIL_FORWARDING_IMAGE 也不在当前 .env.example 里，交付前要加进 .env
+    #    （例如 VS_EMAIL_FORWARDING_IMAGE=vs-email-forwarding:0.1.0）。不写则退回下面的 latest 默认值。
+    image: ${VS_EMAIL_FORWARDING_IMAGE:-vs-email-forwarding:latest}
+    container_name: vs-email-forwarding-app
     # platform 字段在这里只是**运行期保险**，不是架构的真正保证：
     #   * 真正决定镜像架构的是**构建期**（deploy/build-image.ps1 的
     #     `docker build --platform linux/amd64`）；写在这里只能让 compose 在
@@ -54,7 +54,7 @@ services:
     # 宿主机与容器，不必维护两份配置。
     # 注意：environment 的优先级高于 env_file，所以这里的值一定会生效。
     environment:
-      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-mail_relay}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置：请先在 .env 中填写数据库口令}@postgres:5432/${POSTGRES_DB:-mail_relay}"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-vs_email_forwarding}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置：请先在 .env 中填写数据库口令}@postgres:5432/${POSTGRES_DB:-vs_email_forwarding}"
     ports:
       # 宿主机端口由 .env 的 HTTP_PORT 决定，容器内固定 8000（见 Dockerfile EXPOSE）
       - "${HTTP_PORT:-8000}:8000"
@@ -69,7 +69,7 @@ services:
     stop_grace_period: 30s
     # 继承 Dockerfile 里的 HEALTHCHECK（用 Python 标准库打 /healthz）
     networks:
-      - mail-relay
+      - vs-email-forwarding
 
   # ---------------------------------------------------------------------------
   # 数据库：与应用同机，官方 postgres 镜像，锁主版本 17
@@ -88,7 +88,7 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:17
-    container_name: mail-relay-postgres
+    container_name: vs-email-forwarding-postgres
     # 与 app 声明同一架构，避免 amd64/arm64 混用导致数据文件不可读。
     # 同样只是**运行期保险**：架构由构建期（build-image.ps1）与交付前归档自检保证。
     # 该字段依赖 compose v2（`docker compose version`；Engine 26 自带插件，需现场确认）。
@@ -99,10 +99,10 @@ services:
       # 官方 postgres 镜像做 initdb 时必须拿到它们。
       # 三个键必须与 .env 里 DATABASE_URL 的用户 / 口令 / 库名一致，否则应用连不上库。
       # .env.example 已包含这三个键，照它复制即可。
-      POSTGRES_USER: ${POSTGRES_USER:-mail_relay}
+      POSTGRES_USER: ${POSTGRES_USER:-vs_email_forwarding}
       # 密码没有默认值：没设就直接失败，避免悄悄用弱口令把库跑起来。
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置：请先在 .env 中填写数据库口令（键名与 initdb 用的口令，必须与 DATABASE_URL 一致）}
-      POSTGRES_DB: ${POSTGRES_DB:-mail_relay}
+      POSTGRES_DB: ${POSTGRES_DB:-vs_email_forwarding}
       # 应用按 UTC 存取（见 AGENTS.md §7），数据库容器也固定 UTC，避免排查时区错乱
       TZ: UTC
     # 生产**不**把 5432 暴露到宿主机。应用与库在同一个 compose 网络里，
@@ -122,22 +122,22 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       # pg_isready 是官方镜像自带工具，不需要额外装包
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mail_relay} -d ${POSTGRES_DB:-mail_relay} -h 127.0.0.1"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vs_email_forwarding} -d ${POSTGRES_DB:-vs_email_forwarding} -h 127.0.0.1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
     networks:
-      - mail-relay
+      - vs-email-forwarding
 
 # -----------------------------------------------------------------------------
 # 自定义网络：应用与数据库只在这张 bridge 网络里互访；
 # 只有 app 的 HTTP_PORT 映射到宿主机，数据库不对外暴露。
-# 显式命名（mail-relay-net）便于排查与将来跨 compose 接入。
+# 显式命名（vs-email-forwarding-net）便于排查与将来跨 compose 接入。
 # -----------------------------------------------------------------------------
 networks:
-  mail-relay:
-    name: mail-relay-net
+  vs-email-forwarding:
+    name: vs-email-forwarding-net
     driver: bridge
 
 # 说明：本文件**故意**不声明命名卷。

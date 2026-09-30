@@ -55,7 +55,7 @@ bash 版用 `${BASH_SOURCE[0]}` 推导仓库根，然后切到仓库根再执行
 
 | 服务 | 端口 | 作用 |
 |---|---|---|
-| `postgres:17` | `127.0.0.1:5432` | 开发库 `mail_relay_dev`（测试库 `mail_relay_test` 需手工创建，命令见 `compose.dev.yaml` 末尾） |
+| `postgres:17` | `127.0.0.1:5432` | 开发库 `vs_email_forwarding_dev`（测试库 `vs_email_forwarding_test` 需手工创建，命令见 `compose.dev.yaml` 末尾） |
 | `axllent/mailpit` | `1025`(SMTP) / `1143`(IMAP) / `8025`(Web UI) | 验证**完整回路**：发出去 → 被拉回来 → 关联上原邮件 |
 
 Mailpit 的 Web UI：<http://127.0.0.1:8025>。
@@ -64,12 +64,12 @@ Mailpit 的 Web UI：<http://127.0.0.1:8025>。
 
 ```powershell
 uv sync
-uv run uvicorn mail_relay.main:app --reload
+uv run uvicorn vs_email_forwarding.main:app --reload
 ```
 
 ```bash
 uv sync
-uv run uvicorn mail_relay.main:app --reload
+uv run uvicorn vs_email_forwarding.main:app --reload
 ```
 
 停止依赖：

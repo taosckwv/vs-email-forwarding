@@ -18,8 +18,8 @@
 都能跑，不联网。
 
 用法：
-    py -3.13 deploy/check-image-archive.py dist/mail-relay-images-0.1.0.tar
-    python3 deploy/check-image-archive.py dist/mail-relay-images-0.1.0.tar --expected-images 4
+    py -3.13 deploy/check-image-archive.py dist/vs-email-forwarding-images-0.1.0.tar
+    python3 deploy/check-image-archive.py dist/vs-email-forwarding-images-0.1.0.tar --expected-images 4
 
 判读标准（详见 deploy/README.md）：
   通过 = 归档里没有 image index / manifest list 条目、没有 attestation 条目、

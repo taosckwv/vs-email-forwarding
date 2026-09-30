@@ -19,7 +19,7 @@ _SRC_DIR = _PROJECT_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from mail_relay.main import create_app  # noqa: E402
+from vs_email_forwarding.main import create_app  # noqa: E402
 
 
 @pytest.fixture()

@@ -10,9 +10,9 @@
 
 ## 决策
 
-- **单包仓库**，采用 **`src` 布局**：`src/mail_relay/`。
-- 发行名 **`mail-relay`**，导入包 **`mail_relay`**。
-- ⚠️ **这是占位名。** 项目所有者尚未最终定名；改名成本为「一次目录重命名 + 一次全局替换」，随代码量上升而增加。该未定项记录在 `docs/open-questions.md` C1。
+- **单包仓库**，采用 **`src` 布局**：`src/vs_email_forwarding/`。
+- 发行名 **`vs-email-forwarding`**，导入包 **`vs_email_forwarding`**。
+- ⚠️ **这是占位名。** 项目所有者尚未最终定名；改名成本为「一次目录重命名 + 一次全局替换」，随代码量上升而增加。该未定项记录在 `docs/open-questions.md` C1。（该占位名已于 2026-09-30 定为 vs-email-forwarding，见 ADR-0014）
 
 ## 后果
 

@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    mail-relay 一键门禁（Windows / PowerShell 版）。
+    vs-email-forwarding 一键门禁（Windows / PowerShell 版）。
 
 .DESCRIPTION
     与 scripts/check.sh **行为完全一致**：按固定顺序执行 4 步，任何一步失败立即以

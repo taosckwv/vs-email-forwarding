@@ -18,7 +18,7 @@
   - 抢占任务一律使用 **`SELECT ... FOR UPDATE SKIP LOCKED`** 配合状态字段（外加 `next_attempt_at` 控制退避）。
   - **禁止「先 SELECT 判断、再 UPDATE」的两步写法。**
   - 理由：四条流本身就是并发的，而且未来若要加实例，不允许重写数据访问层。
-- **开发库与测试库分离**：`mail_relay_dev` 与 `mail_relay_test`。
+- **开发库与测试库分离**：`vs_email_forwarding_dev` 与 `vs_email_forwarding_test`。
 - **测试使用真实 PostgreSQL**，不以 mock 替代数据库。测试重点覆盖四类最易出错的路径：
   1. 状态机转换；
   2. 单次 tick 的幂等性（重复执行不产生副作用）；
