@@ -54,8 +54,8 @@ DSH 会话
 | 提交规范 | Conventional Commits，**中文描述**，commitizen 校验 |
 | 版本 / CHANGELOG | **手工维护**；发版用 commitizen 辅助 |
 | CI | **不跑 CI**，门禁靠 pre-commit + 本地脚本 |
-| 生产环境 | CentOS 8 + **完全离线** + Docker 容器 |
-| 镜像交付 | 开发机 `docker build` → `docker save` → 服务器 `docker load` |
+| 生产环境 | CentOS 8 + **与公网隔离、可达内网镜像源**（**运行时不得依赖任何外部网络**）+ Docker 容器 |
+| 镜像交付 | **在服务器上本地构建**镜像；基础镜像以 **tar 带入** + `docker load`（见 `docs/adr/0013`） |
 
 ---
 
@@ -98,7 +98,7 @@ DSH 会话
 
 另外两条**环境前提**（不是设计决策，但会直接阻塞工作）：
 
-> ⚠️ **D3 开发机 Docker**：本机是**未暴露嵌套虚拟化的虚拟机**（Windows 10 22H2，`HypervisorPresent=True`，但 `VirtualizationFirmwareEnabled` / SLAT / `VMMonitorModeExtensions` 均为 False），**Docker Desktop 的两个后端（WSL2 / Hyper-V）都依赖硬件虚拟化与 SLAT，因此在本机不可用**——这不是「尚未安装、装一下就行」，而是「这台机器装不了」。注意：Linux 上的 Docker 不需要硬件虚拟化，所以限制只卡 Windows 上的 Docker Desktop。构建环境放在哪仍未定。详见 `docs/open-questions.md` 的 D3。
+> ⚠️ **D3 开发机 Docker**：本机是**未暴露嵌套虚拟化的虚拟机**（Windows 10 22H2，`HypervisorPresent=True`，但 `VirtualizationFirmwareEnabled` / SLAT / `VMMonitorModeExtensions` 均为 False），**Docker Desktop 的两个后端（WSL2 / Hyper-V）都依赖硬件虚拟化与 SLAT，因此在本机不可用**——这不是「尚未安装、装一下就行」，而是「这台机器装不了」。注意：Linux 上的 Docker 不需要硬件虚拟化，所以限制只卡 Windows 上的 Docker Desktop。**构建环境已定：镜像在生产服务器上本地构建，基础镜像以 tar 带入（见 `docs/adr/0013`）**——上面「这台机器装不了 Docker Desktop」的事实不变。详见 `docs/open-questions.md` 的 D3。
 >
 > ⚠️ **D6 Mailpit**：开发环境规划中包含 Mailpit（同时提供 SMTP 与 IMAP，用于验证「发出去 → 被拉回来 → 关联上原邮件」的完整回路），但该选择在对话中**未获明确确认**。
 
@@ -223,7 +223,7 @@ ADR 只记录**决策与理由**，不写实现细节。已经冻结的决策（
 2. **10 秒是既定间隔，但不得把 `10` 写死在代码里**：轮询间隔、每批条数都必须是配置项。
 3. **发信的 `From` 只能来自服务配置，绝不允许调用方指定；服务端必须显式写入 `Reply-To`，其值等于 IMAP 拉取所用的信箱。** 不显式写 `Reply-To` 时，行为会隐式依赖「`From` 恰好等于被拉取的信箱」，任何一次改动 `From` 都会静默断掉回复回路。见 `docs/adr/0012`。
 4. **任何日志、CHANGELOG、异常信息、PR 描述都不得泄露**：邮件正文、附件内容、账号口令、收件人地址、原始 MIME。排查需要定位邮件时，**用邮件 ID 引用，不要贴正文**。
-5. **生产完全离线**：不得引入任何**运行时需要访问公网**的依赖或行为——模型下载、遥测上报、远程配置拉取、在线许可证校验一律禁止。新增依赖时必须先问自己：它在离线环境里第一次启动会发生什么？
+5. **与公网隔离、可达内网源**（前提表述已按 `docs/adr/0013` 更正，**实质约束不变**）：不得引入任何**运行时需要访问外部网络**（公网或内网源）的依赖或行为——模型下载、遥测上报、远程配置拉取、在线许可证校验一律禁止。新增依赖时必须先问自己：它在隔离环境里第一次启动会发生什么？
 6. **不得把 `.env` 提交进仓库**；不得改动 `.python-version`；不得在未确认前实现 §2 里列出的待确认项。
 7. **重试语义固定**：发送与审查最多 3 次，退避 15s / 30s / 60s，之后进入终态失败并记录最后一次错误。要改这套数字，先补 ADR。
 

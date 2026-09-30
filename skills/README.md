@@ -75,7 +75,7 @@ skills/
 | `add-review-provider` | 新增一个安全审查供应商实现（本地规则 / 外部审查服务），接入到审查出站流与审查回复流 | "审查供应商接入" |
 | `add-smtp-provider` | 新增一个发信通道适配器（企业邮箱 / 自建 MTA / 第三方 API） | "发信通道适配器" |
 | `add-db-migration` | 新增一次 Alembic 迁移并配套测试与文档 | "数据模型" |
-| `offline-release-and-deploy` | 完整走一遍离线交付：构建镜像 → `docker save` → 传输 → `docker load` → 迁移 → 启动 | "离线交付与部署" |
+| `offline-release-and-deploy` | 完整走一遍离线交付：在服务器上本地构建镜像 → 基础镜像以 tar 带入并 `docker load` → 迁移 → 启动（见 `docs/adr/0013`） | "离线交付与部署" |
 | `centos8-rehearsal` | 在 `almalinux:8` 容器里预演离线部署（连带验证迁移与启停）。注意：`centos:8` 与 `library/rockylinux:8` 均已陈旧，首选 `almalinux:8`，理由见 `docs/adr/0006` | "离线交付与部署" |
 
 **注意**：上表的 spec 名称只是计划占位，实际编号与 slug 以 `specs/` 下真实创建的目录为准。落地每个 skill 时，必须先把上表更新为真实路径。

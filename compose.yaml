@@ -5,11 +5,12 @@
 #   docker compose -f compose.yaml up -d
 # 或者直接用仓库自带的脚本：deploy/run.sh
 #
-# 交付方式：开发机构建镜像 -> docker save -> 介质 -> 服务器 docker load。
-# 所以本文件**只写 image、不写 build**：
-#   * 服务器完全离线，任何触发 build 的路径都会失败；
-#   * 开发机构建走 deploy/build-image.ps1，不靠 compose 触发构建。
-# 镜像名用 ${MAIL_RELAY_IMAGE} 是为了离线 load 后能指定具体版本 tag（便于回滚）。
+# 交付方式（见 docs/adr/0013）：镜像**在 CentOS 8 生产服务器上本地构建**，
+# 基础镜像以镜像 tar 形式从外部带入服务器并 `docker load`。
+# 环境前提：**与公网隔离、可达内网镜像源；运行时不得依赖任何外部网络**。
+# 所以本文件**只写 image、不写 build**：构建在服务器上单独进行（`deploy/` 下
+# 脚本尚未同步更新），compose 只负责把已 load 到本地的镜像跑起来。
+# 镜像名用 ${MAIL_RELAY_IMAGE} 是为了 load 后能指定具体版本 tag（便于回滚）。
 #
 # 前提：服务器上必须是 Docker Compose v2（`docker compose` 子命令）。
 #   本文件不含 `version:` 字段（Compose Spec），并且用到了

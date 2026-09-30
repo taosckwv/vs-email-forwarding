@@ -77,7 +77,7 @@ DSH 会话通过 `POST /v1/messages` 把邮件内容交给本服务；邮件先�
 | 测试 | pytest + pytest-asyncio（`asyncio_mode = "auto"`） |
 | 提交规范 | Conventional Commits，描述用中文，commitizen 校验 |
 | 质量门禁 | pre-commit + `scripts/check.*`（**不跑 CI**） |
-| 生产部署 | CentOS 8 完全离线 + Docker 容器 |
+| 生产部署 | CentOS 8 + **与公网隔离、可达内网镜像源**（**运行时不得依赖任何外部网络**）+ Docker 容器 |
 
 ---
 
@@ -179,9 +179,11 @@ uv run pre-commit run --all-files   # 手动全量跑一次
 
 ## 部署
 
-开发机（Windows）构建镜像 → `docker save` 导出离线包 → 生产服务器（CentOS 8，**完全离线**）`docker load` 导入并启动；生产 PostgreSQL 与应用同机，数据落在宿主机数据卷上。
+镜像**在 CentOS 8 生产服务器上本地构建**（不再由开发机构建），**基础镜像以镜像 tar 形式带入服务器**并 `docker load`，再启动；生产 PostgreSQL 与应用同机，数据落在宿主机数据卷上。
 
-详细的构建、导出、导入、升级与回滚步骤见 **`deploy/README.md`**——部署入口全部在 `deploy/` 下，**不要另起一套部署脚本**。
+环境前提为「**与公网隔离，但可达内网镜像源；运行时不得依赖任何外部网络**」，决策与理由见 **`docs/adr/0013`**。
+
+详细的构建、导入、升级与回滚步骤见 **`deploy/README.md`**——部署入口全部在 `deploy/` 下，**不要另起一套部署脚本**。
 
 ---
 
@@ -189,7 +191,12 @@ uv run pre-commit run --all-files   # 手动全量跑一次
 
 1. **测试客户端面临 `httpx` → `httpx2` 迁移。** `httpx` 0.28.1 的 PyPI classifier 只声明到 Python 3.12，但在 3.13 上**实测可用**（本项目测试已通过），因此「能不能用」的风险已排除。真正的问题在上游：FastAPI 的 `TestClient` 已发出弃用警告，提示改用 `httpx2`（`StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead`）。**现在就迁移，还是等上游正式移除 `httpx` 支持时再迁，尚未决定**（见 `docs/open-questions.md` 的 E2）。
 2. **包名是占位。** `mail-relay` / `mail_relay` 尚未最终定名。发行名、导入包名、目录名、Docker 镜像名、配置项前缀都可能随之变更，越晚改名成本越高。
-3. **CentOS 8 已 EOL。** CentOS 8 于 2021-12-31 停止维护，官方仓库已下线，镜像与系统补丁均不再更新。生产环境**完全离线**，因此无法在线打补丁；系统级安全更新需要靠离线包手工完成。基础镜像与依赖版本应固定，并在 `deploy/` 中记录来源。
+3. **CentOS 8 已 EOL。** CentOS 8 于 2021-12-31 停止维护，官方仓库已下线，镜像与系统补丁均不再更新。生产环境的前提已按 `docs/adr/0013` 更正为「**与公网隔离、可达内网镜像源**」，本条据此更正，并请注意区分两件不同的事：
+
+   - **可达性**：内网 yum 源可用（已实测），宿主包**可以**从内网源安装与更新——此前「完全装不了包」的说法不再成立；
+   - **是否存在补丁**：CentOS 8 已 EOL 意味着**上游不再产出新的安全补丁**；内网源无论多完整，也只是缓存既有内容，**解决不了「没有新补丁」这件事**。
+
+   也就是说，缺的不是「取包的通道」，而是「上游已经不再产出补丁」；系统级安全更新的缺口仍需人工评估与手工操作来填（从内网源装宿主包另有源版本与发行版不匹配的风险，见 `docs/open-questions.md` D12）。基础镜像与依赖版本应固定，并在 `deploy/` 中记录来源。
 4. **审查一期是空实现占位。** 一期审查逻辑必定通过，真实的敏感信息 / 病毒审查来源尚未定案（见 `docs/open-questions.md`），在此之前不要把它当作安全边界。
 5. **数据库驱动与 IMAP 客户端尚未选型。** `asyncpg` 与 `psycopg3`、`imapclient` 与 `aioimaplib` 均未定案（见 `docs/open-questions.md` 的依赖与工具选型一节）。因此本阶段 `pyproject.toml` 的运行时依赖**只列了骨架最小集**（fastapi / uvicorn / pydantic-settings / structlog），**尚未包含任何数据库驱动与 IMAP 客户端**；选定后需先补 ADR，再补依赖。同理，`.env.example` 里的 `DATABASE_URL` 目前以 `postgresql+asyncpg://` 为占位形态，驱动定案后需同步调整。
 
