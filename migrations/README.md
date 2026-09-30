@@ -21,13 +21,13 @@ uv run alembic upgrade head
 1. **禁止手工 DDL。** 任何建表、加字段、加索引、改约束都必须通过迁移脚本完成，不允许直接在数据库里执行 SQL 了事——否则开发、预演、生产三套环境一定会不一致。
 2. **迁移必须可前滚也可回滚。** 每个迁移都要实现 `upgrade()` 与 `downgrade()`。写不出 `downgrade()` 的迁移（例如删列丢了数据）必须在文件里用中文注释写明原因，并在对应的 spec 里记录这条不可逆性。
 3. **文件名保留 Alembic 自动生成的 `revision` 哈希前缀**，后面的 `-m` 描述用英文短横线短语（与 `specs/` 的 slug 风格一致），例如 `a1b2c3d4e5f6-create-emails-table.py`。**文件名一律 ASCII，注释用中文。**
-4. **改表结构属于不可逆决策。** 按 `AGENTS.md` §6，必须先新增一条 `docs/adr/NNNN-*.md` 说明为什么这样改，再来写迁移。
+4. **改表结构属于不可逆决策。** 按 `AGENTS.md` §6，必须先把决策写进 `docs/research/02-runtime-and-scheduling.md` 的『结论』段（被否决的方向写进『已否决方向』段），再来写迁移。
 5. **一个迁移对应一个可解释的意图。** 不要把互不相关的改动塞进同一个迁移文件。
 6. **离线和生产环境不手工跑 Alembic**：统一通过 `deploy/migrate.sh`（在应用容器内执行 `uv run alembic upgrade head`）。注意该脚本在迁移存在之前执行会失败，这是预期行为。
 
 ## 相关文件
 
-- `docs/adr/` — 表结构相关的决策记录
+- `docs/research/` — 各主题的当前结论与决策记录（表结构见 `02-runtime-and-scheduling.md`）
 - `specs/` — 定义表结构的需求与验收标准
 - `deploy/migrate.sh` — 部署时执行迁移的入口
 - `src/vs_email_forwarding/db/` — ORM 模型与仓储层（`env.py` 的 `target_metadata` 将来自这里）

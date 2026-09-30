@@ -41,7 +41,7 @@
 
 - [ ] `T-7` 补齐 `tests/unit/` 与 `tests/integration/` 用例 — `AC-n`
 - [ ] `T-8` 更新 `docs/` 下受影响的说明文档
-- [ ] `T-9` 若涉及表结构 / API 契约 / 部署形态变更，补齐 `docs/adr/NNNN-*.md`
+- [ ] `T-9` 若涉及表结构 / API 契约 / 部署形态变更，按 `AGENTS.md` §6 更新 `docs/research/` 下对应主题册的决策段
 - [ ] `T-10` 运行 `scripts/check.ps1`（或 `check.sh`）并确保全部通过
 
 ---
@@ -54,5 +54,5 @@
 - [ ] 本地门禁已跑过：`ruff format --check`、`ruff check`、`mypy src`、`pytest`
 - [ ] 无密钥、真实主机名 / 端口 / 账号入库
 - [ ] 日志与异常信息中不含邮件正文、收件人地址、凭据
-- [ ] 涉及不可逆决策的部分已有对应 ADR
+- [ ] 涉及不可逆决策的部分已按 `AGENTS.md` §6 更新 `docs/research/` 下对应主题册的决策段
 - [ ] 该特性的 spec 目录**保留**（不要删除）

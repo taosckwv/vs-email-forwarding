@@ -14,14 +14,14 @@ bash 版用 `${BASH_SOURCE[0]}` 推导仓库根，然后切到仓库根再执行
 |---|---|---|---|
 | `check.ps1` | **一键门禁（Windows）**：依次跑 `ruff format --check` → `ruff check` → `mypy src` → `pytest` | 无（刻意不接受参数，保证所有人跑的是同一套门禁） | 已安装 **uv**（`uv --version` 可用）。**不需要 Docker**（纯逻辑单测不依赖容器） |
 | `check.sh` | **一键门禁（Linux/macOS/CentOS 8）**，与 `check.ps1` **行为完全一致** | 无 | 已安装 **uv**。**不需要 Docker** |
-| `dev-up.ps1` | 起开发依赖：PostgreSQL 17 + Mailpit（`compose.dev.yaml`），并打印连接信息 | 无 | 已安装并启动 **Docker Desktop**（见 `docs/open-questions.md` D3） |
-| `dev-up.sh` | 同上（Linux/macOS） | 无 | 已安装并启动 **Docker** |
+| `dev-up.ps1` | 起开发依赖：PostgreSQL 17 + Mailpit（`compose.dev.yaml`），并打印连接信息 | 无 | **本机用不了**：开发机装不了 Docker Desktop，开发依赖在本机起不来（见 `docs/research/05-dev-and-build-environment.md`） |
+| `dev-up.sh` | 同上（Linux/macOS） | 无 | 已安装并启动 **Docker**（Linux 上的 Docker 不需要硬件虚拟化，不受上一条限制） |
 
 ---
 
 ## 一键门禁：为什么它这么重要
 
-**本项目不跑 CI**（见 `AGENTS.md` §9 与 ADR-0010）。没有任何自动兜底：
+**本项目不跑 CI**（见 `AGENTS.md` §9 与 `docs/research/03-dependencies-and-toolchain.md`）。没有任何自动兜底：
 不会有人在 PR 上替你跑检查，配置错误也不会被流水线拦住。
 
 所以：
@@ -42,14 +42,18 @@ bash 版用 `${BASH_SOURCE[0]}` 推导仓库根，然后切到仓库根再执行
 ### 关于 docker 与门禁的关系
 
 - 上面 4 步本身**不需要 Docker**：`tests/unit/` 是纯逻辑测试。
-- 但 `tests/integration/` 需要真实 PostgreSQL 与邮件服务；这些用例要么在**开发机**上
-  对着 `scripts/dev-up.*` 起的容器跑，要么按 pytest 的标记跳过（标记约定见
+- 但 `tests/integration/` 需要真实 PostgreSQL 与邮件服务；**本机跑不了**——开发机装不了
+  Docker Desktop，`scripts/dev-up.*` 起的容器在本机起不来（见
+  `docs/research/05-dev-and-build-environment.md`）。这些用例只能在**有 Docker 的 Linux 机器**上
+  对着 `scripts/dev-up.*` 起的容器跑，或者按 pytest 的标记跳过（标记约定见
   `docs/testing.md`，随测试规格一起落地）。
 - 门禁脚本刻意不加"先起容器"的逻辑：让门禁的依赖尽量少，才能做到"随手就能跑"。
 
 ---
 
 ## 开发依赖：`dev-up` 起的是什么
+
+**这套开发依赖在开发机（Windows）上起不来**——开发机装不了 Docker Desktop，所以下面这些容器只可能在能跑 Docker 的 Linux 机器上起来（见 `docs/research/05-dev-and-build-environment.md`）。
 
 `compose.dev.yaml` 里只有两个服务：
 
@@ -86,8 +90,8 @@ docker compose -f compose.dev.yaml down -v       # 连命名卷一起删（测�
 | 现象 | 处理 |
 |---|---|
 | `check.ps1` 报「找不到 uv 命令」 | 先安装 uv（安装方式见 uv 官方文档），确认新开的终端里 `uv --version` 可用 |
-| `dev-up.*` 报「找不到 docker」 | 安装并启动 Docker Desktop（Windows 需要 WSL2，安装可能需要管理员权限并重启） |
-| `dev-up.*` 报「连不上 Docker 守护进程」 | Docker Desktop 没启动；等托盘图标变为运行中再重试 |
+| `dev-up.ps1` 报「找不到 docker」 | **本机修不了**：开发机是未暴露嵌套虚拟化的虚拟机，Docker Desktop 的 WSL2 / Hyper-V 两个后端都依赖硬件虚拟化与 SLAT，这台机器**装不了** Docker Desktop（不是「还没装」）。改在 Linux 机器上跑 `dev-up.sh`（见 `docs/research/05-dev-and-build-environment.md`） |
+| `dev-up.*` 报「连不上 Docker 守护进程」 | Docker 守护进程没启动；在 Linux 上先把它起起来再重试（Windows 本机不适用，见上一条） |
 | 端口 5432 / 1025 / 1143 / 8025 被占用 | 先 `docker compose -f compose.dev.yaml down`；仍冲突则改 `compose.dev.yaml` 里的宿主端口映射 |
 | `bash scripts/*.sh` 报 `$'\r': command not found` | 脚本被转成了 CRLF。`sed -i 's/\r$//' scripts/*.sh`，并检查 git 的 `core.autocrlf` 设置（这批脚本应以 LF 提交） |
 | `.ps1` 里的中文变成乱码，甚至报出奇怪的语法错误 | 这几个 `.ps1` 必须**以「UTF-8 with BOM」保存**：Windows PowerShell 5.1 只会按系统 ANSI 代码页读取无 BOM 的文件，中文注释会被解码坏并破坏语法（已实测）。编辑后确认 BOM 还在（VS Code 右下角编码选 `UTF-8 with BOM`）。`scripts/*.sh`、YAML 与文档则相反：**必须无 BOM、LF**。 |

@@ -85,7 +85,7 @@ cp -r specs/_template specs/0001-outbound-review-pipeline
   - 「同一封邮件在 10 秒内被两条流同时抢占时，SMTP 投递**恰好发生一次**；可由集成测试 `test_no_duplicate_send` 验证。」
   - 「`POST /v1/messages` 在缺少 `to` 字段时返回 HTTP 422，响应体包含字段名 `to`。」
   - 「拒审邮件不出现在邮件表中；`GET /v1/messages/{id}` 对该 id 返回 `status=rejected`。」
-  - 「在离线环境（无外网）下启动容器，60 秒内 `/healthz` 返回 200。」
+  - 「在与公网隔离、可达内网镜像源的服务器上启动容器（运行时不得依赖任何外部网络），60 秒内 `/healthz` 返回 200。」
 
 > 写不出可测试的验收标准，通常意味着**需求本身还没想清楚**——这时应该回到 `未决问题` 一节，而不是把模糊表述写进 `AC`。
 
@@ -98,7 +98,7 @@ cp -r specs/_template specs/0001-outbound-review-pipeline
 | 这个特性要什么、怎样算做完 | `specs/<编号>/spec.md` |
 | 怎么实现、动哪些文件 | `specs/<编号>/plan.md` |
 | 现在做到哪一步 | `specs/<编号>/tasks.md` |
-| 为什么当初这么选（不可逆决策） | `docs/adr/` |
+| 不可逆决策的当前结论（为什么这么选） | `docs/research/` 下对应的主题册 |
 | 系统级架构与数据模型说明 | `docs/` |
 | 尚未定案的问题 | `docs/open-questions.md` |
 | 固定流程怎么走（可复用） | `skills/` |
