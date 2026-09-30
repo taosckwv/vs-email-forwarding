@@ -27,7 +27,8 @@ services:
   rehearsal:
     image: almalinux:8
     container_name: mail-relay-rehearsal
-    # 与交付镜像同架构，避免在 arm64 开发机上得出不可比的结论
+    # 与交付镜像同架构，避免在 arm64 开发机上得出不可比的结论。
+    # 该字段只是运行期保险（架构由构建期决定），并依赖 compose v2。
     platform: linux/amd64
     # 常驻不退出，等着被 exec 进去
     command: ["/bin/bash", "-c", "sleep infinity"]

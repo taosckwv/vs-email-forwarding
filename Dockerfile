@@ -35,8 +35,13 @@
 #     （"Binary packages are produced on a best-effort basis"），离线环境里
 #     一旦某个版本缺轮子就再也装不上（服务器无网、无法现场编译）。
 #
-# 镜像架构固定 linux/amd64：构建见 deploy/build-image.ps1 的 -Platform 与
-# compose 服务里的 platform 字段；save/load 也统一带 --platform linux/amd64。
+# 镜像架构固定 linux/amd64，且**只在构建期钉死**：见 deploy/build-image.ps1 的
+# -Platform（`docker build --platform linux/amd64`）与 compose 服务里的 platform 字段
+# （后者只是运行期保险）。
+#   * `docker save` / `docker load` **不带** `--platform`：该参数需要 API 1.48
+#     （Engine v28），而生产服务器实测为 **26.1.3 / API 1.45**，传了会因未知参数直接失败。
+#   * 平台改由「保存前校验 + 载入后校验」保证，并可用 `deploy/check-image-archive.py`
+#     在交付前对归档做不依赖 Docker 的自检。理由与否决方案见 docs/adr/0006。
 #
 # ghcr.io/astral-sh/uv:0.12.20
 #   * uv 官方容器镜像，0.12.20 是正式发布版本（非 pre-release），已核实该 tag

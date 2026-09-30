@@ -32,9 +32,15 @@ services:
     #    （例如 MAIL_RELAY_IMAGE=mail-relay:0.1.0）。不写则退回下面的 latest 默认值。
     image: ${MAIL_RELAY_IMAGE:-mail-relay:latest}
     container_name: mail-relay-app
-    # 架构固定 linux/amd64：与 deploy/build-image.ps1 的 -Platform、save/load 的
-    # --platform 保持一致，保证「开发机存的」就是「服务器跑的」；
-    # 将来开发机换成 arm64（例如 Apple Silicon）时也不会静默产出错架构镜像。
+    # platform 字段在这里只是**运行期保险**，不是架构的真正保证：
+    #   * 真正决定镜像架构的是**构建期**（deploy/build-image.ps1 的
+    #     `docker build --platform linux/amd64`）；写在这里只能让 compose 在
+    #     「镜像架构与声明不符」时更早报错，并不会把镜像变成 amd64；
+    #   * 交付链的 save / load **不带** `--platform`：服务器实测 Client / Server 均为
+    #     26.1.3、API 1.45，而该参数需要 v28+ / API 1.48；架构改为在开发机保存前
+    #     与服务器载入后各校验一次（见 deploy/README.md §3.0 与 §3.2）；
+    #   * 本字段依赖 **compose v2**（用 `docker compose version` 确认）。Engine 26
+    #     自带 compose v2 插件，但这一点**仍需现场确认**。
     platform: linux/amd64
     # 应用的全部可变配置都收敛在 .env（HTTP_PORT、数据库连接、SMTP/IMAP、
     # 四条流的轮询间隔等），仓库里只提交 .env.example。
@@ -82,7 +88,9 @@ services:
   postgres:
     image: postgres:17
     container_name: mail-relay-postgres
-    # 与 app 保持同架构，避免 amd64/arm64 混用导致 volume 里的数据文件不可读
+    # 与 app 声明同一架构，避免 amd64/arm64 混用导致数据文件不可读。
+    # 同样只是**运行期保险**：架构由构建期（build-image.ps1）与交付前归档自检保证。
+    # 该字段依赖 compose v2（`docker compose version`；Engine 26 自带插件，需现场确认）。
     platform: linux/amd64
     restart: unless-stopped
     environment:

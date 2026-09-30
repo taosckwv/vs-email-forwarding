@@ -25,8 +25,10 @@ services:
   postgres:
     image: postgres:17
     container_name: mail-relay-dev-postgres
-    # 与生产同架构（linux/amd64），让开发机上跑出来的行为与服务器一致；
-    # 在 arm64 开发机（Apple Silicon）上会走模拟，慢一些但结果可比。
+    # platform 只是**运行期保险**（开发机上与生产同架构，行为更可比）；
+    # 真正决定镜像架构的是构建期（deploy/build-image.ps1 的 `docker build --platform`）。
+    # 该字段依赖 compose v2（`docker compose version` 确认）。在 arm64 开发机
+    # （Apple Silicon）上会走模拟，慢一些但结果可比。
     platform: linux/amd64
     environment:
       POSTGRES_USER: mail_relay
@@ -66,7 +68,7 @@ services:
     # Mailpit 的 IMAP 行为在小版本之间有过变化，不锁会让"本机能过、同事跑不过"。
     image: axllent/mailpit:v1.31.3
     container_name: mail-relay-dev-mailpit
-    # 与生产同架构（linux/amd64），避免开发机架构差异带来的行为不一致
+    # 与生产同架构的**运行期保险**（架构由构建期决定），并依赖 compose v2
     platform: linux/amd64
     environment:
       # 允许任意账号密码登录 SMTP/IMAP：本地开发不必配真凭据。

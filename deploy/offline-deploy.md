@@ -123,33 +123,59 @@ iptables/nftables、以及某些 sysctl 行为都不同。真正的 ABI/内核�
 
 ## 5. `docker save` / `docker load` 的平台与版本约束（现场最容易踩）
 
-1. **三处平台必须统一写 `linux/amd64`**：
-   - `deploy/build-image.ps1 -Platform linux/amd64`（`docker build --platform`）
-   - `compose.yaml` / `compose.dev.yaml` 里的 `platform: linux/amd64`
-   - `deploy/save-image.ps1` 与 `deploy/load-image.sh` 的 `--platform linux/amd64`
+### 5.1 已核实的服务器事实（2026-09 实测，原文照录）
 
-   统一的目的：保证「开发机存的」就是「服务器跑的」，并且将来开发机换成 arm64
-   （Apple Silicon）时不会**静默**产出错架构镜像——那种错误在服务器上表现为
-   `exec format error`，排查起来很费时间。
+```text
+Client: Docker Engine - Community  26.1.3  API 1.45  linux/amd64  Built 2024-05-16
+Server Engine:                     26.1.3  API 1.45（最低 1.24）  linux/amd64  Built 2024-05-16
+containerd: 1.6.32      runc: 1.1.12
+```
 
-2. **`docker save` 的产物格式变了**：自 moby **v25.0.0** 起，`docker save` 产出
-   **OCI 归档**。老引擎/老工具链对 OCI 归档的兼容性不如旧的 docker-archive。
+由此推出三条**硬结论**：
 
-3. **`--platform` 参数要 Engine v28 才有**。低于 v28 时 `load-image.sh` 会自动
-   退化为不带该参数，并提示人工核对镜像架构。
+1. **`--platform` 不可用**：`docker save` / `docker load` 的 `--platform` 需要
+   **API 1.48（Engine v28）**，而服务器 API 是 **1.45** —— 这是从版本号直接推出的
+   结论，不是推测。因此交付脚本**一律不传这个参数**。
+   若将来服务器 Engine 升到 ≥ 28，该参数才可用，但本项目**不依赖**它。
+2. **OCI 归档可以读**：自 moby **v25.0.0** 起 `docker save` 产出 **OCI 归档**，
+   Engine ≥ 25 即可读入；**26.1.3 满足**。
+3. **交付物必须是单平台 amd64 归档**：Engine 26 默认使用 **classic image store**，
+   而 **classic image store 不支持 image index / manifest list**。开发机若是 containerd
+   image store，`docker save` 可能导出带 manifest list / attestation 的 image index，
+   服务器 `docker load` 会失败。
 
-4. **containerd image store 的差异**：Docker Desktop 与 Engine ≥ 29 默认使用
-   containerd image store，而 **classic image store 不支持 image index /
-   manifest list**，无法 load 多平台镜像。服务器上很可能是老引擎 + classic store。
+### 5.2 因此的机制：构建期锁平台 + 三处校验 + 一次归档自检
 
-5. 因此部署前**必须**核对服务器版本（`docker version`）：**Engine ≥ 25 且 CLI ≥ 28**。
-   若服务器是老版本（CentOS 8 上很可能是 20.10 / 24 / 26），load 可能失败，
-   需要先升级 Engine，或改用其他交付方式。
+三处平台声明**不再靠「都写 `--platform`」保持一致**，而是靠「一处钉死 + 校验」：
 
-6. **风险记录（不是本项目能解决的）**：Docker 官方**已不再支持 CentOS 8 作为宿主**
-   （官方安装文档现在只列 CentOS Stream 9/10）。服务器上那版 Docker 处于
-   **无官方支持**状态，出问题只能靠社区/源码。这条要写进交付说明，别让运维以为
-   "有官方兜底"。
+| 环节 | 在哪里 | 做什么 |
+|---|---|---|
+| **构建期钉死平台**（唯一真正决定架构的地方） | `deploy/build-image.ps1`（开发机） | `docker build --platform linux/amd64`（BuildKit 语义）；构建后立刻 `docker image inspect --format '{{.Os}}/{{.Architecture}}'` 校验 |
+| 保存前校验 | `deploy/save-image.ps1`（开发机） | 打包前逐个确认镜像确实是 `linux/amd64`，否则报错退出 |
+| **归档自检**（不依赖 Docker） | `deploy/check-image-archive.py`（开发机，`save-image.ps1` 保存后自动调用） | 用 Python 标准库读 tar 内的 `index.json` / `manifest.json`：确认没有 image index / manifest list、没有 attestation、所有条目平台都是 `linux/amd64`（判读标准见 `deploy/README.md` §2.5） |
+| 载入后校验 | `deploy/load-image.sh`（服务器） | `docker load` **不带** `--platform`；载入后用 `docker image inspect` 逐个校验架构与预期 tag |
+
+为什么连 `docker save` 也不带 `--platform`：`save` 跑在**开发机**上，本来不受服务器
+CLI 限制，但本项目刻意让交付链**任何一环都不依赖**这个版本门槛（它需要 v28+），
+免得换个构建机、或在服务器侧复用时直接失败。架构的保证放在构建期，其余三处都是校验。
+
+### 5.3 仍未确认的一项：image store 模式
+
+- `docker version` 看不到它；要看 `docker info` 的 **Storage Driver**：
+  **`overlay2` 通常 = classic image store，`overlayfs` 通常 = containerd image store**
+  （该对应关系属于**待现场确认**项，不要当成已定）。
+- 为什么决定成败：**classic image store 不能加载 manifest list / image index**。
+- 缓解手段已经内建：只交付**单平台 amd64 归档** + 交付前**归档自检** + 载入后**架构校验**。
+
+### 5.4 风险记录（不是本项目能解决的）
+
+1. **Docker 官方已不再支持 CentOS 8 作为宿主**（官方安装文档只列 CentOS Stream 9/10）。
+   服务器上那一版 Docker 处于**无官方支持**状态，出问题只能靠社区/源码。这条要写进
+   交付说明，别让运维以为「有官方兜底」。
+2. **容器运行时的安全补丁停在 2024 年初**：服务器上 Engine 构建于 **2024-05-16**
+   （同版 containerd 1.6.32 / runc 1.1.12），此后没有官方支持渠道。**是否有可升级路径
+   需要在服务器侧确认**（登记为 `docs/open-questions.md` D8）。这里**不预设存在任何
+   具体漏洞，也不猜测具体 CVE**。
 
 ---
 
@@ -164,6 +190,9 @@ iptables/nftables、以及某些 sysctl 行为都不同。真正的 ABI/内核�
 | 数据目录 | 宿主机目录 `./data/postgres`（postgres:17 的 `/var/lib/postgresql/data`） | 命名卷；`postgres:18`（挂载点改为 `/var/lib/postgresql`，`PGDATA` 也变了） | 备份=打包目录；18 的挂载点变更是破坏性的，一期不追新 |
 | 预演镜像 | `almalinux:8` | `centos:8`、`library/rockylinux:8`、（次选 `rockylinux/rockylinux:8`） | 前者 EOL 且实为 8.4；后者停在 8.9；almalinux:8 活跃维护且 glibc 2.28 |
 | 运行期工具 | 镜像内保留 uv | 运行镜像不带 uv、靠宿主机跑迁移 | 服务器无网不能装工具；迁移必须在目标环境执行 |
+| 平台声明位置 | **构建期钉死**（`docker build --platform linux/amd64`）+ 保存前 / 载入后校验 + 归档自检 | 在 `docker save` / `docker load` 上也写 `--platform linux/amd64` | 该参数需要 API 1.48（Engine v28），服务器实测 API 1.45，**传了会因未知参数直接失败**。把平台声明放在唯一真正决定架构的地方（build），其余环节用校验 |
+| 归档形态 | **单平台 amd64 归档** | 多平台归档（带 manifest list / attestation 的 image index） | 服务器 classic image store **不支持 image index**，load 会失败；而生产宿主本身也只有 amd64 |
+| 要求服务器升级 Docker（CLI/Engine ≥ 28）再交付 | —— **已否决** | 把「服务器升到 ≥ 28 以继续使用 `--platform`」作为交付前提 | 服务器是 CentOS 8，Docker 官方**已不再支持该宿主**、升级路径不明（`docs/open-questions.md` D8 仍在确认）——**不能把交付前提建立在一个没有把握的升级上**。改为「构建期锁平台 + 校验 + 归档自检」，服务器侧零改动 |
 | CI | 不跑（本地门禁） | GitHub Actions 等 | 见 ADR-0010；门禁落在 `scripts/check.*` |
 
 ---
@@ -175,13 +204,14 @@ iptables/nftables、以及某些 sysctl 行为都不同。真正的 ABI/内核�
 | 1 | **服务器 IP、SSH 端口、部署目录** | `deploy/README.md` 的传输章节只能写占位；现场步骤里的绝对路径都可能变 | 所有者 |
 | 2 | **传输介质 / 跳板机通道** | 决定了校验与传输脚本要不要写成自动化；目前只要求"能续传 + 传 sha256" | 所有者 |
 | 3 | **镜像确切 digest**（`python:3.13-slim-trixie` / `ghcr.io/astral-sh/uv` / `postgres:17` / `almalinux:8`） | 定版时应把 tag 换成 `tag@sha256:...` 才能真正锁死内容。当前只在注释里记录"抓取当日"的 digest，需要复核 | 交付定版时 |
-| 4 | **服务器 Docker 版本** | 决定 `--platform` 能不能用、OCI 归档能不能 load（见 §5） | 现场核对，结果回填 `deploy/README.md` |
+| 4 | **image store 模式**（classic / containerd） | 决定归档能否被 `docker load` 加载（见 §5.3）。**Server Engine 版本与 API 已实测**（26.1.3 / 1.45），不再是未知项 | 现场执行 `docker info` 看 Storage Driver 后回填 `deploy/README.md` §3.0 |
 | 5 | **SELinux 下数据目录的正确处理方式**（`:z`/`:Z` 挂载选项 vs `chcon`） | 挂载点能否被 Postgres 写入；未取得官方原文确认，**标注为待确认** | 现场实测后回填 |
 | 6 | **Alembic 初始化时点** | 决定 `deploy/migrate.sh` 什么时候从"必然失败"变成"必须成功" | 数据模型规格（A1–A5）落地后 |
 | 7 | **`postgres:18` 升级路径** | 18 的 `PGDATA` / 挂载点变更需要一次有计划的迁移（`pg_upgrade`），不是换个 tag 就行 | 将来另开 ADR |
 | 8 | **Mailpit 是否最终采用** | 影响 `compose.dev.yaml` 的 SMTP/IMAP 指向与集成测试写法 | 见 `docs/open-questions.md` D6 |
 | 9 | **对外端口（`HTTP_PORT`）与是否需要对外放行** | 影响 firewalld 步骤与健康检查地址 | 所有者 |
 | 10 | **`.env.example` 需要补 4 个键**：`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`（官方 postgres 镜像 initdb 用，且必须与 `DATABASE_URL` 一致）与 `MAIL_RELAY_IMAGE`（离线指定版本 tag）；同时生产 `.env` 里 `DATABASE_URL` 的主机要改成 compose 服务名 `postgres`。这 4 个键当前在 `.env.example` 里**都不存在**，不改的话 `compose.yaml` 直接起不来 | 直接决定部署能否成功 | 根配置维护者（`deploy/` 无权改 `.env.example`） |
+| 11 | **服务器侧 Docker 是否有可升级路径**（`docs/open-questions.md` D8） | 当前 Engine 无官方支持、构建于 2024-05-16，容器运行时补丁停在该时点。**不阻塞交付**，属中长期运维与安全风险；不预设存在任何具体漏洞 | 所有者评估 |
 
 注：`docs/README.md` 的写作规范要求"不写没验证过的具体值"。本目录里出现的 tag
 与 digest 都标注了来源或"待复核"，没有编造。

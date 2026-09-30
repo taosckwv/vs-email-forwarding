@@ -16,15 +16,19 @@
 ```text
 开发机（Windows，有网）                     服务器（CentOS 8，完全离线）
 ─────────────────────────                  ───────────────────────────
-deploy\build-image.ps1   构建镜像
-deploy\save-image.ps1    打包成 tar + sha256
+deploy\build-image.ps1   构建镜像（docker build --platform linux/amd64，平台在此钉死）
+deploy\save-image.ps1    保存前校验架构 -> docker save（**不带 --platform**）
+                         -> 归档自检（check-image-archive.py，不依赖 Docker，§2.5）
+                         -> 生成 tar + sha256
         │
-        └── 介质 / 跳板机（见 §2）──────►  校验 sha256
-                                           deploy/load-image.sh
-                                           准备 .env
-                                           deploy/migrate.sh
-                                           deploy/run.sh
-                                           验证 /healthz
+        └── 介质 / 跳板机（见 §2）──────►  校验 sha256（§3.1）
+                                           deploy/load-image.sh（§3.2）
+                                             = docker load（**不带 --platform**）
+                                               + 载入后校验架构与预期 tag
+                                           准备 .env（§3.3）
+                                           deploy/migrate.sh（§3.5）
+                                           deploy/run.sh（§3.6）
+                                           验证 /healthz（§3.7）
 ```
 
 **服务器上不需要 Python，不需要 uv，不需要 pip，不需要访问公网。**
@@ -43,7 +47,7 @@ deploy\save-image.ps1    打包成 tar + sha256
 | 2 | `mail-relay-images-<版本>.tar.sha256` | 同上（自动生成） | 传输完整性校验；`load-image.sh` 会自动用它做 `sha256sum -c`。 |
 | 3 | `compose.yaml` | 仓库根 | 生产编排。**只写 `image`，不写 `build`**：服务器无网，任何构建路径都会失败。 |
 | 4 | `.env` | 由 `.env.example` 复制后填真实值 | **不进版本库**。含数据库口令、SMTP/IMAP 账号、`HTTP_PORT`、`MAIL_RELAY_IMAGE`。 |
-| 5 | `deploy/` 目录 | 仓库 | 至少含 `load-image.sh`、`migrate.sh`、`run.sh`（`build-image.ps1`/`save-image.ps1` 是开发机用的，可一带，也可不带）。 |
+| 5 | `deploy/` 目录 | 仓库 | 至少含 `load-image.sh`、`migrate.sh`、`run.sh`（`build-image.ps1`/`save-image.ps1`/`check-image-archive.py` 是**开发机**用的：前两个构建与打包，第三个做归档自检，可一带也可不带）。 |
 | 6 | `README` 类文档 | 仓库 | 本文件 + `offline-deploy.md`，便于现场无人可问时自己查。 |
 
 可选项：`deploy/centos8-rehearsal/`（预演环境，通常不必上服务器）。
@@ -66,35 +70,94 @@ deploy\save-image.ps1    打包成 tar + sha256
 4. **`.env` 单独传递且不要经过公共通道**：里面有数据库口令与邮箱凭据。
    建议现场手填，或走加密通道，不要和 tar 一起放在共享目录里。
 5. **`platform` 必须一致**：包内镜像是 `linux/amd64`。如果开发机将来换成 arm64
-   （Apple Silicon），必须显式 `-Platform linux/amd64` 构建，否则会静默产出错架构镜像。
+   （Apple Silicon），必须显式 `-Platform linux/amd64` 构建（平台在**构建期**钉死），
+   否则会静默产出错架构镜像。交付链的 save / load 都**不带** `--platform`，改为在
+   开发机保存前、服务器载入后各校验一次架构（原因见 §2.5 与 §3.0）。
+
+---
+
+## 2.5 交付前归档自检（**开发机**，不依赖 Docker）
+
+**为什么必须做**：开发机用 Docker Desktop，其 image store 可能是 **containerd 模式**；
+而服务器的 **classic image store 不支持 image index / manifest list**。containerd 模式
+导出的归档可能带 manifest list 或 attestation（多平台形态），到了服务器上
+`docker load` 会直接失败 —— 这个差异**用 docker 命令在开发机上看不出来**（本机当前
+也没有安装 Docker）。所以交付前用 **Python 标准库读 tar** 自检一次。
+
+`deploy/save-image.ps1` 会**自动**在 `docker save` 之后调用这一步；不通过就非 0 退出，
+并且**不会**生成 `.sha256`（不给不合格的包盖章）。要单独跑或复核时：
+
+```bash
+# Windows（开发机）
+py -3.13 deploy/check-image-archive.py dist\mail-relay-images-<版本>.tar
+
+# 带预演镜像时（多打了一个 almalinux:8，共 4 个镜像）：
+py -3.13 deploy/check-image-archive.py dist\mail-relay-images-<版本>.tar --include-rehearsal
+
+# Linux / macOS：
+python3 deploy/check-image-archive.py dist/mail-relay-images-<版本>.tar
+```
+
+判读标准（脚本自身的输出是权威版本，本表是它的固化说明）：
+
+| 结果 | 判据 | 处置 |
+|---|---|---|
+| **[通过]**（退出码 0） | 归档里**没有** image index / manifest list 条目、**没有** attestation 条目、每个条目的 platform 都是 `linux/amd64`、条目数不超过本次打包的镜像个数（默认 3，带 `-IncludeRehearsal` 为 4） | 可以交付 |
+| **[失败]**（退出码 1） | 出现 image index / manifest list（`application/vnd.oci.image.index.v1+json` 或 `...manifest.list.v2+json`）；或出现 attestation（platform 为 `unknown/unknown`，注解 `vnd.docker.reference.type=attestation-manifest`）；或出现非 `linux/amd64` 的平台；或条目数**多于**本次打包的镜像个数 | 归档不是单平台包，**不要交付**。这通常说明开发机 image store 是 **containerd 模式**（或显式做了多平台导出），需要**改用单平台导出方式**（脚本会打印候选处置路径：关掉 containerd image store 重存 / 在开发机用 `docker save --platform linux/amd64` / `docker buildx build --output type=docker`） |
+| **警告** | 条目数**少于**本次打包的镜像个数 | 可能漏了镜像；`deploy/load-image.sh` 载入后会逐个校验预期 tag，务必确认那一步通过 |
+| 退出码 2 | 用法错误、tar 打不开或不是 `docker save` 产物 | 检查路径与归档来源 |
+
+自检只读归档，**不依赖 Docker、不联网**，可以随时重跑。
 
 ---
 
 ## 3. 服务器侧步骤（按顺序执行）
 
-### 3.0 前置核对：Docker 版本（**别跳过这一步**）
+### 3.0 前置核对：Docker 版本与 image store（**别跳过这一步**）
 
 ```bash
-docker version
+docker version     # 看 Server 段（不要只看 docker --version：那只打印 CLI 版本）
+docker info        # 看 Storage Driver（判断 image store 模式）
 docker compose version
 ```
 
-要求：
+**已核实的服务器实际状态（2026-09 实测，原文照录）**：
+
+```text
+Client: Docker Engine - Community  Version: 26.1.3  API version: 1.45  OS/Arch: linux/amd64  Built: Thu May 16 08:34:39 2024
+Server: Docker Engine - Community
+  Engine:     Version: 26.1.3  API version: 1.45 (minimum version 1.24)  OS/Arch: linux/amd64  Built: Thu May 16 08:33:34 2024
+  containerd: Version: 1.6.32
+  runc:       Version: 1.1.12
+```
+
+由这些实测值得到的**硬结论**：
+
+| 项 | 实测值 | 对交付链的影响 |
+|---|---|---|
+| Server Engine / API | 26.1.3 / **API 1.45** | `docker save` / `docker load` 的 `--platform` 需要 **API 1.48（Engine v28）** → **明确不可用**。交付链因此**不传这个参数**：平台在构建期钉死（`docker build --platform linux/amd64`），再由**保存前 / 载入后校验架构**兜底（§2.5、§3.2）。 |
+| 读 OCI 归档的能力 | Engine ≥ 25 即可（moby v25.0.0 起 `docker save` 产出 OCI 格式） | **26.1.3 已满足**，不必为「能不能读 OCI 归档」担心。 |
+| image store | classic store **不支持 image index / manifest list** | 交付物**必须是单平台 amd64 归档**；多平台归档（带 manifest list / attestation）会在 `docker load` 时失败 → 交付前必须跑 §2.5 的归档自检。 |
+| 宿主机支持 | Docker 官方**已不再支持 CentOS 8 作为宿主**（官方安装文档只列 CentOS Stream 9/10） | 服务器上这版 Docker 处于**无官方支持**状态：出问题只能自己查社区/源码，不能指望官方修复。这是现状，不是本项目的选择。 |
+| 运行时补丁时点 | Engine 构建于 **2024-05-16**（同版 containerd 1.6.32 / runc 1.1.12） | 容器运行时的安全补丁停在 2024 年初那个时间点；**是否有可升级路径需要在服务器侧确认**（见 `docs/open-questions.md` D8）。此处不预设存在任何具体漏洞。 |
 
 | 项 | 要求 | 原因 |
 |---|---|---|
-| Docker Engine | **≥ 25**，建议 ≥ 28 | 自 moby **v25.0.0** 起 `docker save` 产出 **OCI 归档**；`--platform` 参数要到 Engine **v28** 才有。 |
-| Docker CLI | **≥ 28** | `docker image load --platform` 需要；低于此版本 `load-image.sh` 会退化为不带该参数并提醒人工确认架构。 |
-| Compose | **v2**（`docker compose` 子命令） | `compose.yaml` 不含 `version:` 字段，且用到 `depends_on.condition: service_healthy`；python 版 `docker-compose` v1 不支持这两点。 |
+| Docker Engine | **已实测 26.1.3**；下限 **≥ 25** | OCI 归档需要 ≥ 25；实测版本满足。 |
+| `--platform`（save/load） | **不使用**（需 API 1.48 / Engine v28） | 服务器 API 为 1.45，传了会因未知参数直接失败；平台由构建期钉死 + 前后两次校验保证。 |
+| Compose | **v2**（`docker compose` 子命令） | `compose.yaml` 不含 `version:` 字段，且用到 `depends_on.condition: service_healthy`；python 版 `docker-compose` v1 不支持这两点。Engine 26.1.3 自带 compose v2 插件，但这一点**仍需现场确认**。 |
 
-另外两条必须知道的事实：
+**仍需现场确认的一项（不要当成已定）**：**image store 模式**。`docker version` 看不到
+它，要看 `docker info` 的 **Storage Driver**：
 
-- **Docker 官方已不再把 CentOS 8 列为受支持的宿主**（官方安装文档现在只列
-  CentOS Stream 9/10）。服务器上那一版 Docker 处于**无官方支持**状态：
-  出问题时要自己查社区/源码，不能指望官方修复。这是现状，不是本项目的选择。
-- 若服务器是 **classic image store** 且引擎较老，load 多平台归档可能失败
-  （classic image store 不支持 image index / manifest list）。遇到「load 成功但
-  镜像用不了」时，按 §6「镜像架构不匹配」与本节版本要求排查。
+| Storage Driver | 通常的含义 |
+|---|---|
+| `overlay2` | **classic image store**（Engine 26 的默认形态） |
+| `overlayfs` | **containerd image store** |
+
+为什么这条决定成败：**classic image store 不能加载 manifest list / image index**。
+无论哪种模式，本手册「单平台归档 + 载入后校验」的做法都成立；若在服务器上仍遇到
+manifest / index 相关的 load 错误，就回到 §2.5 自检并重新导出单平台归档。
 
 ### 3.1 校验完整性
 
@@ -112,7 +175,18 @@ bash deploy/load-image.sh            # 默认在当前目录找 *.tar
 sudo bash deploy/load-image.sh /opt/mail-relay    # 或指定交付目录
 ```
 
-脚本会：检查 docker 与权限 → 核对版本 → 逐个 `sha256sum -c` → `docker image load --platform linux/amd64` → 打印镜像列表。
+脚本会：检查 docker 与权限 → 打印 `docker version` 的 **Server 段**版本与 Storage Driver
+→ 逐个 `sha256sum -c` → `docker image load`（**不带 `--platform`**）→ **载入后校验**：
+用 `docker image inspect --format '{{.Os}}/{{.Architecture}}'` 逐个确认架构是
+`linux/amd64`，并确认 `mail-relay:<版本>`、`mail-relay:latest`、`postgres:17` 都在本地。
+任何一项不满足即非 0 退出（**不要**带着失败继续往下走）。
+
+为什么 `load` 不带 `--platform`：该参数需要 **API 1.48（Engine v28）**，服务器实测
+API 1.45，传了会因未知参数直接失败（见 §3.0）。平台已由开发机构建期钉死，这里用
+**载入后校验**代替参数声明。
+
+`docker load` 若报 manifest / index 相关错误：归档很可能是带 image index / manifest
+list 的多平台包，而 classic image store 载不动 —— 回开发机按 §2.5 自检并重新导出。
 
 **幂等**：可以重复执行。已存在的镜像只会被重新打 tag，不会破坏数据。
 
@@ -273,16 +347,18 @@ docker compose -f compose.yaml down                   # 停止（保留 ./data/p
 
 | 症状 | 可能原因 | 处理 |
 |---|---|---|
-| `docker compose up -d` 报「pull access denied / no such image」 | tar 里没带基础镜像，或 `MAIL_RELAY_IMAGE` 写错 | 确认 tar 内含 `postgres:17`（`tar -tf <tar> \| grep -i manifest`）；确认 `MAIL_RELAY_IMAGE` 指向已 load 的 tag |
-| `exec format error` / 容器起一秒就退 | 镜像架构不是 `linux/amd64`（开发机是 arm64 时易发） | `docker image inspect --format '{{.Os}}/{{.Architecture}}' <镜像>`；重新用 `-Platform linux/amd64` 构建并重传 |
-| `docker image load` 报 manifest / index 相关错误 | 服务器 Engine < 25 或用的 classic image store（不支持 image index） | 按 §3.0 核对并升级 Engine；必要时改在服务器上重新构建（不推荐，服务器无网） |
+| `docker compose up -d` 报「pull access denied / no such image」 | tar 里没带基础镜像，或 `MAIL_RELAY_IMAGE` 写错 | 确认 tar 内含 `postgres:17`（`py -3.13 deploy/check-image-archive.py <tar>` 会打印条目与引用，或在服务器上 `tar -tf <tar> \| grep manifest`）；确认 `MAIL_RELAY_IMAGE` 指向已 load 的 tag |
+| `docker load` 报 `unknown flag: --platform` | 用了带 `--platform` 的旧版脚本（该参数需 API 1.48 / Engine v28，服务器是 1.45） | 用本仓库的 `deploy/load-image.sh`（已**不带**该参数）；不要手工加回去 |
+| `exec format error` / 容器起一秒就退 | 镜像架构不是 `linux/amd64`（开发机是 arm64 时易发） | `docker image inspect --format '{{.Os}}/{{.Architecture}}' <镜像>`；在**开发机**重新 `.\deploy\build-image.ps1 -Platform linux/amd64` 构建、重跑 `save-image.ps1`（含归档自检）后重传 |
+| `docker load` 报 manifest / index 相关错误 | 归档是带 image index / manifest list 的多平台包，而 classic image store 不支持 image index | 回开发机按 §2.5 跑归档自检并**重新导出单平台归档**；服务器侧无法就地修复（无网、不能重建） |
+| 载入后架构校验失败（脚本报「架构是 X，不是 linux/amd64」） | 交付包本身架构不对（构建期没钉住平台，或开发机是 arm64 且未显式指定） | 回开发机重新构建与打包（`build-image.ps1 -Platform linux/amd64` → `save-image.ps1`），不要试着在服务器上「绕过」 |
 | 端口占用：`bind: address already in use` | 8000 被别的进程占 | `ss -lntp \| grep 8000`；停掉占用进程，或改 `.env` 的 `HTTP_PORT` |
 | 从外部连不上 `/healthz`，本机 `curl` 正常 | firewalld 未放行 | `firewall-cmd --permanent --add-port=<端口>/tcp && firewall-cmd --reload`；`firewall-cmd --list-ports` 确认 |
 | Postgres 起不来，日志 `permission denied` / `initdb: could not change permissions` | `./data/postgres` 属主不是 999 | `chown -R 999:999 ./data/postgres`（见 §3.4） |
 | Postgres 日志出现 SELinux `avc: denied` | 目录标签不对（enforcing） | 用 `:z`/`:Z` 挂载选项或 `chcon` 重打标签；**具体做法为待确认项**，现场实测后回填本节 |
 | 应用起不来、日志报数据库连接失败 | `.env` 里连接参数错；或 postgres 还没 healthy | `docker compose ps` 看 postgres 健康状态；核对 `.env` 的 host 必须是服务名 `postgres`（不是 127.0.0.1） |
 | `/healthz` 一直不通，容器却在 running | 应用内部启动失败（lifespan 抛错、四条流初始化失败） | `docker compose logs --tail=200 app` |
-| `bash deploy/*.sh` 报 `$'\r': command not found` | 脚本在 Windows 下被转成了 CRLF | `sed -i 's/\r$//' deploy/*.sh`，或交付前确保 git 保持 LF（本仓库的 `* .sh` 应以 LF 提交） |
+| `bash deploy/*.sh` 报 `$'\r': command not found` | 脚本在 Windows 下被转成了 CRLF | `sed -i 's/\r$//' deploy/*.sh`，或交付前确保 git 保持 LF（本仓库的 `*.sh` 应以 LF 提交） |
 
 排查通用三步：`docker compose ps` → `docker compose logs postgres` → `docker compose logs app`。
 
