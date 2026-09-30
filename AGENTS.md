@@ -98,7 +98,7 @@ DSH 会话
 
 另外两条**环境前提**（不是设计决策，但会直接阻塞工作）：
 
-> ⚠️ **D3 开发机 Docker**：本机**尚未安装 Docker**（需管理员权限、WSL2、可能重启）。在装上之前，集成测试、容器化开发环境、部署预演都跑不了。
+> ⚠️ **D3 开发机 Docker**：本机是**未暴露嵌套虚拟化的虚拟机**（Windows 10 22H2，`HypervisorPresent=True`，但 `VirtualizationFirmwareEnabled` / SLAT / `VMMonitorModeExtensions` 均为 False），**Docker Desktop 的两个后端（WSL2 / Hyper-V）都依赖硬件虚拟化与 SLAT，因此在本机不可用**——这不是「尚未安装、装一下就行」，而是「这台机器装不了」。注意：Linux 上的 Docker 不需要硬件虚拟化，所以限制只卡 Windows 上的 Docker Desktop。构建环境放在哪仍未定。详见 `docs/open-questions.md` 的 D3。
 >
 > ⚠️ **D6 Mailpit**：开发环境规划中包含 Mailpit（同时提供 SMTP 与 IMAP，用于验证「发出去 → 被拉回来 → 关联上原邮件」的完整回路），但该选择在对话中**未获明确确认**。
 
