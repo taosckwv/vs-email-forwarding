@@ -5,7 +5,7 @@ HTTP 调用，不启动 uvicorn、不连 PostgreSQL、不发真实邮件。
 
 不放什么：任何需要真实 PostgreSQL / SMTP / IMAP 的用例（放 `tests/integration/`）。
 
-当前阶段（骨架阶段）只有 `test_health.py`，验证 `GET /healthz` 返回 200 且
+当前阶段（预研阶段）只有 `test_health.py`，验证 `GET /healthz` 返回 200 且
 `status == "ok"`。公共夹具在 `tests/conftest.py`：`client` fixture 用应用工厂
 `create_app()` 构造 TestClient。
 

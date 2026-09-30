@@ -8,9 +8,11 @@
 
 ## 状态声明
 
-**当前处于骨架阶段：业务逻辑尚未实现。**
+**当前处于预研阶段：只确认「大体的架子与方向」，业务逻辑尚未实现。**
 
-仓库里目前只有目录骨架、工程配置、AI 协作规则，以及一个能响应 `/healthz` 的最小 FastAPI 入口。四条轮询流、数据库表结构、审查逻辑、SMTP/IMAP 对接均为待实现或待确认。
+仓库里目前只有目录骨架、工程配置、AI 协作规则、离线交付脚本，以及一个能响应 `/healthz` 的最小 FastAPI 入口。四条轮询流、数据库表结构、审查逻辑、SMTP/IMAP 对接均为待实现或待确认。
+
+本阶段的尺度：**架子与方向要定；实现细节（表结构字段、接口字段契约、校验强度、表形态取舍、错误码分类等）只登记、不决定**，留到需求阶段。
 
 - 尚未定案的问题清单见 **`docs/open-questions.md`**（未定项不允许自行拍默认值）。
 - 特性需求与验收标准见 **`specs/`**。
@@ -185,7 +187,7 @@ uv run pre-commit run --all-files   # 手动全量跑一次
 
 ## 已知风险
 
-1. **`httpx` 在 Python 3.13 上的官方声明缺失。** `httpx` 0.28.1 的 PyPI classifier 只声明到 Python 3.12，在 3.13 上实际可用，但官方未声明支持。`httpx` 是 FastAPI `TestClient` 的必需依赖，开发环境需要它；若未来出现兼容问题，替代方案是等上游补齐声明或改用其他测试客户端。
+1. **测试客户端面临 `httpx` → `httpx2` 迁移。** `httpx` 0.28.1 的 PyPI classifier 只声明到 Python 3.12，但在 3.13 上**实测可用**（本项目测试已通过），因此「能不能用」的风险已排除。真正的问题在上游：FastAPI 的 `TestClient` 已发出弃用警告，提示改用 `httpx2`（`StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead`）。**现在就迁移，还是等上游正式移除 `httpx` 支持时再迁，尚未决定**（见 `docs/open-questions.md` 的 E2）。
 2. **包名是占位。** `mail-relay` / `mail_relay` 尚未最终定名。发行名、导入包名、目录名、Docker 镜像名、配置项前缀都可能随之变更，越晚改名成本越高。
 3. **CentOS 8 已 EOL。** CentOS 8 于 2021-12-31 停止维护，官方仓库已下线，镜像与系统补丁均不再更新。生产环境**完全离线**，因此无法在线打补丁；系统级安全更新需要靠离线包手工完成。基础镜像与依赖版本应固定，并在 `deploy/` 中记录来源。
 4. **审查一期是空实现占位。** 一期审查逻辑必定通过，真实的敏感信息 / 病毒审查来源尚未定案（见 `docs/open-questions.md`），在此之前不要把它当作安全边界。

@@ -20,7 +20,7 @@ from mail_relay.logging import configure_logging
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """进程生命周期钩子：预留四条轮询流的启停位置。
 
-    启动阶段（骨架阶段暂不执行任何动作）：
+    启动阶段（预研阶段暂不执行任何动作）：
       1. 初始化数据库异步引擎与会话工厂（见 ``mail_relay.db`` 职责说明）；
       2. 并发启动四条轮询流：``review_outbound`` / ``send_email`` /
          ``fetch_inbound`` / ``review_inbound``，间隔取自配置（默认 10 秒）。

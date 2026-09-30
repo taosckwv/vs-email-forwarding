@@ -26,7 +26,7 @@ async def healthz() -> HealthResponse:
     """返回进程存活状态。
 
     待补：数据库连通性检查，以及四条轮询流的存活状态（例如最后一次 tick 时间）。
-    这两项将在数据库层与调度器落地后补充，骨架阶段不实现。
+    这两项将在数据库层与调度器落地后补充，预研阶段不实现。
     """
     settings = get_settings()
     return HealthResponse(status="ok", app_env=settings.app_env, version=__version__)

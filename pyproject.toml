@@ -30,7 +30,7 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 
-# 运行时依赖：骨架阶段只保留最小集，新增依赖前先补 ADR。
+# 运行时依赖：预研阶段只保留最小集，新增依赖前先补 ADR。
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -116,7 +116,7 @@ warn_unused_configs = true
 # 第三方库缺失类型时的行为，保持显式
 ignore_missing_imports = false
 
-# 说明：骨架阶段暂不放宽任何第三方库的类型检查。
+# 说明：预研阶段暂不放宽任何第三方库的类型检查。
 # 若某个库确实缺少类型存根，必须先在 docs/adr/ 记录理由，
 # 再在 [[tool.mypy.overrides]] 中按 module 精确放行，不要整体关闭。
 

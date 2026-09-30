@@ -2,6 +2,8 @@
 
 本目录存放项目的设计与决策文档。**文档内容一律中文**；文件名与目录名一律 **ASCII**（避免 CentOS 8 的 locale、tar、docker 处理中文路径时出现编码问题）。
 
+> **当前处于「预研阶段」**：本阶段只确认「**大体的架子与方向**」。**实现细节（表结构字段、接口字段契约、校验强度、表形态取舍、错误码分类等）一律只登记、不决定**，留到**需求阶段**。下文中标记为「计划中」的文档即属于需求阶段的产物。
+
 ## 本目录内容
 
 | 文件 | 用途 |
@@ -20,10 +22,11 @@
 | `adr/0009-review-provider-noop-first.md` | 一期安全审查为空实现占位 |
 | `adr/0010-no-ci-local-gates.md` | 不跑 CI，门禁落在本地 |
 | `adr/0011-chinese-punctuation-and-ruf-rules.md` | 中文标点与 ruff RUF001/002/003 规则例外（记录例外，不是为过门禁而放宽） |
+| `adr/0012-sender-identity-and-reply-routing.md` | 发件人身份与回复路由：`From` 固定取配置 + 服务端显式写 `Reply-To` |
 
 ### 计划中、尚未创建的文档
 
-以下文档属于**规格阶段**的产物，尚未撰写（不要误认为已经存在）：`architecture.md`、`data-model.md`、`api.md`、`configuration.md`、`development.md`、`deployment.md`、`testing.md`。它们会随对应特性规格一起落地。
+以下文档属于**需求（规格）阶段**的产物，尚未撰写（不要误认为已经存在）：`architecture.md`、`data-model.md`、`api.md`、`configuration.md`、`development.md`、`deployment.md`、`testing.md`。它们会随对应特性规格一起落地。
 
 ## 相关目录
 

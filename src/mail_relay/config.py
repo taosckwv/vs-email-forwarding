@@ -45,14 +45,14 @@ class Settings(BaseSettings):
     mail_from_address: str = "noreply@example.com"
     reply_to_address: str = "reply@example.com"
 
-    # SMTP 发信配置；真实主机与凭据由所有者后续提供，骨架阶段允许留空。
+    # SMTP 发信配置；真实主机与凭据由所有者后续提供，预研阶段允许留空。
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_starttls: bool = True
 
-    # IMAP 收信配置；真实主机与凭据由所有者后续提供，骨架阶段允许留空。
+    # IMAP 收信配置；真实主机与凭据由所有者后续提供，预研阶段允许留空。
     imap_host: str = ""
     imap_port: int = 993
     imap_username: str = ""

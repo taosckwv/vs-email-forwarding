@@ -67,3 +67,4 @@
 | [0009](0009-review-provider-noop-first.md) | 一期安全审查为空实现占位 | 已接受 |
 | [0010](0010-no-ci-local-gates.md) | 不跑 CI，门禁落在本地 | 已接受 |
 | [0011](0011-chinese-punctuation-and-ruf-rules.md) | 中文标点与 ruff RUF001/002/003 规则例外 | 已接受 |
+| [0012](0012-sender-identity-and-reply-routing.md) | 发件人身份与回复路由 | 已接受 |
