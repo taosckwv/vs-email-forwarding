@@ -1,7 +1,8 @@
 # 测试夹具数据
 
 放什么：测试用的静态数据——邮件样本（含 `References` / `In-Reply-To` 的回复样本、
-关联不上的孤儿样本）、MIME 原文、IMAP UID 游标样本、配置片段等。
+用于验证**丢弃路径**的未关联样本、DSN 退信样本、MDN 阅读回执样本）、MIME 原文、
+IMAP UID 游标样本、配置片段等。
 
 不放什么：可执行测试代码（放 `tests/unit/` 与 `tests/integration/`）；真实凭据、
 真实主机名、真实收件人地址——一律使用 `example.com` 之类的占位值。

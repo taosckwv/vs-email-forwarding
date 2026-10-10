@@ -22,7 +22,9 @@ docker compose -f compose.dev.yaml up -d          # 通用 / Linux
 2. **单次 tick 的幂等性**：同一条记录被同一个流重复处理时结果不变，不产生重复副作用。
 3. **并发抢占不重复发信**：四条流并发运行时，一条待发记录只能被一个 worker 抢到，
    依靠 `SELECT ... FOR UPDATE SKIP LOCKED` 与状态字段，禁止「先 SELECT 判断、再 UPDATE」。
-4. **回复关联**：用 `References` / `In-Reply-To` 关联回原邮件；关联不上的标记为孤儿但**仍然入库，不丢数据**。
+4. **入站分拣与回复关联**：用 `References` / `In-Reply-To` 关联回原邮件；退信按
+   `multipart/report` + `message/delivery-status` 结构识别并置原邮件为发送失败；
+   阅读回执（MDN）必须被剔除而不得当成回复；**关联不上的入站邮件必须不入库**，只留丢弃条数日志。
 
 不放什么：纯逻辑断言（放 `tests/unit/`）。
 
