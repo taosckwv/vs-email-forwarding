@@ -18,15 +18,16 @@ from vs_email_forwarding.logging import configure_logging
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """进程生命周期钩子：预留四条轮询流的启停位置。
+    """进程生命周期钩子：预留五条后台任务的启停位置。
 
     启动阶段（预研阶段暂不执行任何动作）：
       1. 初始化数据库异步引擎与会话工厂（见 ``vs_email_forwarding.db`` 职责说明）；
-      2. 并发启动四条轮询流：``review_outbound`` / ``send_email`` /
-         ``fetch_inbound`` / ``review_inbound``，间隔取自配置（默认 10 秒）。
-         四条流将在此启动与停止，实现见 specs 中的调度规格。
+      2. 并发启动五条后台任务：``review_outbound`` / ``send_email`` /
+         ``fetch_inbound`` / ``review_inbound``（间隔取自配置，默认 10 秒），
+         外加保留期清理（间隔 ``POLL_CLEANUP_SECONDS``，默认 3600 秒）。
+         五条任务将在此启动与停止，实现见 specs 中的调度规格。
 
-    关闭阶段：取消四条流的 asyncio 任务并等待其优雅退出，随后释放数据库连接池。
+    关闭阶段：取消五条后台任务的 asyncio 任务并等待其优雅退出，随后释放数据库连接池。
     """
     try:
         yield
