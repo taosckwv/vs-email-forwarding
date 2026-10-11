@@ -19,6 +19,7 @@
 | 安全审查、API 鉴权口径、日志与信息红线 | `docs/research/04-security-and-review.md` |
 | 开发机、构建环境与 Windows 环境坑 | `docs/research/05-dev-and-build-environment.md` |
 | 命名、许可与仓库治理 | `docs/research/06-naming-licensing-and-governance.md` |
+| 代码分层与依赖方向（哪一层能调哪一层、两条触发路径怎么走） | `docs/architecture.md` |
 | 某特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `specs/<特性>/design.md` |
 
 文档总入口是 `docs/README.md`；**未定项的唯一清单**是 `docs/open-questions.md`。
@@ -67,8 +68,9 @@ bash scripts/dev-up.sh     # Linux
 
 | 路径 | 放什么 | 不放什么 |
 |---|---|---|
-| `src/vs_email_forwarding/api/` | HTTP 路由层：请求/响应编排、依赖注入 | SQL、业务规则、直接调用 SMTP/IMAP |
-| `src/vs_email_forwarding/flows/` | 四条业务流与保留期清理流的实现与调度器 | HTTP 路由、SQL 字符串 |
+| `src/vs_email_forwarding/api/` | HTTP 接口层：请求校验、响应序列化、依赖注入 | 业务编排、SQL、业务规则、直接调用 SMTP/IMAP、定时任务 |
+| `src/vs_email_forwarding/service/` | 用例层：同步请求路径的业务编排（提交邮件、查询状态与回复） | HTTP 校验与序列化、SQL、定时任务 |
+| `src/vs_email_forwarding/flows/` | 定时任务的入口与编排：四条业务流与保留期清理流的循环与调度器 | HTTP 路由、SQL 字符串、同步请求的用例 |
 | `src/vs_email_forwarding/providers/` | 外部能力适配器：`review/`（审查）、`smtp/`、`imap/`，各自 `base.py` 定接口 | 业务状态流转 |
 | `src/vs_email_forwarding/schemas/` | Pydantic 请求 / 响应模型 | ORM 模型 |
 | `src/vs_email_forwarding/db/` | ORM 模型、引擎与会话、**仓储层（所有 SQL 都在这）** | 业务规则 |
@@ -79,12 +81,14 @@ bash scripts/dev-up.sh     # Linux
 | `docs/README.md` | **文档唯一入口**：人的任务式导航、AI 先读顺序、分区清单、写作与维护规范 | 结论与规则正文（分别在 `research/` 与 `AGENTS.md`） |
 | `docs/research/` | **跨特性底座的结论真源**：一册一主题，只写当前结论、实测证据、已否决方向、落地位置、未定项指针 | 决策过程、时间线、被取代的旧结论、派生快照 |
 | `docs/open-questions.md` | **未定项的唯一清单** | 已决定的结论（决定后移入对应主题册或该特性的 `design.md`） |
-| `docs/` 其余 | `contributing.md`、`security.md` 的正文；后续的架构 / 数据模型 / API / 配置 / 部署 / 测试说明 | 需求与验收标准（那属于 `specs/`） |
+| `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署 / 测试说明 | 需求与验收标准（那属于 `specs/`） |
 | `specs/` | **每个特性一个目录**的需求、设计、计划、任务（`spec.md` / `design.md` / `plan.md` / `tasks.md`，见 §5） | 实现代码 |
 | `skills/` | 可复用的固定流程（见 `skills/README.md`） | 一次性任务说明 |
 | `deploy/` | 部署脚本与交付链的落点（**当前为空，待实现**，见 `docs/open-questions.md` D2） | 应用代码 |
 | `scripts/` | 本地开发与门禁脚本 | 部署与交付脚本（放 `deploy/`） |
 | `migrations/` | Alembic 迁移 | 手工 DDL |
+
+各层的**依赖方向**（哪一层能调哪一层）见 `docs/architecture.md`；本表只定「放什么 / 不放什么」。
 
 ### 占位文件约定（新建目录必读）
 
@@ -144,7 +148,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 - **格式与静态检查**：ruff 负责格式化与 lint，不要手工和它对抗；提交前必须跑过 `scripts/check.*`。
 - **日志用 structlog**，禁止 `print`。日志中不得出现邮件正文、账号口令、收件人地址（见 §8）。
 - **配置只从 `vs_email_forwarding.config` 读**，禁止在模块里直接 `os.environ[...]`。所有可变项（监听地址、SMTP/IMAP 主机与账号、数据库连接串、发件人地址、轮询间隔）都收敛在 `.env`，仓库里只有 `.env.example` 占位。
-- **数据库访问必须走仓储层**（`vs_email_forwarding/db/`）。流处理层与路由层**不得裸写 SQL**，也不得直接拼 ORM 查询。
+- **数据库访问必须走仓储层**（`vs_email_forwarding/db/`）。用例层、流处理层与路由层**不得裸写 SQL**，也不得直接拼 ORM 查询。
 - **外部能力一律通过 `providers/` 的接口访问**，不允许在业务流程里直接 `import` 具体实现库。
 - 时间一律使用带时区的 `datetime`（按 UTC 存储），不要用裸的 `datetime.now()`。
 - **文件编码与换行符是硬约定，不是风格偏好**——写错会让脚本直接跑不起来，而不是显示难看一点：

@@ -478,14 +478,18 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 - 为发信引入 `aiosmtplib` —— 新增运行时依赖，而标准库 `smtplib` 配 `asyncio.to_thread` 已足够（与 IMAP 侧同构），隔离环境首次启动与许可核实都不必承担。
 
 ## 7. 落地位置
+分层与依赖方向见 `docs/architecture.md`；本节只记各设计结论落在哪个目录。
+
 `src/vs_email_forwarding/` 下：
 
-- `flows/` 与 `core/` —— 四条业务流与保留期清理流的实现与调度器（目录已建，仅有占位文件）；纯逻辑（消息 ID 生成、状态机、重试策略）不碰 I/O 与数据库。
+- `flows/` —— 定时任务的入口与编排：四条业务流与保留期清理流的循环与调度器（目录已建，仅有占位文件）。
+- `service/` —— 用例层：同步请求路径的业务编排（提交邮件、查询状态与回复）；目录已建，仅有占位文件。
+- `core/` —— 纯逻辑（消息 ID 生成、状态机、重试策略），不碰 I/O 与数据库（目录已建，仅有占位文件）。
 - `db/` —— `pending_messages` / `messages` / `rejected_messages` / `imap_cursors` 四张表的 ORM 模型、引擎与会话、仓储层（所有 SQL 都在这；目录已建，仅有占位文件）。
 - `providers/` —— `smtp/`、`imap/`、`review/` 适配器，各自以 `base.py` 定接口；业务流程不得直接 import 具体实现库。三层分拣落点见 §3.4。
 - `providers/review/` —— 审查供应商接口（`base.py`：中性输入对象 + `pass` / `reject` 受控枚举）与空实现的落点；必须在此标注「空实现、永远通过」（`NFR-6`）；实现由工厂函数按配置选取（见 §4.2）。
 - `providers/smtp/` 与 `providers/imap/` —— 发信适配器（`From` 取自配置、显式写入 `Reply-To`）与入站拉取适配器（拉取所用的信箱地址即 `Reply-To` 的取值来源）。
-- `api/` —— HTTP 路由层（请求 / 响应编排、依赖注入）；鉴权位置预留的结论见 `docs/research/04-security-and-review.md`。
+- `api/` —— HTTP 接口层（请求校验、响应序列化、依赖注入），业务编排在 `service/`；鉴权位置预留的结论见 `docs/research/04-security-and-review.md`。
 - `config.py` —— 唯一的配置入口（pydantic-settings），四条业务流间隔字段的默认值为 10（`NFR-2`）；清理间隔、每批条数、主题与正文长度上限、被拉取信箱地址、IMAP 是否 STARTTLS 也收敛在这一层（名称已定，见下面的配置项清单；`config.py` / `.env.example` 待补齐），本层同时承载启动即校验。
 
 仓库其他位置：

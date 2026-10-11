@@ -18,7 +18,7 @@
 - **间隔取舍（已定，风险由所有者承担）**：拉取入站流曾评估单独放长到 60 秒——IMAP 登录与拉取的单次成本远高于另外三条流，10 秒一次的频率存在触发企业邮箱风控或连接数限制的风险；所有者决定**四条业务流统一 10 秒**。间隔既然已是配置项，后续调整成本很低。
 - **幂等抢占（硬约束）**：四条业务流（外加保留期清理）的处理必须幂等；抢占任务一律使用 `SELECT ... FOR UPDATE SKIP LOCKED` 配合状态字段，并外加 `next_attempt_at` 控制退避。
 - **禁止两步写法（硬约束）**：禁止「先 SELECT 判断、再 UPDATE」。当前只跑单实例也不放宽——这些流本身就是并发的，未来加实例时不允许重写数据访问层。
-- **SQL 位置**：所有 SQL 只在仓储层（`src/vs_email_forwarding/db/`）；流处理层与路由层不得裸写 SQL，也不得直接拼 ORM 查询。
+- **SQL 位置**：所有 SQL 只在仓储层（`src/vs_email_forwarding/db/`）；用例层、流处理层与路由层不得裸写 SQL，也不得直接拼 ORM 查询。
 - **数据库**：PostgreSQL，生产、开发、测试三处一致。
 - **部署形态**：生产 PostgreSQL 与应用**同机**，应用与数据库都跑容器、数据卷落在宿主机目录；当前为**单实例**部署，但抢占逻辑从第一天就按并发安全写。
 - **多实例下 10 秒轮询会重复消费同一条记录（已登记的风险）**：所有者已知悉；当前按单实例部署，抢占逻辑仍按并发安全写，避免未来加实例时重写数据访问层。
@@ -34,7 +34,7 @@
 ## 实测证据
 
 - 门禁与测试基线（四项全绿、`ruff` 告警口径等）见 `docs/research/03-dependencies-and-toolchain.md`；测试依赖的弃用提示见 `docs/open-questions.md` 的 E2。
-- **业务逻辑尚未实现**：`src/vs_email_forwarding/flows/`、`src/vs_email_forwarding/db/`、`src/vs_email_forwarding/providers/` 下只有包占位文件，当前唯一可用的端点是 `/healthz`。
+- **业务逻辑尚未实现**：`src/vs_email_forwarding/flows/`、`src/vs_email_forwarding/service/`、`src/vs_email_forwarding/db/`、`src/vs_email_forwarding/providers/` 下只有包占位文件，当前唯一可用的端点是 `/healthz`。
 - **集成测试的依赖与覆盖重点已写明**：`tests/integration/` 需要真实 PostgreSQL（测试库）与本地邮件捕获服务，覆盖状态机转换、单次 tick 幂等、并发抢占不重复发信、回复关联四类最容易出错的路径。
 - **开发库与测试库的初始化方式不同**：`compose.dev.yaml` 里只有开发库会在数据卷首次初始化时自动建出；测试库需要手工创建一次，该说明在文件末尾。
 - **生产编排里数据库不向宿主机暴露端口**：`compose.yaml` 中应用容器内的数据库连接串被显式覆盖为 compose 服务名（容器内的回环地址指向应用自己），应用与数据库只走内部 bridge 网络。
@@ -59,7 +59,7 @@
 - `compose.dev.yaml` —— 开发依赖编排（PostgreSQL；本地邮件捕获服务是否最终采用仍待确认，见 `docs/open-questions.md`），开发库与测试库的初始化说明在文件末尾。
 - `tests/integration/` —— 真实 PostgreSQL 与邮件回路的集成测试；`tests/unit/` 放不依赖数据库与网络的纯逻辑单测。
 - `deploy/` —— 部署脚本与交付链的落点（新链路「服务器本地构建 + 基础镜像以 tar 带入」的脚本形态见未定项 D2）；`scripts/` 只放本地开发与门禁脚本。
-- 本特性的代码落点（`flows/`、`db/`、`providers/`、`api/`、`core/`、`config.py`、`.env.example`、`migrations/`）见 `specs/0001-email-forwarding-service/design.md` 的「落地位置」一节。
+- 本特性的代码落点（`flows/`、`service/`、`db/`、`providers/`、`api/`、`core/`、`config.py`、`.env.example`、`migrations/`）见 `specs/0001-email-forwarding-service/design.md` 的「落地位置」一节；代码分层与依赖方向见 `docs/architecture.md`。
 
 ## 未定项
 

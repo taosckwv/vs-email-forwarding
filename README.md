@@ -59,8 +59,9 @@ uv run uvicorn vs_email_forwarding.main:app --reload  # 本地起服务（当前
 
 ```
 src/vs_email_forwarding/   应用源码
-  api/                     HTTP 路由层：请求 / 响应编排、依赖注入
-  flows/                   四条轮询流的实现与调度器
+  api/                     HTTP 接口层：请求校验、响应序列化、依赖注入
+  service/                 用例层：同步请求路径的业务编排
+  flows/                   定时任务层：四条业务流与保留期清理的循环与调度器
   providers/               外部能力适配器：review / smtp / imap，各自 base.py 定接口
   schemas/                 Pydantic 请求 / 响应模型
   db/                      ORM 模型、引擎与会话、仓储层（所有 SQL 都在这）
@@ -75,7 +76,7 @@ skills/                    可复用的固定流程
 deploy/                    部署脚本与交付链的落点（当前只有职责 README，待实现）
 ```
 
-各目录「放什么 / 不放什么」以 `AGENTS.md` §4 的目录职责表为准。
+各目录「放什么 / 不放什么」以 `AGENTS.md` §4 的目录职责表为准；**代码分层与依赖方向**见 `docs/architecture.md`。
 
 ---
 

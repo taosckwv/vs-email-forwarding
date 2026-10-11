@@ -27,6 +27,7 @@
 | 命名、许可、提交与 PR 规范 | `research/06-naming-licensing-and-governance.md`、`contributing.md` |
 | 报告安全问题 | `security.md` |
 | 看还有哪些没定、每条阻塞了什么 | `open-questions.md` |
+| 知道代码怎么分层、哪一层能调哪一层 | `architecture.md` |
 | 看某个特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `../specs/<特性>/design.md` |
 | 写一个新特性 | `../specs/README.md` 与 `../specs/_template/` |
 | 看版本历史 | `../CHANGELOG.md` |
@@ -48,6 +49,7 @@
 | 安全审查占位与合规风险、API 鉴权口径、日志与信息红线 | `research/04-security-and-review.md` |
 | 开发机、构建环境与 Windows 环境坑 | `research/05-dev-and-build-environment.md` |
 | 命名、许可与仓库治理 | `research/06-naming-licensing-and-governance.md` |
+| 代码分层与依赖方向（层怎么切、哪一层能调哪一层、两条触发路径） | `architecture.md` |
 
 **本表只回答「去哪儿看」，不复述任何结论**；每册的「结论」段与该特性的 `specs/<特性>/design.md` 才是真源。未定项见 `open-questions.md`。
 
@@ -58,6 +60,7 @@
 | `../AGENTS.md` | **规则唯一真源** | 规则、硬约束、目录职责、编码约定、决策记录流程 | 结论复述、实测数据 |
 | `README.md` | **文档唯一入口** | 导航、分区表、写作与维护规范 | 规则与结论正文 |
 | `research/NN-<主题>.md` | **跨特性底座的结论真源**（一册一主题） | 当前结论、当前实测证据、已否决方向、落地位置、未定项指针 | 决策过程、时间线、被取代的旧结论、派生快照 |
+| `architecture.md` | **代码分层与依赖方向的唯一出处** | 层怎么切、依赖方向、两条触发路径、运行时形态 | 规则正文（属 `AGENTS.md` §4）与设计结论的复述 |
 | `open-questions.md` | **未定项唯一清单** | 尚未决定的条目，及每条阻塞了什么 | 已决定的结论（决定后移入对应册或 `design.md`） |
 | `contributing.md` / `security.md` | 贡献指南与安全政策的**正文** | 流程、报告方式、责任边界 | 规则与结论复述 |
 | `../specs/` | 规格驱动开发的载体 | 每个特性一个目录：`spec.md` / `design.md` / `plan.md` / `tasks.md` | 实现代码 |
@@ -67,7 +70,7 @@
 
 ### 尚未创建的文档
 
-`architecture.md`、`data-model.md`、`api.md`、`configuration.md`、`deployment.md`、`testing.md` **尚不存在**，它们随对应特性的规格一起落地。**不要假装它们已经存在**，也不要在没有内容时先建空文件（空目录/空文件不携带信息，见 `AGENTS.md` §4）。
+`data-model.md`、`api.md`、`configuration.md`、`deployment.md`、`testing.md` **尚不存在**，它们随对应特性的规格一起落地。**不要假装它们已经存在**，也不要在没有内容时先建空文件（空目录/空文件不携带信息，见 `AGENTS.md` §4）。
 
 ## 4. 写作规范（`docs/` 下所有文件）
 
