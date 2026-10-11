@@ -51,7 +51,7 @@
 
 - 提交信息用 **Conventional Commits**，**描述用中文**，由 **commitizen 在 `commit-msg` 阶段强制校验**，格式错误会被 pre-commit 直接拦下。
 - 一条提交只做一件事，不要把格式化、重构与新功能混在一起；正文里不得出现邮件正文、收件人地址、账号口令、原始 MIME；不要写「运行正常」「功能可用」这类不可验证的结论。
-- PR 必须使用仓库模板 `.github/PULL_REQUEST_TEMPLATE.md`，并**填写关联的 spec 编号**；涉及不可逆决策时同时关联 `docs/research/` 下对应的主题册。
+- PR 必须使用仓库模板 `.github/PULL_REQUEST_TEMPLATE.md`，并**填写关联的 spec 编号**；涉及不可逆决策时同时关联它的落点（该特性的 `design.md` 或 `docs/research/` 下对应的主题册）。
 - **版本号与 CHANGELOG 手工维护**，遵循语义化版本；commitizen 只负责提交信息校验与辅助发版，不替代人工汇总。
 - 项目不跑 CI：门禁靠 pre-commit 与本地一键脚本，没有任何自动兜底。
 
@@ -111,6 +111,5 @@
 详见 `docs/open-questions.md`：
 
 - C2 服务监听地址与端口、firewalld 与端口映射
-- C3 时区与时间格式
 
 C1（最终包名与发行名）**已关闭**：结论已写入本册，不再列为未定项。

@@ -14,11 +14,12 @@
 | 你要找什么 | 去哪儿看 |
 |---|---|
 | 交付链与生产部署（基础镜像、Docker 版本约束、服务器事实） | `docs/research/01-delivery-and-deploy.md` |
-| 调度、幂等抢占、数据流水线与表形态 | `docs/research/02-runtime-and-scheduling.md` |
-| 技术栈、依赖选型、本地门禁 | `docs/research/03-dependencies-and-toolchain.md` |
-| 安全审查、发件人身份与回复路由 | `docs/research/04-security-and-review.md` |
+| 调度载体、幂等抢占硬约束、重试语义 | `docs/research/02-runtime-and-scheduling.md` |
+| 技术栈、依赖清单、本地门禁 | `docs/research/03-dependencies-and-toolchain.md` |
+| 安全审查、API 鉴权口径、日志与信息红线 | `docs/research/04-security-and-review.md` |
 | 开发机、构建环境与 Windows 环境坑 | `docs/research/05-dev-and-build-environment.md` |
 | 命名、许可与仓库治理 | `docs/research/06-naming-licensing-and-governance.md` |
+| 某特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `specs/<特性>/design.md` |
 
 文档总入口是 `docs/README.md`；**未定项的唯一清单**是 `docs/open-questions.md`。
 
@@ -26,13 +27,13 @@
 
 ## 2. 当前阶段与产出边界
 
-**预研阶段已收口，下一步进入需求阶段。** 已经落地的是目录分层、工程配置、规则文件与一个能返回 `/healthz` 的最小 FastAPI 入口；**业务逻辑尚未实现**。需求阶段的第一个入口是**数据模型**——按 §5 在 `specs/` 下写第一个特性的 `spec.md`。
+**预研与需求阶段已收口，设计阶段已完成，`specs/0001-email-forwarding-service/spec.md` 已确认。** 已经落地的是目录分层、工程配置、规则文件与一个能返回 `/healthz` 的最小 FastAPI 入口；**业务逻辑尚未实现**。**设计结论写在各特性的 `specs/<特性>/design.md`，跨特性底座写在 `docs/research/` 各册，都不在 `spec.md` 里**——`spec.md` 只写需求与验收标准，其 §8 指向已拍板的设计条目。下一步按 §5 顺序写 `plan.md` 与 `tasks.md`。
 
 **未定项不允许 AI 自行决定。** 完整清单以 `docs/open-questions.md` 为准（**本文件不复述那份清单**——两处各写一份，必然产生分歧）。写代码时若发现「必须现在选一个」，就**停下来问所有者**，不要用「合理的默认值」糊过去——这类默认值一旦落到表结构或接口上，改回来的代价极高。
 
-**已确认的结论不在本文件复述**，按主题见 `docs/research/` 六册（导航见 §1 的表）。本文件的职责只有两件：**规则**与**边界**。
+**已确认的结论不在本文件复述**：跨特性底座见 `docs/research/` 六册，某特性的设计结论见该特性的 `specs/<特性>/design.md`（导航见 §1 的表）。本文件的职责只有两件：**规则**与**边界**。
 
-**不得在未确认前实现仍属未定的条目**，尤其是：数据模型字段清单、IMAP 客户端与数据库驱动选型、SMTP 返回码分类与终态处理、审查接口与输出契约的形态。
+**不得在未确认前实现仍属未定的条目**——未定项的完整清单只在 `docs/open-questions.md`，**本文件不复述它**。设计阶段那一批条目（数据模型字段、依赖选型、重试分类、审查接口形态等）**已经拍板并落入 `specs/0001-email-forwarding-service/design.md` 与 `docs/research/` 各册**，不再是未定项。
 
 **环境硬事实（会直接阻塞工作，故在此保留一句）**：开发机是未暴露嵌套虚拟化的虚拟机，**装不了 Docker Desktop**（WSL2 / Hyper-V 两个后端都依赖硬件虚拟化与 SLAT）；Linux 上的 Docker 不受影响。因此镜像改为**在生产服务器上本地构建**，基础镜像以 tar 带入。详见 `docs/research/05-dev-and-build-environment.md` 与 `docs/research/01-delivery-and-deploy.md`。
 
@@ -67,7 +68,7 @@ bash scripts/dev-up.sh     # Linux
 | 路径 | 放什么 | 不放什么 |
 |---|---|---|
 | `src/vs_email_forwarding/api/` | HTTP 路由层：请求/响应编排、依赖注入 | SQL、业务规则、直接调用 SMTP/IMAP |
-| `src/vs_email_forwarding/flows/` | 四条轮询流的实现与调度器 | HTTP 路由、SQL 字符串 |
+| `src/vs_email_forwarding/flows/` | 四条业务流与保留期清理流的实现与调度器 | HTTP 路由、SQL 字符串 |
 | `src/vs_email_forwarding/providers/` | 外部能力适配器：`review/`（审查）、`smtp/`、`imap/`，各自 `base.py` 定接口 | 业务状态流转 |
 | `src/vs_email_forwarding/schemas/` | Pydantic 请求 / 响应模型 | ORM 模型 |
 | `src/vs_email_forwarding/db/` | ORM 模型、引擎与会话、**仓储层（所有 SQL 都在这）** | 业务规则 |
@@ -76,10 +77,10 @@ bash scripts/dev-up.sh     # Linux
 | `tests/unit/` | 纯逻辑单测，不依赖数据库与网络 | 需要真实 Postgres 的用例 |
 | `tests/integration/` | 需要真实 PostgreSQL / 邮件服务的用例 | 纯逻辑断言 |
 | `docs/README.md` | **文档唯一入口**：人的任务式导航、AI 先读顺序、分区清单、写作与维护规范 | 结论与规则正文（分别在 `research/` 与 `AGENTS.md`） |
-| `docs/research/` | **预研结论真源**：一册一主题，只写当前结论、实测证据、已否决方向、落地位置、未定项指针 | 决策过程、时间线、被取代的旧结论、派生快照 |
-| `docs/open-questions.md` | **未定项的唯一清单** | 已决定的结论（决定后移入对应主题册） |
+| `docs/research/` | **跨特性底座的结论真源**：一册一主题，只写当前结论、实测证据、已否决方向、落地位置、未定项指针 | 决策过程、时间线、被取代的旧结论、派生快照 |
+| `docs/open-questions.md` | **未定项的唯一清单** | 已决定的结论（决定后移入对应主题册或该特性的 `design.md`） |
 | `docs/` 其余 | `contributing.md`、`security.md` 的正文；后续的架构 / 数据模型 / API / 配置 / 部署 / 测试说明 | 需求与验收标准（那属于 `specs/`） |
-| `specs/` | **每个特性一个目录**的需求、计划、任务（见 §5） | 实现代码 |
+| `specs/` | **每个特性一个目录**的需求、设计、计划、任务（`spec.md` / `design.md` / `plan.md` / `tasks.md`，见 §5） | 实现代码 |
 | `skills/` | 可复用的固定流程（见 `skills/README.md`） | 一次性任务说明 |
 | `deploy/` | 部署脚本与交付链的落点（**当前为空，待实现**，见 `docs/open-questions.md` D2） | 应用代码 |
 | `scripts/` | 本地开发与门禁脚本 | 部署与交付脚本（放 `deploy/`） |
@@ -100,8 +101,8 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 任何**非平凡改动**（新增功能、改变行为、改数据结构、改外部集成）都必须按顺序走完：
 
 1. **写规格** — 在 `specs/<NNNN-英文短横线-slug>/` 下创建 `spec.md`，状态写 `草稿`。编号四位递增，slug 用英文小写短横线，例如 `specs/0001-outbound-review-pipeline/`。**文件名与目录名一律 ASCII，内容用中文。**
-2. **等确认** — 把 spec 交给所有者确认。写完自己改成 `待确认`；**从 `待确认` 到 `已确认` 只能由所有者推动。未确认前不得写 `plan.md` / `tasks.md`，更不得写实现代码。**
-3. **写计划与任务** — **spec 确认后**，在同一目录下创建 `plan.md` 与 `tasks.md`。模板在 `specs/_template/`，**直接复制，不要新造格式**。
+2. **等确认** — 把 spec 交给所有者确认。写完自己改成 `待确认`；**从 `待确认` 到 `已确认` 只能由所有者推动。未确认前不得写 `design.md` / `plan.md` / `tasks.md`，更不得写实现代码。**
+3. **写设计、计划与任务** — **spec 确认后**，在同一目录下写 `design.md`（该特性的设计真源）、`plan.md` 与 `tasks.md`——与 `spec.md` 合起来是该特性的**四件套**。模板在 `specs/_template/`，**直接复制，不要新造格式**。
 4. **实现** — 按 `tasks.md` 的顺序推进，每完成一项就勾选，并标注对应的需求编号（`FR-n`）与验收标准编号（`AC-n`）。
 5. **验收** — 逐条对照 `AC-n` 验证，验收结果写回 `spec.md`。
 
@@ -110,17 +111,17 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 禁止事项：
 
 - **禁止「先写代码再补规格」。**
-- **禁止在 spec 确认前写 `plan.md` / `tasks.md`。**
+- **禁止在 spec 确认前写 `design.md` / `plan.md` / `tasks.md`。**
 - 禁止一个 spec 塞进多个不相关特性。
 - 禁止把验收标准写成「运行正常」「功能可用」这类**不可测试**的表述。每一条 `AC-n` 都必须能被一条命令、一个测试或一组明确步骤判定真假。
 - 实现完成后 **spec 保留**（它是该特性的需求依据）；需求后来被取代时**就地改到当前有效版本**，**不要新增一份「修订版 spec」**——文档只保留有效部分，历史交给 git。
-- **禁止在 `spec.md` / `plan.md` / `tasks.md` 的元信息表里写日期**：进度只看状态字段；关于时间的记录规则见 §6 与 `docs/README.md` §4。
+- **禁止在 `spec.md` / `design.md` / `plan.md` / `tasks.md` 的元信息表里写日期**：进度只看状态字段；关于时间的记录规则见 §6 与 `docs/README.md` §4。
 
 ---
 
 ## 6. 不可逆决策必须留下决策记录
 
-出现下列任一情况时，**先把决策写进 `docs/research/` 下对应的主题册**（写在「结论」段；被否决的方向写进「已否决方向」），再动手：
+出现下列任一情况时，**先按落点留下决策记录，再动手**——**跨特性底座**写 `docs/research/` 下对应的主题册，**某特性的设计结论**写该特性的 `specs/<特性>/design.md`；两者的写法一致：结论写进「结论」段，被否决的方向写进「已否决方向」：
 
 - 新增或替换依赖（尤其是引入新的运行时依赖）；
 - 修改数据库表结构或索引；
@@ -130,7 +131,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 
 规则：
 
-- **决策按主题维护，只保留当前有效版本。** 决策变了就**就地改写**那一条；**被取代的旧结论、旧编号一律删除**，不保留「历史决策记录」——历史由 git 承担。**不得形成决策膨胀**：同一个主题在任何时刻只有一份说法。
+- **同一结论只允许有一个出处，只保留当前有效版本。** 决策变了就**就地改写**那一条；**被取代的旧结论、旧编号一律删除**，不保留「历史决策记录」——历史由 git 承担。**不得形成决策膨胀**：同一个主题（或同一个特性的同一个设计点）在任何时刻只有一份说法。
 - **没有编号，也没有独立的决策目录。** `docs/adr/` 已经取消：不要新建编号式决策文件，也不要再写 `ADR-NNNN` 这类引用。
 - 决策记录只写**结论、实测证据、已否决方向**，不写过程与时间线。
 - 与决策相关但**尚未确定**的部分登记到 `docs/open-questions.md`，**不要写成结论**。
@@ -157,13 +158,13 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 
 ## 8. 本项目特有的硬约束（最容易被破坏，逐条照做）
 
-1. **四条流的处理必须幂等。** 抢占任务一律用 `SELECT ... FOR UPDATE SKIP LOCKED` 配合状态字段（外加 `next_attempt_at` 控制退避）。**禁止**「先 SELECT 判断、再 UPDATE」的两步写法——即使当前只跑单实例，这条也不能放宽：四条流本来就是并发的，而且未来加实例时不允许重写。
+1. **四条业务流（外加保留期清理）的处理必须幂等。** 抢占任务一律用 `SELECT ... FOR UPDATE SKIP LOCKED` 配合状态字段（外加 `next_attempt_at` 控制退避）。**禁止**「先 SELECT 判断、再 UPDATE」的两步写法——即使当前只跑单实例，这条也不能放宽：这些后台任务本来就是并发的，而且未来加实例时不允许重写。
 2. **10 秒是既定间隔，但不得把 `10` 写死在代码里**：轮询间隔、每批条数都必须是配置项。
-3. **发信的 `From` 只能来自服务配置，绝不允许调用方指定；服务端必须显式写入 `Reply-To`，其值等于 IMAP 拉取所用的信箱。** 不显式写 `Reply-To` 时，行为会隐式依赖「`From` 恰好等于被拉取的信箱」，任何一次改动 `From` 都会静默断掉回复回路。见 `docs/research/04-security-and-review.md`。
+3. **发信的 `From` 只能来自服务配置，绝不允许调用方指定；服务端必须显式写入 `Reply-To`，其值等于 IMAP 拉取所用的信箱。** 不显式写 `Reply-To` 时，行为会隐式依赖「`From` 恰好等于被拉取的信箱」，任何一次改动 `From` 都会静默断掉回复回路。见 `specs/0001-email-forwarding-service/design.md`。
 4. **任何日志、CHANGELOG、异常信息、PR 描述都不得泄露**：邮件正文、附件内容、账号口令、收件人地址、原始 MIME。排查需要定位邮件时，**用邮件 ID 引用，不要贴正文**。
 5. **与公网隔离、可达内网源**（前提表述见 `docs/research/01-delivery-and-deploy.md`，**实质约束不变**）：不得引入任何**运行时需要访问外部网络**（公网或内网源）的依赖或行为——模型下载、遥测上报、远程配置拉取、在线许可证校验一律禁止。新增依赖时必须先问自己：它在隔离环境里第一次启动会发生什么？
 6. **不得把 `.env` 提交进仓库**；不得改动 `.python-version`；不得在未确认前实现 `docs/open-questions.md` 里的未定项。
-7. **重试语义固定**：发送与审查最多 3 次，退避 15s / 30s / 60s，之后进入终态失败并记录最后一次错误。要改这套数字，先按 §6 更新 `docs/research/02-runtime-and-scheduling.md`。
+7. **重试语义固定**：发送与审查最多 **3 次重试**（首次尝试 + 3 次重试，合计最多 4 次尝试），退避 15s / 30s / 60s，之后进入终态失败并记录最后一次错误。要改这套数字，先按 §6 更新 `docs/research/02-runtime-and-scheduling.md`。
 
 ---
 
@@ -176,7 +177,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 
   由 commitizen 在 `commit-msg` 阶段校验，格式错误会被 pre-commit 拦下。
 - 提交前必须跑过 `scripts/check.*`（ruff format/lint + mypy + pytest）。**本项目不跑 CI，没有任何自动兜底——门禁只能自己跑。**
-- PR 必须使用 `.github/PULL_REQUEST_TEMPLATE.md`，并**填写关联的 spec 编号**；涉及不可逆决策时同时关联 `docs/research/` 下对应的主题册。
+- PR 必须使用 `.github/PULL_REQUEST_TEMPLATE.md`，并**填写关联的 spec 编号**；涉及不可逆决策时同时关联它的落点：跨特性底座关联 `docs/research/` 下对应的主题册，某特性的设计结论关联该特性的 `specs/<特性>/design.md`。
 - 本仓库**没有 CI workflow，也不要新建**。门禁全部在本地（pre-commit + 一键脚本）。
 
 ---
@@ -190,7 +191,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 - ❌ 不要在未确认前实现 `docs/open-questions.md` 里仍未定的条目，也不要「先用默认值顶上」。
 - ❌ 不要在流处理里裸写 SQL，不要绕过 `providers/` 直接调外部库。
 - ❌ 不要写不可测试的验收标准，不要跳过 `specs/` 直接改代码。
-- ❌ 不要为了让门禁通过而放宽 ruff / mypy 配置（改配置属于不可逆决策，要先按 §6 更新对应主题册）。
+- ❌ 不要为了让门禁通过而放宽 ruff / mypy 配置（改配置属于不可逆决策，要先按 §6 更新对应落点的决策段）。
 - ❌ 不要在日志里打印邮件正文、收件人地址或凭据。
 - ❌ 不要在无 BOM 的情况下重写 `.ps1`（Windows PowerShell 5.1 会按 GBK 解码，中文注释直接导致语法错误），也不要改动 `.gitattributes` 里的换行符规则。
 - ❌ 不要用 `.gitkeep` 顶替职责 `README.md`，也不要留下空目录——Git 不跟踪空目录，别人克隆下来什么都没有。
@@ -202,7 +203,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 按这个顺序处理：
 
 1. 先查 `docs/open-questions.md`——很可能已经记录了。
-2. 再查 `docs/research/` 下对应的主题册——可能已经决策过。
+2. 再查 `docs/research/` 下对应的主题册与该特性的 `specs/<特性>/design.md`——可能已经决策过。
 3. 再查 `specs/`——可能已有相关规格。
 4. 都没有，**停下来问所有者**，并把得到的答案补充回相应文件。
 

@@ -48,10 +48,10 @@ uv run uvicorn vs_email_forwarding.main:app --reload  # 本地起服务（当前
 |---|---|
 | `docs/README.md` | **文档唯一入口**：去哪儿看、怎么读、怎么写 |
 | `AGENTS.md` | **AI 协作规则的唯一真源**：规则、边界、目录职责 |
-| `specs/` | 规格驱动：每个特性一个目录，装需求、计划、任务 |
+| `specs/` | 规格驱动：每个特性一个目录，装需求、设计、计划、任务 |
 | `docs/open-questions.md` | **未定项的唯一清单**：动手前先确认你要做的不在其中 |
 
-**结论真源**是 `docs/research/` 下的六册（交付与部署、运行时与调度、依赖与工具链、安全与审查、开发与构建环境、命名、许可与治理）。根 `README.md` **不再维护第二份文档索引**——文档索引只有一份，就在 `docs/README.md`。
+**结论真源有两处**：跨特性底座在 `docs/research/` 下的六册（交付与部署、运行时与调度、依赖与工具链、安全与审查、开发与构建环境、命名、许可与治理），某特性的设计结论在该特性的 `specs/<特性>/design.md`。根 `README.md` **不再维护第二份文档索引**——文档索引只有一份，就在 `docs/README.md`。
 
 ---
 
@@ -69,8 +69,8 @@ src/vs_email_forwarding/   应用源码
 tests/                     测试：unit 纯逻辑，integration 需真实 PostgreSQL / 邮件服务
 migrations/                Alembic 迁移
 scripts/                   本地开发与门禁脚本
-docs/                      文档唯一入口、结论真源、未定项清单
-specs/                     每个特性一个目录（spec.md / plan.md / tasks.md）
+docs/                      文档唯一入口、跨特性底座结论真源、未定项清单
+specs/                     每个特性一个目录（spec.md / design.md / plan.md / tasks.md）
 skills/                    可复用的固定流程
 deploy/                    部署脚本与交付链的落点（当前只有职责 README，待实现）
 ```
@@ -88,10 +88,10 @@ deploy/                    部署脚本与交付链的落点（当前只有职�
 | Web 框架 | FastAPI + uvicorn |
 | 数据库 | PostgreSQL |
 | 日志 | structlog |
-| 调度 | 进程内 asyncio，四条独立循环 |
+| 调度 | 进程内 asyncio，四条业务流外加保留期清理各自独立循环 |
 | 部署 | 容器 |
 
-理由、实测证据与已否决方向见 `docs/research/` 对应册，本文件不展开。
+理由、实测证据与已否决方向见 `docs/research/` 对应册与本特性的 `specs/0001-email-forwarding-service/design.md`，本文件不展开。
 
 ---
 

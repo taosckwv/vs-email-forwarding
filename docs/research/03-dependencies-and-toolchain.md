@@ -1,7 +1,8 @@
 # 03 依赖与工具链
 
-> **本册是「技术栈、依赖与本地门禁」的当前有效结论真源。**
+> **本册是「技术栈、依赖清单与本地门禁」的当前有效结论真源。**
 > 只写：当前结论、当前实测证据、已否决方向、落地位置、未定项。
+> **具体依赖的选型理由、代价与许可实测**见 `specs/0001-email-forwarding-service/design.md`（本册只记依赖清单、放行程序与工具链）。
 
 ## 结论
 
@@ -10,7 +11,7 @@
 - **Python 3.13 是目标版本**：`.python-version` 锁定 `3.13`，`pyproject.toml` 的 `requires-python` 为 `>=3.13,<3.14`，`uv.lock` 记录的解析约束是 `==3.13.*`——三处一致，`.python-version` 不得改动。
 - **依赖与解释器管理一律用 `uv`**：由 uv 安装独立的官方 CPython 解释器（不依赖系统 Python）、创建虚拟环境、解析依赖并维护锁文件 `uv.lock`、管理依赖分组。一条 `uv sync` 就对齐解释器与全部依赖，队友克隆后不需要手工建 venv。`uv.lock` 是解析与锁定结果的唯一真源，随依赖变更一起提交。
 - **Web 框架 FastAPI + uvicorn**；**配置用 pydantic-settings**（唯一配置入口，读 `.env`）；**日志用 structlog**；**测试用 pytest**（配 `pytest-asyncio`，`asyncio_mode = "auto"`）。
-- **运行时依赖保持最小集**：`fastapi`、`uvicorn[standard]`、`pydantic-settings`、`structlog` 四项。开发依赖另在 `[dependency-groups] dev` 里：`ruff`、`mypy`、`pytest`、`pytest-asyncio`、`httpx`、`pre-commit`、`commitizen`。`httpx` 是 FastAPI `TestClient` 的必需依赖，**不是运行时依赖**。
+- **运行时依赖保持最小集**：`fastapi`、`uvicorn[standard]`、`pydantic-settings`、`structlog` 四项，加上数据与邮件访问四项——`sqlalchemy`、`alembic`、`asyncpg`、`IMAPClient`（**选型理由、代价与许可见 `specs/0001-email-forwarding-service/design.md` 的「依赖选型」与「实测证据」**）。开发依赖另在 `[dependency-groups] dev` 里：`ruff`、`mypy`、`pytest`、`pytest-asyncio`、`httpx`、`pre-commit`、`commitizen`。`httpx` 是 FastAPI `TestClient` 的必需依赖，**不是运行时依赖**。
 - **新增运行时依赖前先在本册留下结论再动手**，不允许「先装上再补记录」。
 
 **为什么是 3.13**
@@ -90,6 +91,7 @@
 - **`.github/` 下没有 `workflows/`**：实测只有 `ISSUE_TEMPLATE/`（`bug_report.md`、`feature_request.md`）与 `PULL_REQUEST_TEMPLATE.md`。
 - **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
 - **门禁全绿的适用范围**：业务逻辑尚未实现，`src/` 下只有包占位与一个能返回 `/healthz` 的最小入口。因此上述绿只证明**工程配置与工具链可用**，不证明任何业务正确性。
+- **依赖许可与类型标注的实测结果**见 `specs/0001-email-forwarding-service/design.md` 的「实测证据」一节（本册不复述）。
 
 ## 已否决方向
 
@@ -105,10 +107,11 @@
 - 降级 RUF001/002/003 为 warning —— 原因：ruff 没有 warning 级别。
 - 关掉整个 RUF 规则族 —— 原因：RUF 族还有其他有价值的规则，不能整族关闭。
 - **现在就**把例外改成 `per-file-ignores` 逐文件列举 —— 原因：中文标点在这类文件里**分布极广**，逐文件列举的维护成本高于收益，也不会比全局例外更安全。若将来真的出现全角字符混进标识符或字面量这类**真问题**，再按本册「结论」里那条路径重新评估——届时属于新的决策，要按 `AGENTS.md` §6 重写本册。
+- 为无类型库整体关闭 mypy 检查 —— 原因：本册既定处置是**按 module 精确放行并在册里留下结论**，整体关闭等于降低门禁标准（既有结论的重申）。
 
 ## 落地位置
 
-- `pyproject.toml` —— 运行时依赖清单与 `[dependency-groups] dev` 分组、`requires-python`、`[project] version`，以及 ruff / mypy / pytest / commitizen 的全部配置；`RUF001` / `RUF002` / `RUF003` 的 `ignore` 与理由注释就在此处。
+- `pyproject.toml` —— 运行时依赖清单与 `[dependency-groups] dev` 分组、`requires-python`、`[project] version`，以及 ruff / mypy / pytest / commitizen 的全部配置；`RUF001` / `RUF002` / `RUF003` 的 `ignore` 与理由注释就在此处。**新增的四项运行时依赖**（`sqlalchemy`、`alembic`、`asyncpg`、`IMAPClient`）与**针对无类型库的 `[[tool.mypy.overrides]]` 按 module 放行**（连同理由）也落在本文件；**这些依赖的选型理由与代价**见 `specs/0001-email-forwarding-service/design.md`。
 - `.python-version` —— 锁定 3.13（不得改动）。
 - `uv.lock` —— 依赖解析与锁定的唯一真源，随依赖变更一起提交。
 - `.pre-commit-config.yaml` —— pre-commit 挂钩清单与 `commit-msg` 阶段；启用命令为 `uv run pre-commit install --install-hooks` 与 `uv run pre-commit install --hook-type commit-msg`。
@@ -123,8 +126,6 @@
 
 以下问题**尚未决定**，详见 `docs/open-questions.md`；实现时**不得替它们挑一个「合理的默认值」**：
 
-- E1 IMAP 客户端选型（同步的 `imapclient` vs 异步的 `aioimaplib`）
 - E2 `httpx` 与 `httpx2` 的迁移时机（当前测试会打 StarletteDeprecationWarning，提示改用 httpx2）
-- E3 数据库驱动与迁移工具（`asyncpg` vs `psycopg3`）
 - D1 各基础镜像 tag 的 digest 需在写进脚本前复核
 - D2 部署脚本的具体形态（尚未实现）
