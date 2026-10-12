@@ -88,9 +88,10 @@
 - **`uvloop` 在 Windows 上确实不装**：`uv.lock` 中该依赖带 `sys_platform != 'win32'` 标记；开发机（Linux）实测已装 `uvloop 0.22.1`，生产同为 Linux，同样可获得。
 - **解释器与依赖一律交给 uv 管理**：虚拟环境中的解释器实测为 **Python 3.13.16**，与 `.python-version` 的 `3.13` 一致；「一律用 `uv run`」是为了让解释器与依赖只由一处决定，而不是因为存在版本不一致。
 - **`.github/` 下没有 `workflows/`**：实测只有 `ISSUE_TEMPLATE/`（`bug_report.md`、`feature_request.md`）与 `PULL_REQUEST_TEMPLATE.md`。
-- **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
+- **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0、`sqlalchemy` 2.1.4、`alembic` 1.20.0、`asyncpg` 0.32.0、`IMAPClient` 4.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
 - **门禁全绿的适用范围**：业务逻辑尚未实现，`src/` 下只有包占位与一个能返回 `/healthz` 的最小入口。因此上述绿只证明**工程配置与工具链可用**，不证明任何业务正确性。
 - **依赖许可与类型标注的实测结果**见 `specs/0001-email-forwarding-service/design.md` 的「实测证据」一节（本册不复述）。
+- **两个无类型存根库的实测结论**：`asyncpg` 与 `imapclient` 的包目录下都不存在 `py.typed`，在 `src/` 下 import 它们后跑 `mypy src` 各报一条 `Skipping analyzing "…": module is installed, but missing library stubs or py.typed marker [import-untyped]`；`sqlalchemy` 与 `alembic` 都有 `py.typed`，因此不放行——这正是放行范围只覆盖前两个的依据。**这两条放行还没有落进 `pyproject.toml`**（该文件 mypy 段记有这条处置）：没有对应 import 的 `[[tool.mypy.overrides]]` 会被 mypy 报成 `unused section(s)`，所以放行与第一个真正 import 该库的模块同一次改动落地。
 
 ## 已否决方向
 
@@ -107,10 +108,11 @@
 - 关掉整个 RUF 规则族 —— 原因：RUF 族还有其他有价值的规则，不能整族关闭。
 - **现在就**把例外改成 `per-file-ignores` 逐文件列举 —— 原因：中文标点在这类文件里**分布极广**，逐文件列举的维护成本高于收益，也不会比全局例外更安全。若将来真的出现全角字符混进标识符或字面量这类**真问题**，再按本册「结论」里那条路径重新评估——届时属于新的决策，要按 `AGENTS.md` §6 重写本册。
 - 为无类型库整体关闭 mypy 检查 —— 原因：本册既定处置是**按 module 精确放行并在册里留下结论**，整体关闭等于降低门禁标准（既有结论的重申）。
+- 把放行写成**没有对应 import 的** `[[tool.mypy.overrides]]` —— 原因：mypy 会把它报成 `unused section(s)` 并打进 `scripts/check.sh` 的输出，制造一条需要被忽略的噪音，也等于留一条无代码支撑的例外；放行只随真正 import 该库的模块落地。
 
 ## 落地位置
 
-- `pyproject.toml` —— 运行时依赖清单与 `[dependency-groups] dev` 分组、`requires-python`、`[project] version`，以及 ruff / mypy / pytest / commitizen 的全部配置；`RUF001` / `RUF002` / `RUF003` 的 `ignore` 与理由注释就在此处。**新增的四项运行时依赖**（`sqlalchemy`、`alembic`、`asyncpg`、`IMAPClient`）与**针对无类型库的 `[[tool.mypy.overrides]]` 按 module 放行**（连同理由）也落在本文件；**这些依赖的选型理由与代价**见 `specs/0001-email-forwarding-service/design.md`。
+- `pyproject.toml` —— 运行时依赖清单（四项基础依赖 + 四项数据与邮件访问依赖 `sqlalchemy` / `alembic` / `asyncpg` / `IMAPClient`）与 `[dependency-groups] dev` 分组、`requires-python`、`[project] version`，以及 ruff / mypy / pytest / commitizen 的全部配置；`RUF001` / `RUF002` / `RUF003` 的 `ignore` 与理由注释就在此处。**针对无类型库的 `[[tool.mypy.overrides]]` 按 module 精确放行**（连同理由，只覆盖实测报 `import-untyped` 的 `asyncpg` 与 `imapclient`，随第一个 import 它们的模块一起加）也落在本文件；**这些依赖的选型理由与代价**见 `specs/0001-email-forwarding-service/design.md`。
 - `.python-version` —— 锁定 3.13（不得改动）。
 - `uv.lock` —— 依赖解析与锁定的唯一真源，随依赖变更一起提交。
 - `.pre-commit-config.yaml` —— pre-commit 挂钩清单与 `commit-msg` 阶段；启用命令为 `uv run pre-commit install --install-hooks` 与 `uv run pre-commit install --hook-type commit-msg`。

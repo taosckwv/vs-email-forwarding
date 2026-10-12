@@ -32,10 +32,14 @@ classifiers = [
 
 # 运行时依赖：预研阶段只保留最小集，新增依赖前先在 docs/research/03-dependencies-and-toolchain.md 记录结论。
 dependencies = [
+    "alembic",
+    "asyncpg",
     "fastapi",
-    "uvicorn[standard]",
+    "imapclient",
     "pydantic-settings",
+    "sqlalchemy",
     "structlog",
+    "uvicorn[standard]",
 ]
 
 # 开发依赖：uv 原生 dependency-groups 写法。
@@ -120,6 +124,12 @@ ignore_missing_imports = false
 # 说明：预研阶段暂不放宽任何第三方库的类型检查。
 # 若某个库确实缺少类型存根，必须先在 docs/research/ 下对应的主题册记录理由（见 AGENTS.md §6），
 # 再在 [[tool.mypy.overrides]] 中按 module 精确放行，不要整体关闭。
+#
+# 已登记、不在本文件的放行：asyncpg 与 IMAPClient 的包目录下都没有 py.typed，import 时报
+# import-untyped（实测依据见 docs/research/03-dependencies-and-toolchain.md）。此刻没有任何
+# 模块 import 这两个库，而 [[tool.mypy.overrides]] 在无对应 import 时会被 mypy 报成
+# unused section，因此放行与第一个真正 import 该库的模块同一次改动落地，只覆盖这两个
+# module，不放宽同样新增、但自带 py.typed 的 sqlalchemy 与 alembic。
 
 # ---------------------------------------------------------------------------
 # pytest

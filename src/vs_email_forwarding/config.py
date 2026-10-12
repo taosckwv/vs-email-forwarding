@@ -61,11 +61,14 @@ class Settings(BaseSettings):
     imap_password: str = ""
     imap_mailbox: str = "INBOX"
 
-    # 四条轮询流的间隔（秒）；10 秒是既定间隔，但不得在代码中写死，只能走配置。
+    # 四条业务流的轮询间隔（秒）；10 秒是既定间隔，但不得在代码中写死，只能走配置。
     poll_review_outbound_seconds: int = 10
     poll_send_seconds: int = 10
     poll_fetch_inbound_seconds: int = 10
     poll_review_inbound_seconds: int = 10
+
+    # 第 5 条后台任务（保留期清理）的执行间隔（秒）：清理不是时效敏感动作，默认按小时跑。
+    poll_cleanup_seconds: int = 3600
 
 
 @lru_cache
