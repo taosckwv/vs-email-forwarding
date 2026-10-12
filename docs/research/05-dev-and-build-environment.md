@@ -88,7 +88,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 - **pre-commit 钩子已安装**（2026-10）：`.git/hooks/pre-commit` 与 `.git/hooks/commit-msg` 都在，钩子环境已缓存（**缓存按 HOME 分家**：root 用 `/root/.cache/pre-commit/`，从 `/home/tao/.cache/pre-commit/` 整目录拷过去即可离线使用），**日常提交不再需要网络**。pre-commit 只装在项目 `.venv` 里，用 `uv run pre-commit ...` 调用。
 - **`github.com:443` 在本机是「时通时断」**：装钩子环境时必须从 GitHub 克隆三个 hook 仓库（`pre-commit-hooks` / `ruff-pre-commit` / `commitizen`），实测一次 `fetch` 被拒（connection refused）、紧接着重试即成功，且同一次会话里 root 侧 `curl https://github.com` 曾 15s 超时。**结论：不要依据一次失败判定 GitHub 不可用，隔几分钟重试即可**；旧记录「github.com:443 直连被拒」与据此得出的「本机跑不了 pre-commit」均不成立。
 - **git 已从源码升到 2.49.1，装在 `/usr/local`**（2026-10）：`/usr/local/bin` 在默认 PATH 里排在 `/usr/bin` 之前，所以**任何用户、任何新会话**默认就是 `/usr/local/bin/git`（实测 root 与 tao、登录 shell 都解析到它）。系统包 `git-2.27.0` **没有被卸载、文件也没被改动**（`rpm -V git` 无输出），仍留在 `/usr/bin/git` 作为后备；vault 里没有更新的 git 包，`pre-commit run --all-files` 需要的 `git ls-files --deduplicate`（需 ≥ 2.31）正是靠这次升级才可用。
-- **仓库属主已统一成 `root:root`**（2026-10，全仓 5393 项，含 `.git` 与 `.venv`），因此 git ≥ 2.35 的 `dubious ownership` 限制**不再触发**，也**不需要** `safe.directory` 这类豁免（曾经加过的那条已从 `/root/.gitconfig` 移除）。**tao 从此对该仓库没有写权限**——这与「命令一律以 root 跑」是一致的。
+- **仓库属主已统一成 `root:root`**（2026-10，全仓 5393 项，含 `.git` 与 `.venv`），因此 git ≥ 2.35 的 `dubious ownership` 限制**不再触发**，也**不需要** `safe.directory` 这类豁免（曾经加过的那条已从 `/root/.gitconfig` 移除）。**tao 从此对该仓库没有写权限**——这与「命令一律以 root 跑」是一致的。权限也一并收紧：目录 `755`、文件 `644`（原本带执行位的保持 `755`），**去掉了组写位**（原先 `664/775` 而 `tao` 在 `root` 组里，仅改属主仍挡不住它）。实测 `runuser -u tao -- touch <仓库>/.x` → `Permission denied`。**唯一例外**：`.venv/bin/python*` 与 `.venv/lib64` 是指向仓库外的符号链接，其目标是 uv 在 `/home/tao/.local/share/uv/` 下管理的解释器（仍属 tao），**那些不要动**。
 
 #### 文件编码与换行符（硬约定，不是风格偏好）
 
