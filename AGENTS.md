@@ -36,7 +36,7 @@
 
 **不得在未确认前实现仍属未定的条目**——未定项的完整清单只在 `docs/open-questions.md`，**本文件不复述它**。设计阶段那一批条目（数据模型字段、依赖选型、重试分类、审查接口形态等）**已经拍板并落入 `specs/0001-email-forwarding-service/design.md` 与 `docs/research/` 各册**，不再是未定项。
 
-**环境硬事实（会直接阻塞工作，故在此保留一句）**：开发机是 **CentOS 8 Linux 虚拟机，跑得了 Docker**——项目命令一律**以仓库属主身份**执行，`uv` 在该用户 PATH 上；旧 Windows 开发机**已弃用**。镜像**当前仍在生产服务器上本地构建**，是否改到开发机留到开发完成后再定。详见 `docs/research/05-dev-and-build-environment.md` 与 `docs/research/01-delivery-and-deploy.md`。
+**环境硬事实（会直接阻塞工作，故在此保留一句）**：开发机是 **CentOS 8 Linux 虚拟机，跑得了 Docker**——项目命令一律**以 root 身份**执行，`uv` 需显式引入 PATH（装在 `/home/tao/.local/bin/`）；旧 Windows 开发机**已弃用**。镜像**当前仍在生产服务器上本地构建**，是否改到开发机留到开发完成后再定。详见 `docs/research/05-dev-and-build-environment.md` 与 `docs/research/01-delivery-and-deploy.md`。
 
 ---
 
@@ -56,7 +56,7 @@ bash scripts/check.sh
 bash scripts/dev-up.sh
 ```
 
-项目命令一律**以仓库属主身份**执行（开发机上的属主是 `tao`）。
+项目命令一律**以 root 身份**执行；`uv` 装在 `/home/tao/.local/bin/`，**该目录不在 root 的 PATH 上**，需要时先 `export PATH=/home/tao/.local/bin:$PATH`。
 
 部署脚本与交付链**尚未实现**——`deploy/` 目前是空的（只留一份职责 `README.md`）。**不要擅自新建部署脚本**：新链路（在 CentOS 8 生产服务器上本地构建 + 基础镜像以 tar 带入）的脚本形态仍是未定项，见 `docs/open-questions.md` D2。
 

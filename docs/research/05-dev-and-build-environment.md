@@ -13,23 +13,26 @@
 
 **这台机器上正式 Docker Engine 可用**，因此**开发依赖的容器栈能在本机起、`tests/integration/` 的容器依赖能在本机跑**。Linux 上的 Docker 不需要硬件虚拟化（容器只用内核 namespaces / cgroups），这是它相对旧 Windows 开发机的根本差别。
 
-#### 项目命令一律以 `tao` 身份执行
+#### 项目命令一律以 `root` 身份执行
 
-DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **`tao`**。
+DSH 会话与 bash 工具**以 root 运行**，所有者已明确要求**项目命令与文件操作直接用 root**——
+不要再用 `runuser -u tao`（该口径已于 2026-10 被取代）。
 
-- 一切项目命令（`uv`、`pytest`、门禁脚本、`scripts/dev-up.sh`）都要包一层：
+- 一切项目命令（`uv`、`pytest`、门禁脚本、`scripts/dev-up.sh`）直接以 root 执行：
 
   ```bash
-  runuser -u tao -- bash -lc 'cd /home/tao/code/vs-email-forwarding && <命令>'
+  cd /home/tao/code/vs-email-forwarding && <命令>
   ```
 
-- **不这样做会写出 root 属主的 `.venv`**，之后 tao 自己反而用不了。
-- `dnf` / `systemctl` 等系统操作用 root。
+- **一个前提要自己补上**：`uv` 装在 `/home/tao/.local/bin/`，而**该目录不在 root 的 PATH 上**。
+  root 会话里要么显式 `export PATH=/home/tao/.local/bin:$PATH`，要么直接写绝对路径
+  `/home/tao/.local/bin/uv ...`；直接用 `uv` 会报 command not found。
+- `dnf` / `systemctl` 等系统操作用 root（与项目命令同一个身份）。
 
 #### `python3` 是 3.13，系统 3.6 仍在但**绝不可删**
 
 - `uv` 是 **0.13.0**，装在 `/home/tao/.local/bin/uv`（属主 tao）。它**在 tao 的 PATH 上**。
-- 系统 `python3` → `/usr/local/bin/python3` → `python3.13` → `/usr/local/share/uv-python/cpython-3.13-linux-x86_64-gnu/bin/python3.13`。root 与 tao 都是 **3.13.16**，与 `.python-version` 的 `3.13` 一致。
+- 系统 `python3` → `/usr/local/bin/python3` → `python3.13` → `/usr/local/share/uv-python/cpython-3.13-linux-x86_64-gnu/bin/python3.13`。**3.13.16**，与 `.python-version` 的 `3.13` 一致。
 - 项目虚拟环境由 uv 托管（`/home/tao/.local/share/uv/python/`）供 `.venv` 使用。
 - **`/usr/bin/python3` 仍是 3.6.8**，那是 `platform-python3.6`。**dnf 依赖它，删不得**（`python3-dnf` 硬依赖 `/usr/libexec/platform-python` + `python(abi) = 3.6`）。
 - **已知代价**：`python3` 现在是 3.13，而 `python3-gobject` 只有 3.6 ⇒ `ibus-setup`、`cockpit-desktop` 会报 `No module named 'gi'`（中文输入法本体不受影响，仅其设置界面）。回滚：`rm -f /usr/local/bin/python3 /usr/local/bin/python3.13`。
@@ -67,12 +70,6 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 - **`registry.cn-hangzhou.aliyuncs.com` 不是 Docker Hub 的 mirror**，而是另一个完整 registry，写进 `registry-mirrors` 是错的。
 - 某个 mirror 拉不动时：改 `daemon.json` 换下一个 → `systemctl restart docker.service` → 重试。**不要**去第三方站点手工下 rpm 或镜像 tar 硬塞。
 
-#### tao 必须在 `docker` 组里
-
-- Docker socket 是 `root:docker` `srw-rw----`，而**项目命令以 tao 跑** ⇒ tao 不在 `docker` 组里时，`scripts/dev-up.sh` 会走到「连不上 Docker 守护进程」分支并以非零退出。
-- 已执行 `usermod -aG docker tao`。
-- **有效时机是下一次登录**（或任何新建会话）。**同一会话内 `id` 不会显示新组**，别据此误判失败；需要在不重登的情况下验证，用 `sg docker -c '<命令>'`。
-
 #### 开发依赖（本机现在起得来）
 
 - 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 **`greenmail/standalone:2.1.14`**；两者都**只绑回环**。GreenMail 同时提供 **SMTP（3025）与 IMAP（3143）**，因此流②的发信侧与**流③的入站回路都能在本地离线跑通**（另有 POP3 3110、SMTP API 8080；SMTPS 3465 / IMAPS 3993 未映射）。
@@ -86,9 +83,9 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 ### 本机侧的执行环境
 
 - 门禁的四步定义与取舍见 `docs/research/03-dependencies-and-toolchain.md`。
-- 本册只记**本机特有的执行前提**：`uv` 在 tao 的 PATH 上、`python3` 是 3.13、项目命令一律以 tao 跑、`.venv` 属主必须是 tao。
+- 本册只记**本机特有的执行前提**：项目命令以 root 跑、`uv` 要显式入 PATH、`python3` 是 3.13。
 - **不要给 `scripts/check.sh` 加 `2>&1` 或任何流重定向**：多一层重定向只会掩盖真实退出码，`AGENTS.md` §3 已把它写成脚本约定。
-- **pre-commit 钩子已安装**（2026-10）：`.git/hooks/pre-commit` 与 `.git/hooks/commit-msg` 都在，三个钩子环境已缓存在 `/home/tao/.cache/pre-commit/`，**日常提交不再需要网络**。pre-commit 只装在项目 `.venv` 里，用 `uv run pre-commit ...` 调用。
+- **pre-commit 钩子已安装**（2026-10）：`.git/hooks/pre-commit` 与 `.git/hooks/commit-msg` 都在，钩子环境已缓存（**缓存按 HOME 分家**：root 用 `/root/.cache/pre-commit/`，从 `/home/tao/.cache/pre-commit/` 整目录拷过去即可离线使用），**日常提交不再需要网络**。pre-commit 只装在项目 `.venv` 里，用 `uv run pre-commit ...` 调用。
 - **`github.com:443` 在本机是「时通时断」**：装钩子环境时必须从 GitHub 克隆三个 hook 仓库（`pre-commit-hooks` / `ruff-pre-commit` / `commitizen`），实测一次 `fetch` 被拒（connection refused）、紧接着重试即成功，且同一次会话里 root 侧 `curl https://github.com` 曾 15s 超时。**结论：不要依据一次失败判定 GitHub 不可用，隔几分钟重试即可**；旧记录「github.com:443 直连被拒」与据此得出的「本机跑不了 pre-commit」均不成立。
 - **git 2.27 下 `pre-commit run --all-files` 用不了**：该路径调 `git ls-files -z --deduplicate`，而这个选项要 git ≥ 2.31（本机是 CentOS 8 `AppStream` 的 **git 2.27.0**，vault 里也没有更新的非 module 包）。**日常提交不受影响**——提交走的是 `git diff --staged`，实测 commit 钩子与 commit-msg 钩子都正常拦下违规。要全量检查改用 `bash scripts/check.sh`（它不依赖 git 的这个选项）。
 
@@ -110,9 +107,9 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 - **发行版与内核**：`CentOS Linux release 8.5.2111`；内核 `4.18.0-348.el8.x86_64`。
 - **资源**：8 vCPU；内存 total 15 GiB、available 13 GiB；`/` 为 `/dev/nvme0n1p3` 36G、可用 28G（23% 已用）；**无 `/data` 盘**。
 - **安全与网络**：`getenforce` = `Enforcing`；firewalld `active`；`iptables v1.8.4 (nf_tables)`。
-- **`uv` 在 tao 的 PATH 上**：`uv --version` → `uv 0.13.0 (x86_64-unknown-linux-gnu)`，路径 `/home/tao/.local/bin/uv`。
-- **Python**：`python3 --version` → `3.13.16`（root 与 tao 相同，解析到 `/usr/local/bin/python3`）；`/usr/bin/python3 --version` → `3.6.8`。
-- **门禁在本机实跑通过**：以 tao 身份执行 `bash scripts/check.sh`，四步全绿、退出码 0（`1 passed, 1 warning`；warning 是 FastAPI/Starlette 的 `httpx` 弃用提示，属既知事项，见 `docs/open-questions.md` E2）。
+- **`uv` 的路径**：`uv --version` → `uv 0.13.0 (x86_64-unknown-linux-gnu)`，装在 `/home/tao/.local/bin/uv`——**该目录只加在 tao 的 PATH 上，root 会话里要显式引入**。
+- **Python**：`python3 --version` → `3.13.16`（解析到 `/usr/local/bin/python3`）；`/usr/bin/python3 --version` → `3.6.8`。
+- **门禁在本机实跑通过**：以 root 身份执行 `bash scripts/check.sh`，四步全绿、退出码 0（`1 passed, 1 warning`；warning 是 FastAPI/Starlette 的 `httpx` 弃用提示，属既知事项，见 `docs/open-questions.md` E2）。
 - **pre-commit 可用但钩子未装**：`uv run pre-commit --version` → `pre-commit 4.6.2`；`.git/hooks/` 下只有 sample。
 
 **Docker**
@@ -127,7 +124,7 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 - **mirror 的端到端验证（不是只看状态码）**：对 `docker.1panel.live` 手工走完 registry v2 协议——`/v2/library/hello-world/manifests/latest` 返回 **HTTP 200** 的 OCI image index（11062 字节，20 个子 manifest），取出子 manifest（HTTP 200）后下载其 layer blob（HTTP 200，2415 字节），**且 blob 的 sha256 与 manifest 里的 digest 校验一致**（`sha256sum -c` 报 OK）。这一步才判定「源真能用」。
 - **只凭状态码会误判**：`docker.1ms.run` 的 `/v2/` 返回 401（未认证，属正常），`hub.rat.dev` 返回 302（只是跳转），两者都**不足以**证明能拉取。
 - **实际拉取成功（本机实测，全部 exit 0）**：`docker pull hello-world` 且 `docker run --rm hello-world` 打印成功信息；`postgres:17`；`greenmail/standalone:2.1.14`（310MB，见下）；`python:3.13-slim-trixie`；`ghcr.io/astral-sh/uv:0.12.20`。
-- **tao 无 docker 组时确实会被卡住**：未加组前以 tao 跑 `scripts/dev-up.sh` 直接走「[阻塞] docker 命令存在，但连不上 Docker 守护进程」并以退出码 1 结束；`usermod -aG docker tao` 后（以 `sg docker` 等效验证）`docker info` 成功。
+- **docker 权限随执行身份**：root 直接可用；早先以 tao 跑时因不在 `docker` 组里走过「[阻塞] docker 命令存在，但连不上 Docker 守护进程」（那次已用 `usermod -aG docker tao` 解决）。**现行口径是命令一律以 root 跑，这条不再影响本项目。**
 - **`dev-up.sh` 曾以探测 shim 只验证过前置检查**（拦 `up` 不真起容器，退出码 0）。**后续已改为真实跑通**，见下面「`scripts/dev-up.sh` 实跑成功」。
 - **`compose.dev.yaml` 能被 compose v2 解析**：`docker compose -f compose.dev.yaml config --quiet` 退出码 0；解析出的两个服务与 `platform: linux/amd64` 与文件内容一致。
 - **`scripts/dev-up.sh` 实跑成功（2026-10，真实起容器）**：`docker compose -f compose.dev.yaml ps` 两个服务都 `Up (healthy)`；Mailpit Web UI `curl` 返回 **200**；Mailpit `/api/v1/info` 返回 `{"Version":"v1.31.3", ...}`；PostgreSQL `pg_isready` → `accepting connections`，`select version()` → `PostgreSQL 17.11`，开发库 `vs_email_forwarding_dev` 已自动建出（测试库仍需手工建）；四个端口（5432 / 1025 / 1143 / 8025）都只绑 `127.0.0.1`。

@@ -155,7 +155,7 @@ uv run pre-commit run --all-files
 
 ### 5.1 本机执行前提
 
-开发机是 **CentOS 8 Linux 虚拟机，项目命令一律以仓库属主身份执行**；`uv` 在该用户的 PATH 上，开发依赖容器在本机起得来。完整环境事实（Docker 版本与镜像源、SELinux、Python 3.13、编码与换行符硬约定）见 `docs/research/05-dev-and-build-environment.md`，**本文件不重复**。
+开发机是 **CentOS 8 Linux 虚拟机，项目命令一律以 root 身份执行**；`uv` 装在 `/home/tao/.local/bin/`（需显式引入 PATH），开发依赖容器在本机起得来。完整环境事实（Docker 版本与镜像源、SELinux、Python 3.13、编码与换行符硬约定）见 `docs/research/05-dev-and-build-environment.md`，**本文件不重复**。
 
 **pre-commit 钩子在本机装不上**（安装与运行都要 `git fetch` GitHub，而本机 `github.com` 直连被拒）；首次克隆后那两条命令在有 GitHub 访问的机器上执行。**本机的门禁一律用 `bash scripts/check.sh`。**
 
