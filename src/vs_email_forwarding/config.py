@@ -38,7 +38,8 @@ class Settings(BaseSettings):
     http_host: str = "0.0.0.0"
     http_port: int = 8000
 
-    # 数据库连接串（异步驱动）；表结构与迁移方案尚未定案，见 docs/open-questions.md。
+    # 数据库连接串（异步驱动）；四张表的表结构与迁移方案见
+    # specs/0001-email-forwarding-service/design.md 的数据模型一节。
     database_url: str = (
         "postgresql+asyncpg://vs_email_forwarding:change-me@127.0.0.1:5432/vs_email_forwarding"
     )
@@ -60,6 +61,29 @@ class Settings(BaseSettings):
     imap_username: str = ""
     imap_password: str = ""
     imap_mailbox: str = "INBOX"
+
+    # 被拉取信箱**地址**（不是文件夹）：启动即校验，必须与 reply_to_address 相同；
+    # 为空或不一致都拒绝启动。它**不默认取 imap_username**——登录名不保证是邮箱地址。
+    imap_address: str = ""
+
+    # 入站拉取是否启用 STARTTLS。
+    imap_starttls: bool = True
+
+    # 单次外部调用的墙钟上界（秒）；FR-15 的 3 分钟由它们与退避表共同推出。
+    smtp_timeout_seconds: int = 10
+    imap_timeout_seconds: int = 10
+    review_timeout_seconds: int = 10
+
+    # 每批条数，五条流共用；流③ 用它限制单个 tick 拉取的封数。
+    batch_size: int = 100
+
+    # 内容长度上限：API 层校验，超限返回 422 且不落库。
+    # 主题单位是字符，正文单位是字节（单位写进字段名，避免再把 MiB 与字符搞混）。
+    max_subject_chars: int = 500
+    max_body_bytes: int = 1_048_576
+
+    # GET /v1/messages/{id}/replies 每页条数上限（keyset 游标分页）。
+    replies_page_size: int = 100
 
     # 四条业务流的轮询间隔（秒）；10 秒是既定间隔，但不得在代码中写死，只能走配置。
     poll_review_outbound_seconds: int = 10
