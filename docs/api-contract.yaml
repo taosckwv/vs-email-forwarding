@@ -1,0 +1,333 @@
+# =============================================================================
+# 内部邮件中转服务 —— 对外 HTTP 接口契约
+#
+# 本文件是**对外接口契约的唯一真源**（见 specs/0001-email-forwarding-service/design.md §4.1）：
+#   * 路径、方法、请求与响应字段、类型、必填、取值枚举、取值约束、错误响应，只写在这里；
+#   * design.md / plan.md / schemas/ 一律只引用本文件，**不在别处重复字段定义**；
+#   * 改动本文件 = 改接口契约，属不可逆决策（AGENTS.md §6）：同步改
+#     specs/0001-email-forwarding-service/design.md §4.1 的设计口径，并按 §5 的流程走。
+#
+# 编写约束（AGENTS.md §7 / §8、docs/README.md §4）：
+#   * 文件为 UTF-8 无 BOM + LF；文件名 ASCII；描述一律中文；
+#   * 不得写入真实主机名、端口、账号、邮箱地址——一律用占位符；
+#   * 不得写入邮件正文示例、收件人地址等真实内容。
+# =============================================================================
+
+openapi: 3.1.0
+
+info:
+  title: 内部邮件中转服务 API
+  version: "1.0.0"
+  description: |
+    内网 agent 会话通过本接口把要发的邮件交给本服务（服务做安全审查后经 SMTP 投递），
+    并按出站邮件 ID 查回用户的邮件回复。
+
+    一期边界（详见 specs/0001-email-forwarding-service/spec.md §7）：
+      * **不做 API 鉴权**：服务仅内网可达，鉴权位置在 API 层预留；
+      * **不支持附件、抄送密送、自定义邮件头**：只有单个收件人、主题与正文；
+      * **HTTP 状态码只表达请求本身是否成功**，不承载业务含义——
+        「邮件不存在」与「邮件存在但尚无回复」都用 2xx 表达，靠响应体的 `found` 区分。
+
+# -----------------------------------------------------------------------------
+# 状态取值（库内与对外同一套，不存在映射层）
+#
+# 六态各自的中文名与物理落点只在这里定义一次；design.md §2.1 / §4.1 只讲状态机与落点理由。
+# -----------------------------------------------------------------------------
+x-state-labels:
+  submitted: 已提交
+  reviewing: 审查中
+  rejected: 拒审
+  sending: 投递中
+  sent: 已发出
+  failed: 发送失败
+
+tags:
+  - name: messages
+    description: 邮件提交与查询
+  - name: health
+    description: 健康检查
+
+paths:
+  /v1/messages:
+    post:
+      tags: [messages]
+      summary: 提交一封邮件
+      description: |
+        校验通过后写入一行待审行并立即返回，投递由后台流异步完成（不在本请求内等待投递结果）。
+
+        发件人 `From` 与回复地址 `Reply-To` **一律取自服务配置，不接受调用方指定**：
+        请求体里出现的同名未知字段一律**忽略、不报错**（因此携带发件人字段也不会生效）。
+
+        校验不通过一律返回 422 且**不落库**，包括：缺少收件人、收件人为多个地址
+        （数组或逗号分隔）、地址非法（无 `@` 或含空白）、收件人或主题含 CR / LF（头注入）、
+        `body_format` 非法、主题或正文超长。
+      operationId: submitMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitMessageRequest"
+      responses:
+        "200":
+          description: 已受理；响应体给出该邮件的 ID 与初始状态。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitMessageResponse"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /v1/messages/{id}:
+    get:
+      tags: [messages]
+      summary: 查询一封邮件的当前状态
+      description: |
+        状态沿「已提交 → 审查中 → 投递中 → 已发出 / 发送失败」**单调推进**
+        （拒审是从「审查中」分出的终局），不出现倒退；调用方可据此轮询。
+
+        「该 ID 不存在」与「该邮件还没到某一步」都返回 200：
+        前者是 `found: false`，后者是 `found: true` 且尚未发生的时刻为 `null`。
+        **不得用 404 之类的状态码区分业务语义。**
+      operationId: getMessage
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: 查询成功；`found` 显式标识该 ID 是否存在。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageStatusResponse"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /v1/messages/{id}/replies:
+    get:
+      tags: [messages]
+      summary: 查询一封邮件的全部回复
+      description: |
+        按到达时间**升序**返回，排序键固定为 `received_at ASC, id ASC`；
+        重复查询返回相同的全集与相同的顺序。
+
+        回复数量无上限，因此必须**游标翻页**（keyset）：把上一页响应里的 `next_cursor`
+        原样作为本页的 `after` 传入，`next_cursor` 为 `null` 表示已取完。
+        **不用 `limit` / `offset`**：新回复到达会让偏移窗口漂移，与「重复查询得到相同全集」冲突。
+
+        「该 ID 不存在」返回 200 + `found: false` + 空 `replies`；
+        「存在但尚无回复」返回 200 + `found: true` + 空 `replies`——**后者是正常状态，不是错误**。
+      operationId: listReplies
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+        - name: limit
+          in: query
+          required: false
+          description: 本页最多返回多少条回复。缺省与上限均取服务配置 `REPLIES_PAGE_SIZE`。
+          schema:
+            type: integer
+            minimum: 1
+        - name: after
+          in: query
+          required: false
+          description: |
+            上一页响应中的 `next_cursor` 原样传入；缺省表示从第一页开始。
+            格式为 `<received_at>,<id>`，其中时刻是 UTC 的 RFC 3339 六位小数 + `Z`。
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      responses:
+        "200":
+          description: 查询成功；`found` 显式标识该 ID 是否存在，`replies` 可为空集合。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepliesPageResponse"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: 健康检查
+      description: |
+        语义是**进程可用**：HTTP 可达 + 一次轻量数据库探测。
+        **不表达五条后台任务是否在跑**——流是否推进靠日志与独立探针。
+      operationId: healthz
+      responses:
+        "200":
+          description: 进程可用。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+components:
+  parameters:
+    MessageId:
+      name: id
+      in: path
+      required: true
+      description: 出站邮件 ID（提交响应里返回的 UUIDv4）。格式非法时返回 422。
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    ValidationFailed:
+      description: |
+        请求本身不合法（422）。本项目**不固定其响应体形状**——它由实现框架生成，
+        以实际实现为准，因此不在此处声明字段，避免与实现产生第二份说法。
+      content:
+        application/json:
+          schema: {}
+
+  schemas:
+    SubmitMessageRequest:
+      type: object
+      additionalProperties: true # 未知字段一律忽略、不报错（包含调用方试图指定发件人的字段）
+      required: [recipient, subject, body]
+      properties:
+        recipient:
+          type: string
+          minLength: 1
+          pattern: '^[^@\s,]+@[^@\s,]+$'
+          description: 单个收件人地址。数组或逗号分隔的多地址一律 422；不得含 CR / LF。
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: 邮件主题。长度上限由配置项 `MAX_SUBJECT_CHARS` 决定（单位是**字符**）。
+        body:
+          type: string
+          minLength: 1
+          description: |
+            邮件正文。长度上限由配置项 `MAX_BODY_BYTES` 决定（单位是**字节**，默认 1 MiB）。
+            字节数约束无法用 JSON Schema 表达，由 API 层按该配置校验。
+        body_format:
+          allOf:
+            - $ref: "#/components/schemas/BodyFormat"
+          default: text
+
+    BodyFormat:
+      type: string
+      enum: [text, html]
+      description: 正文格式：`text` 纯文本（缺省）、`html` HTML。
+
+    MessageState:
+      type: string
+      enum: [submitted, reviewing, rejected, sending, sent, failed]
+      description: |
+        出站邮件的状态，六种取值**库内与对外同一套**：
+          * 已提交 `submitted` / 审查中 `reviewing`：邮件在待审表，尚未过审；
+          * 拒审 `rejected`：审查判定不通过或审查环节出错用尽重试；
+          * 投递中 `sending`：已过审、首次待发或投递失败后的重试等待；
+          * 已发出 `sent` / 发送失败 `failed`：终态。
+        各状态的中文名见根级 `x-state-labels`。
+
+    SubmitMessageResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          $ref: "#/components/schemas/MessageId"
+        status:
+          allOf:
+            - $ref: "#/components/schemas/MessageState"
+          description: 提交成功时恒为 `submitted`。
+
+    MessageId:
+      type: string
+      format: uuid
+      description: 出站邮件的对外 ID，即库中主键（UUIDv4），不另设一套对外标识。
+
+    MessageStatusResponse:
+      type: object
+      required: [id, found, status, created_at, sent_at, reviewed_at]
+      properties:
+        id:
+          $ref: "#/components/schemas/MessageId"
+        found:
+          type: boolean
+          description: |
+            该 ID 是否存在。**「不存在」不是错误**：此时 `found: false`、`status` 为 `null`。
+            它与「存在但还没到某一步」的区别靠本字段，不靠 HTTP 状态码。
+        status:
+          oneOf:
+            - $ref: "#/components/schemas/MessageState"
+            - type: "null"
+          description: 该邮件当前状态；`found` 为 `false` 时为 `null`。
+        created_at:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+          description: 本行产生时刻（提交时刻）；保留期自它起算。
+        sent_at:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+          description: 投递被接受的时刻；尚未发出时为 `null`（退信到达后仍保留、不清空）。
+        reviewed_at:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+          description: 审查结束时刻；尚未过审时为 `null`。
+
+    RepliesPageResponse:
+      type: object
+      required: [id, found, replies, next_cursor]
+      properties:
+        id:
+          $ref: "#/components/schemas/MessageId"
+        found:
+          type: boolean
+          description: 该 ID 是否存在；不存在时为 `false` 且 `replies` 为空集合。
+        replies:
+          type: array
+          description: 本页回复，按 `received_at ASC, id ASC` 排序。空集合是正常结果。
+          items:
+            $ref: "#/components/schemas/Reply"
+        next_cursor:
+          type: [string, "null"]
+          description: |
+            下一页的游标；为 `null` 表示已取完（`replies` 为空集合时同为 `null`）。
+            客户端只需把它原样回传给 `after`，不需要理解其内容。
+
+    Reply:
+      type: object
+      required: [id, subject, body, body_format, received_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 该回复在库中的主键，也是它的稳定标识。
+        subject:
+          type: string
+          description: 回复的主题；缺失时为空串。
+        body:
+          type: string
+          description: 回复的正文（优先取纯文本部件，没有则取 HTML 部件）。
+        body_format:
+          $ref: "#/components/schemas/BodyFormat"
+        received_at:
+          $ref: "#/components/schemas/Timestamp"
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: |
+        UTC 的 RFC 3339 字符串，**固定六位小数并以 `Z` 结尾**（例如 `2030-01-01T00:00:00.000000Z`）。
+        库中对应的列类型为 `timestamptz`；调用方不需要处理本地时区或可变的小数位数。
+
+    HealthResponse:
+      type: object
+      required: [status, app_env, version]
+      properties:
+        status:
+          type: string
+          const: ok
+        app_env:
+          type: string
+          description: 运行环境标识（`dev` / `test` / `prod`）。
+        version:
+          type: string
+          description: 服务版本号，与 `pyproject.toml` 的 `[project] version` 同源。

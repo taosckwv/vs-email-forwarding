@@ -14,7 +14,7 @@
                        ┌────────────┴────────────┐
                     通过                      不通过 / 出错
                        ▼                          ▼
-              [邮件表 queued] ─流② 发信─▶ SMTP   [拒审表]
+              [邮件表 sending] ─流② 发信─▶ SMTP   [拒审表]
                                             │
                       收件人回复 ──▶ 专用回复邮箱
                                             │
@@ -34,7 +34,7 @@
 ### 本设计的不变量
 | 不变量 | 细节在哪 |
 |---|---|
-| 库中任何时刻都不存在中间态 | §2.3 状态机 |
+| 库中任何时刻都不存在需要回收的中间态 | §2.3 状态机 |
 | 数据库事务不跨越网络调用 | §3 流水线（认领与事务边界） |
 | 入站幂等由「游标 + 唯一约束」共同保证，不以 `Message-ID` 作判据 | §2.2 约束与索引、§3.4 流③ |
 | 错误列不落任何自由文本 | §2.4 重试与错误列 |
@@ -96,7 +96,7 @@
 |---|---|---|
 | `id` | `uuid` | 与待审行同值 |
 | `direction` | 文本 + `CHECK`：`outbound` / `inbound` | 区分出站邮件与入站回复 |
-| `status` | 文本 + `CHECK`：`queued` / `sent` / `failed` / `received` | 该行的状态取值；合法迁移见 §2.3，取值含义见下面的枚举表 |
+| `status` | 文本 + `CHECK`：`sending` / `sent` / `failed` / `received` | 该行的状态取值；合法迁移见 §2.3，取值含义见下面的枚举表 |
 | `message_id` | 文本 | 仅出站行：服务生成的出站 `Message-ID`，全局唯一；入站回复行该列为 NULL |
 | `parent_id` | `uuid` | 仅入站行：自引用外键指向被回复的出站行，级联删除 |
 | `recipient` | 文本，NOT NULL | 收件人地址；库中只存单个地址 |
@@ -146,7 +146,10 @@
 |---|---|---|---|
 | `direction` | `outbound` | 出站邮件：调用方提交、经本服务发给收件人的邮件 | `pending_messages`、`messages`、`rejected_messages` |
 | `direction` | `inbound` | 入站回复：从专用回复邮箱拉回、关联回某封出站邮件的用户回复 | `pending_messages`、`messages`、`rejected_messages` |
-| `messages.status` | `queued` | 出站行的初始态，同时覆盖「首次待发」与「重试等待」 | `messages` 出站行 |
+| `status` | `submitted` | 已提交：待审行且 `attempt_count = 0`（尚未被认领过） | `pending_messages` |
+| `status` | `reviewing` | 审查中：待审行且 `attempt_count > 0`（含审查失败的退避等待） | `pending_messages` |
+| `status` | `rejected` | 拒审：审查判定不通过或审查环节出错用尽重试 | `rejected_messages` |
+| `messages.status` | `sending` | 投递中：出站行的初始态，同时覆盖「首次待发」与「重试等待」 | `messages` 出站行 |
 | `messages.status` | `sent` | 投递已被接受 | `messages` 出站行 |
 | `messages.status` | `failed` | 投递终态失败；退信到达后也从 `sent` 置为 `failed` | `messages` 出站行 |
 | `messages.status` | `received` | 入站回复行，写入即终态 | `messages` 入站行 |
@@ -160,6 +163,17 @@
 | `rejected_messages.source` | `review_incomplete` | 第 4 次尝试已被认领、结果未提交（崩溃窗口）的行由收割支推进终态 | `rejected_messages` |
 
 这些取值在库里以文本存储，由 `CHECK` 约束保证合法，不使用 PostgreSQL 原生 `ENUM`。
+
+**状态取值只有这一套，库内与对外完全同名同义**（`submitted` / `reviewing` / `rejected` / `sending` / `sent` / `failed`），不存在「库内四态 → 对外六态」的映射层；`received` 是入站回复行的终态，不属于出站状态机。**六态按物理落点拆分存储**，`status` 列不集中在一张表上：
+
+| 状态 | 物理落点与判据 |
+|---|---|
+| `submitted` | `pending_messages` 有该行且 `attempt_count = 0` |
+| `reviewing` | `pending_messages` 有该行且 `attempt_count > 0`（含审查失败的退避等待期间） |
+| `rejected` | `rejected_messages` 有该 ID 的行 |
+| `sending` / `sent` / `failed` | `messages` 出站行的 `status` 列取值 |
+
+拆成三张表的理由是隐私与队列语义，不是状态语义：`pending_messages` 过审即删行（纯队列，不随邮件量增长）、`rejected_messages` 对**出站**拒审不保留主题与正文（`§2.1`）。把六态塞进同一张表就必须让拒审行跳过内容列的 `NOT NULL`，那正是拆表要避免的。
 
 ### 2.2 约束与索引
 | 约束 / 索引 | 落点 | 作用 |
@@ -184,20 +198,21 @@
 
 ### 2.3 状态机
 ```text
- queued ──投递被接受──▶ sent ──退信到达──▶ failed
-    │                                        ▲
-    └─────────投递终态失败 / 重试用尽────────┘
+ submitted ──开始审查──▶ reviewing ──过审──▶ sending ──投递被接受──▶ sent ──退信到达──▶ failed
+      │                      │                  │                                        ▲
+      │                      └──判定拒 / 出错──▶ rejected                            │
+      │                                         └──投递终态失败 / 重试用尽────────────┘
 
  received：入站回复行，写入即终态，不迁移
- rejected_messages 不在这个状态机里
 ```
 
-出站行的合法迁移只有 `queued → sent`、`queued → failed`、`sent → failed`；入站行只有 `received`，不迁移。
+出站行的合法迁移只有 `sending → sent`、`sending → failed`、`sent → failed`；入站行只有 `received`，不迁移。
 
-**库内状态仍是四个取值；对外状态词汇有六种**——「投递中」（`sending`）不是新的库内枚举值，而是 `messages.status = queued` 的对外表达，涵盖「已过审、首次待发」与「投递失败后的重试等待」两种情形。这样对外状态可以**单调推进**（已提交 → 审查中 → 投递中 → 已发出 / 发送失败，拒审是从「审查中」分出的终局），而库内仍不需要任何需要回收的中间态。迁移合法性由**带谓词的条件 UPDATE** 保证（只允许声明的起点，`rowcount = 0` 按幂等忽略），不引入数据库触发器（见 §6「状态与重试」）。
+**出站状态机就是这六态，库内与对外同一套取值，不存在映射层。**「投递中」（`sending`）是 `messages` 出站行的**真实状态值**，涵盖「已过审、首次待发」与「投递失败后的重试等待」两种情形；`submitted` / `reviewing` / `rejected` 的物理落点见 §2.1 的落点表。状态因此**单调推进**（已提交 → 审查中 → 投递中 → 已发出 / 发送失败，拒审是从「审查中」分出的终局），调用方不必处理状态倒退。迁移合法性由**带谓词的条件 UPDATE** 保证（只允许声明的起点，`rowcount = 0` 按幂等忽略），不引入数据库触发器（见 §6「状态与重试」）。
 
-- `rejected_messages` 里的行表示审查判定不通过或审查环节出错，对外终局都是「拒审」，由 `source` 列区分来源。退避完全由 `attempt_count` 与 `next_attempt_at` 表达，不引入「发送中」「重试中」这类中间态。
-- 因为任何时刻都不存在卡在中间态的行，进程重启后的恢复只依赖状态字段与 `next_attempt_at`，不需要额外的超时回收机制。由此带来的「重复投递窗口」这一条代价，完整登记在 §3（认领与事务边界），此处不复述。
+- **`sending` 是显式等待态，不是「中间态」**：「中间态」指的是「已认领、结果未提交」那种外部不可观测且**需要超时回收**的状态，本设计仍然一个都没有。`sending` 相反：它是**已提交的等待事实**（等下一次认领），崩溃恢复照旧只看状态字段与 `next_attempt_at`，不需要任何回收机制；这也正是它必须落库、不能由 `next_attempt_at` 或 `sent_at IS NULL` 推断出来的原因——`sent_at IS NULL` 同时涵盖 `submitted` / `reviewing` 与 `failed`（从未被接受），推断不出「已过审」。
+- `rejected_messages` 里的行表示审查判定不通过或审查环节出错，对外终局都是「拒审」，由 `source` 列区分来源。退避完全由 `attempt_count` 与 `next_attempt_at` 表达，不引入「发送中」「重试中」这类需要回收的中间态。
+- 因为任何时刻都不存在需要回收的中间态，进程重启后的恢复只依赖状态字段与 `next_attempt_at`，不需要额外的超时回收机制。由此带来的「重复投递窗口」这一条代价，完整登记在 §3（认领与事务边界），此处不复述。
 
 ### 2.4 重试与错误列
 `pending_messages` 与 `messages` 共用同一套重试列：`attempt_count`、`next_attempt_at`（建行即等于当前时刻，供抢占查询直接用）、`last_error_class`（文本 + `CHECK`：`permanent` / `transient` / `internal`，可为空）；`last_smtp_code`（整型，可为空）只在 `messages` 上有意义。
@@ -237,9 +252,9 @@
 - ② 调用（事务外）：执行审查 / SMTP 投递（收割行跳过此步）。单次调用受 `SMTP_TIMEOUT_SECONDS` / `IMAP_TIMEOUT_SECONDS` / `REVIEW_TIMEOUT_SECONDS` 约束（默认各 10 秒，见 §7 配置项清单），`FR-15` 的 3 分钟由这几个上界与退避表共同推出。
 - ③ 结果（第二个事务）：写目标行 + 删待审行，只写 `status` / `last_error_class` / `last_smtp_code` / `sent_at` / `received_at` / `reviewed_at`；目标行**建行时**把 `attempt_count` 与 `next_attempt_at` 重置为 `0` 与 `now()`（§2.4）。状态写入一律**带谓词的条件 UPDATE**（只允许 §2.3 声明的起点），`rowcount = 0` 或撞唯一键 / 主键按幂等忽略（视为「这一封已经处理过」），不报错、不重复写。
 - 重试算术：「最多 3 次」指**最多 3 次重试**，即首次尝试 + 3 次重试 = 最多 4 次尝试，15s / 30s / 60s 三档退避全部用到。
-- 结果口径：投递成功 → `sent` + `sent_at`；失败且 `attempt_count` 已达 4 → 置 `failed`（终态）；失败但未达上限 → `status` 保持 `queued` 不动，退避由阶段① 写好的 `next_attempt_at` 承担。
+- 结果口径：投递成功 → `sent` + `sent_at`；失败且 `attempt_count` 已达 4 → 置 `failed`（终态）；失败但未达上限 → `status` 保持 `sending` 不动，退避由阶段① 写好的 `next_attempt_at` 承担。
 - `5xx` 是例外：直接置终态 `failed`，不等上限、不再消耗剩余重试（`AC-34` 的 `attempt_count` 为 1 由此成立）。
-- 因此「进行中」由 `attempt_count` 与 `next_attempt_at` 表达，状态列仍只有四个取值；`FR-11` 的「审查中」由「待审行且 `attempt_count > 0`」兑现，不需要改动需求。
+- 因此「进行中」由 `attempt_count` 与 `next_attempt_at` 表达，状态列的取值集合与对外六态完全一致；`FR-11` 的「审查中」由「待审行且 `attempt_count > 0`」兑现，不需要改动需求。
 - 为什么这么做：单事务到底会让数据库事务跨越一次网络调用（SMTP 超时可达数十秒），期间同批的行全被锁住；且未提交的中间状态在外部不可观测，「审查中」无法兑现。
 - 代价如实登记：调用已完成、结果尚未提交时崩溃，若 `attempt_count < 4`，该行会被重新认领并重跑——审查无害，发信即重复投递一次（SMTP 可能其实已成功），与「发送中宕机再投一次」是同一个窗口；若恰是第 4 次尝试，则由收割支推进终态（不重跑、不产生第 5 次尝试），代价是这一封的最终结果可能被记为失败而 SMTP 其实已经成功。
 
@@ -251,23 +266,23 @@
 ### 3.2 流① 审查出站
 - 认领：`pending_messages` 中 `direction = outbound`、`attempt_count <= 4` 且 `next_attempt_at <= now()` 的行；`attempt_count < 4` 时按 §3 阶段① 递增并推退避，`attempt_count = 4` 时走收割支（不调用审查，直接置终态）。
 - 调用：事务外调用审查接口（契约见 §4.2，`FR-3`）。
-- 落库：同一事务内依次「写入目标行 → 删除待审行」，结果事务**不写** `attempt_count` 与 `next_attempt_at`（目标行是 `messages` 时，**建行**即把这两列写成 `0` 与 `now()`，§2.4）。过审 → `messages` 一行 `queued`；判定拒或出错用尽重试 → `rejected_messages` 一行（`source` 记 `review_rejected` / `review_error`）；收割支 → 同样写 `rejected_messages`，`source = review_incomplete`。目标行记 `reviewed_at`，`created_at` 原样搬运、保持为原始提交时刻，跨表 ID 同值。撞唯一键 / 主键时视为「这一封已经处理过」：只删待审行，不重复写目标行。
+- 落库：同一事务内依次「写入目标行 → 删除待审行」，结果事务**不写** `attempt_count` 与 `next_attempt_at`（目标行是 `messages` 时，**建行**即把这两列写成 `0` 与 `now()`，§2.4）。过审 → `messages` 一行 `sending`；判定拒或出错用尽重试 → `rejected_messages` 一行（`source` 记 `review_rejected` / `review_error`）；收割支 → 同样写 `rejected_messages`，`source = review_incomplete`。目标行记 `reviewed_at`，`created_at` 原样搬运、保持为原始提交时刻，跨表 ID 同值。撞唯一键 / 主键时视为「这一封已经处理过」：只删待审行，不重复写目标行。
 - 为什么这么做：待审表因此只承载在审队列，不随邮件量增长，也不需要单独的清理策略（清理只需覆盖邮件表与拒审表）。
 - 审查「判定不通过」与「环节出错（异常 / 超时）」两条路径都移入 `rejected_messages`，由该表的 `source` 列区分来源，而调用方从 API 看到的对外终局都是「拒审」，于是待审表仍是纯队列：不需要 `status` 列，也不需要第二套清理逻辑。
 - 审查出错用尽重试后不置 `failed`：`failed` 在 `FR-5` / `US-4` 里指投递失败，用它表达审查器故障会把系统故障误报成邮件系统故障，而这封邮件根本没到 SMTP。
 
 ### 3.3 流② 发信
-- 认领：`messages` 中 `direction = outbound`、`status = queued`、`attempt_count <= 4` 且 `next_attempt_at <= now()` 的行（`FR-4`）；`attempt_count = 4` 时走收割支（不发起 SMTP，直接置终态 `failed`）。
+- 认领：`messages` 中 `direction = outbound`、`status = sending`、`attempt_count <= 4` 且 `next_attempt_at <= now()` 的行（`FR-4`）；`attempt_count = 4` 时走收割支（不发起 SMTP，直接置终态 `failed`）。
 - 调用：SMTP 直连（企业邮箱 / 自建 MTA），用 Python 标准库 `smtplib` 并通过 `asyncio.to_thread` 调用（与 IMAP 侧同构），不新增运行时依赖。主机、端口、账号、口令、是否 STARTTLS 等参数全部来自 `.env`（见 §4.5）。
 - 落库：结果事务只写 `status` / `last_error_class` / `last_smtp_code` / `sent_at`，**不写** `attempt_count` 与 `next_attempt_at`；状态写入一律**带谓词**（只允许 §2.3 声明的起点），`rowcount = 0` 按幂等忽略。
-- 成功 → `status = sent` 并写 `sent_at`；失败 → 写 `last_error_class` 与 `last_smtp_code`：`attempt_count` 已达 4 则置终态 `failed`，未达上限则 `status` 保持 `queued`（退避由认领时写好的 `next_attempt_at` 承担）。
+- 成功 → `status = sent` 并写 `sent_at`；失败 → 写 `last_error_class` 与 `last_smtp_code`：`attempt_count` 已达 4 则置终态 `failed`，未达上限则 `status` 保持 `sending`（退避由认领时写好的 `next_attempt_at` 承担）。
 
 | 情形 | 处置 |
 |---|---|
 | `5xx` | 计为 `permanent`，直接置终态 `failed`，不再消耗剩余重试次数（`AC-34`） |
-| `4xx` 与连接 / 超时类故障 | 计为 `transient`；未达 4 次尝试时保持 `queued` 等下一轮认领，已达 4 次则置终态 `failed` |
+| `4xx` 与连接 / 超时类故障 | 计为 `transient`；未达 4 次尝试时保持 `sending` 等下一轮认领，已达 4 次则置终态 `failed` |
 | 进入终态后 | 不做任何通知；`NFR-3` 与 `spec.md` §7 已定不做回调推送，调用方靠轮询 `GET /v1/messages/{id}` 得知终态 |
-| 退信到达 | **只作用于已发出的行**（`sent_at` 非空）：置 `failed`；`last_error_class` 按 DSN 的 `Status` 映射（`5.x.x` → `permanent`、`4.x.x` → `transient`）；`last_smtp_code` 留空（本次没有 SMTP 交互）、`attempt_count` 不变、`sent_at` 保留不清空。**`sent_at` 为空的行（`queued`）收到退信不置状态**：按受控原因 `dsn_target_not_sent` 计数丢弃、不打断重试——退信的前提是某台 MTA 已接受该邮件，`queued` 行收到退信只可能来自「SMTP 已接受、结果事务未提交」的窗口，此时继续重试比钉死更正确 |
+| 退信到达 | **只作用于已发出的行**（`sent_at` 非空）：置 `failed`；`last_error_class` 按 DSN 的 `Status` 映射（`5.x.x` → `permanent`、`4.x.x` → `transient`）；`last_smtp_code` 留空（本次没有 SMTP 交互）、`attempt_count` 不变、`sent_at` 保留不清空。**`sent_at` 为空的行（`sending`）收到退信不置状态**：按受控原因 `dsn_target_not_sent` 计数丢弃、不打断重试——退信的前提是某台 MTA 已接受该邮件，`sending` 行收到退信只可能来自「SMTP 已接受、结果事务未提交」的窗口，此时继续重试比钉死更正确 |
 
 - 失败分类的判据就是 SMTP 标准本身给 4xx / 5xx 的分工，不需要维护「哪些码算确定性拒绝」的猜测量表（`FR-5` 已声明一期只区分「可重试 / 不可重试」两类）。
 - 退信到达后，「曾经被接受、事后被退信」＝ `sent_at` 非空 + `status = failed`，「从未被接受」＝ `sent_at` 为空；这段历史是事实的推论，不需要专门的历史列（`bounced_at` 因此不引入，见 §6「分拣与丢弃」），也不新增 API 字段（`AC-17` 本来就要求响应携带时间字段）。这条推论成立的前提正是「退信只作用于 `sent_at` 非空的行」。代价登记：退信到达时刻不入库，无法统计退信延迟。
@@ -328,35 +343,16 @@
 
 ## 4. 集成契约
 ### 4.1 对外 API
-| 方法与路径 | 用途 | 返回 |
-|---|---|---|
-| `POST /v1/messages` | 提交一封邮件 | 2xx，响应含该邮件 ID（`AC-1`） |
-| `GET /v1/messages/{id}` | 查询该邮件当前状态 | 状态取值与时间字段 |
-| `GET /v1/messages/{id}/replies` | 查询该邮件的全部回复 | 按到达时间升序的回复集合，可为空集合 |
-| `GET /healthz` | 健康检查 | 200（`FR-14`）；语义是**进程可用**（HTTP 可达 + 一次轻量数据库探测），**不表达五条后台流是否在跑**——`AC-20` 的口径不变，流是否推进靠日志与独立探针 |
 
-请求字段：`recipient`（单个收件人地址，必填）、`subject`（必填）、`body`（必填）、`body_format`（`text` / `html`，默认 `text`）。一期不接受附件、抄送密送与自定义邮件头（`FR-1`，见 `spec.md` §7）。
+**端点的路径、请求与响应字段、类型、必填、取值枚举与取值约束、错误响应，唯一真源是 `docs/api-contract.yaml`（OpenAPI 3.1）**——本节不重复任何字段定义，只写设计口径与取舍理由。四个端点的用途：`POST /v1/messages` 提交（`AC-1`）、`GET /v1/messages/{id}` 查状态、`GET /v1/messages/{id}/replies` 查回复（可为空集合）、`GET /healthz` 健康检查（`FR-14`）。
 
-响应字段：
-
-| 端点 | 响应体 |
-|---|---|
-| `POST /v1/messages` | `{id, status}`：`id` 为 UUIDv4 字符串，`status` 首值为 `submitted` |
-| `GET /v1/messages/{id}` | `{id, found, status, created_at, sent_at, reviewed_at}`：`found` 为布尔；尚未发生的时刻为 `null`（`AC-17`） |
-| `GET /v1/messages/{id}/replies` | `{id, found, replies: [{id, subject, body, body_format, received_at}], next_cursor}`：`?limit=&after=` 做 keyset 翻页，`next_cursor` 为 `null` 表示已取完 |
-
-状态取值按 `FR-11` 区分**六种**（五种加「投递中」），与库中的落点一一对应；判定按下表顺序自上而下：
-
-| 顺序 | 对外状态 | 标识符 | 落点与判据 |
-|---|---|---|---|
-| 1 | 已提交 | `submitted` | `pending_messages` 有该行且 `attempt_count = 0` |
-| 2 | 审查中 | `reviewing` | `pending_messages` 有该行且 `attempt_count > 0` |
-| 3 | 拒审 | `rejected` | `rejected_messages` 有该 ID 的行（`AC-18`、`FR-12`） |
-| 4 | 投递中 | `sending` | `messages.status = queued`（已过审、首次待发或重试等待） |
-| 5 | 已发出 | `sent` | `messages.status = sent` |
-| 6 | 发送失败 | `failed` | `messages.status = failed` |
-
-六种取值一次判定的命中唯一，并沿「已提交 → 审查中 → 投递中 → 已发出 / 发送失败」**单调推进**（拒审是从「审查中」分出的终局），调用方不必处理状态倒退。判定在**单个事务快照**内完成（三次查询同一快照），避免读到跨表搬运的中间组合而误报 `found: false`。库内状态仍只有四个取值：`sending` 是 `messages.status = queued` 的对外表达，不是库里的枚举值（§2.3）。
+- **`/healthz` 的语义是「进程可用」**（HTTP 可达 + 一次轻量数据库探测），**不表达五条后台流是否在跑**——`AC-20` 的口径不变，流是否推进靠日志与独立探针。
+- **HTTP 状态码只表达请求本身是否成功，不承载业务语义**：「该 ID 不存在」与「该 ID 存在但尚无回复」都返回 200，靠响应体的 `found` 区分。不用 404 的理由是这两种情形对调用方都不是错误——前者可能是提交后尚未提交事务，后者是**正常状态**（用户还没回）；用状态码区分会迫使调用方把「还没回」当异常处理。
+- **回复查询用 keyset 游标，不用 `limit` / `offset`**：新回复到达会让偏移窗口整体漂移，导致翻页时漏读或重读，与 `US-3` / `AC-16`「重复执行且结果稳定」直接冲突；keyset 的排序键固定为 `received_at ASC, id ASC`，游标对客户端不透明。
+- **时间字段固定为 UTC RFC 3339 六位小数 + `Z`**（`NFR-7`、`AC-17`）：库中是 `timestamptz`，序列化时先转 UTC 再补零到六位，调用方不必处理本地时区或可变的小数位数。
+- **状态取值只有一套六态，库内与对外同名同义**（标识符、中文名与各状态的物理落点见 §2.1 落点表与 §2.3）；状态机沿「已提交 → 审查中 → 投递中 → 已发出 / 发送失败」**单调推进**（拒审是从「审查中」分出的终局），调用方不必处理状态倒退。
+- **六态判定在单个事务快照内完成**（三次查询同一快照）：否则会读到「跨表搬运中」的中间组合（待审行已删、目标行未可见），把一封正常邮件误报成 `found: false`。
+- **一期不做 API 鉴权**：位置在 `api/v1/dependencies.py` 预留，接真实校验时不重排路由结构（`open-questions.md` F3）。
 
 - 审查失败的退避等待期间（`attempt_count > 0`、`next_attempt_at` 在未来）对外也报「审查中」。
 - HTTP 状态码只表达**请求本身是否成功**，不承载业务含义。一律 422 且不落库：缺少收件人（`AC-2`）、携带两个收件人（`AC-3`）、`recipient` 给成列表或逗号分隔的多地址、地址非法（无 `@` 或含空白）、`recipient` 或 `subject` 含 CR/LF（头注入，`docs/security.md` 已列为安全问题）。
@@ -464,11 +460,11 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 - 用 PostgreSQL 原生 `ENUM` 类型承载受控枚举 —— 改取值要 `ALTER TYPE`，Alembic autogenerate 对 enum 支持差；取值集合小且稳定，`CHECK` 约束已足够。
 
 ### 状态与重试
-- 引入 `sending` / `retrying` 等中间态 —— 崩溃后卡在中间态的行必须靠额外的超时回收机制兜回，否则该邮件永久卡死；换来的是可读性，而恢复口径本来就已经是「状态字段 + `next_attempt_at`」。
+- 引入「发送中 / 重试中」这类**需要回收的中间态**（已认领、结果未提交、必须靠超时兜回） —— 崩溃后卡在这种状态的行必须靠额外的超时回收机制兜回，否则该邮件永久卡死；换来的是可读性，而恢复口径本来就已经是「状态字段 + `next_attempt_at`」。**注意这条否决的对象是「需要回收的中间态」，不是 `sending`**：`sending` 是已提交的显式等待态（等下一次认领），外部可观测、崩溃后由 `next_attempt_at` 决定何时被重新认领，不需要任何回收机制（结论见 §2.3）。
 - 状态列只留终态、其余用 `sent_at IS NULL` + `next_attempt_at` 推断 —— 「从未被接受」的 `failed` 行 `sent_at` 同样是 NULL，每条抢占 SQL 都要再补条件排除终态失败，同一套判断摊到多处、出错面更大。
 - 不看返回码、一律重试 3 次 —— 对「用户不存在」这类确定性失败白跑三次、最多浪费 105 秒与三次 SMTP 连接，而调用方在这段时间里看到的是「尚未失败」。
 - 维护一张「确定性拒绝」的 SMTP 码表（`550` / `551` / …）来判定永久失败 —— 等于靠猜对端实现，清单必然不完备；SMTP 本身已经用 4xx / 5xx 表达了「暂时 / 永久」的分工。
-- 新增库内状态值 `sending` / `retrying` 来表达「投递中」—— 库内状态仍只有四个取值：对外第六态「投递中」由 `messages.status = queued` **派生**，不新增需要回收的中间态；第 4 次尝试后崩溃的遗留行改由收割支推进终态，而不是靠一个中间态兜回。
+- 让「投递中」由 `messages.status = sending` **派生**、不在库内落一个显式状态 —— **已推翻**：库内与对外分两套词就要多一层映射，且 `sending` 无法由 `sent_at IS NULL` 推断（该条件同时涵盖 `submitted` / `reviewing` 与「从未被接受的 `failed`」）；库内直接落 `sending` 后，六态是同一套取值，第 4 次尝试后崩溃的遗留行仍由收割支推进终态，不靠任何中间态兜回（结论见 §2.1 落点表与 §2.3）。
 - 进入终态失败后主动通知调用方（回调 / 推送）—— 与 `NFR-3`「不做回调推送」及 `spec.md` §7「不主动回调调用方」直接冲突；调用方轮询即可。
 
 ### 事务与认领
@@ -489,7 +485,7 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 - 把入站分拣下沉进 `providers/imap`（适配器直接返回「已分拣好的」回复 / 退信 / 丢弃）—— 业务判定进了适配器，换 IMAP 客户端时要连同分拣一起重写，与「`providers/` 只放外部能力适配、不放业务状态流转」的目录职责冲突。
 - 把入站分拣放进 `db/` 仓储层（入库时判定）—— 仓储层只放 SQL 与数据访问；业务规则下沉会让纯判定无法脱离数据库单测。
 - 为退信单独加 `bounced_at` 列 —— 一期没有任何消费方会问「退信花了多久」，而「曾发出过」已经由保留的 `sent_at` 表达（`sent_at` 非空 + `status = failed` 即「发出后被退信」）；这条推论的前提是「退信只作用于 `sent_at` 非空的行」（§3.3）。
-- 让退信无条件置 `failed`（不区分该行是否已发出）—— `queued` 行收到退信只可能来自「SMTP 已接受、结果事务未提交」的窗口，无条件置终态会打断本可成功的重试，并产出 `sent_at` 为空 + `failed` 这一与「从未被接受」同形的组合；改为按 `dsn_target_not_sent` 计数丢弃（结论见 §3.3）。
+- 让退信无条件置 `failed`（不区分该行是否已发出）—— `sending` 行收到退信只可能来自「SMTP 已接受、结果事务未提交」的窗口，无条件置终态会打断本可成功的重试，并产出 `sent_at` 为空 + `failed` 这一与「从未被接受」同形的组合；改为按 `dsn_target_not_sent` 计数丢弃（结论见 §3.3）。
 - 把退信本身作为一条独立记录入库供调用方查询 —— 要扩展查询契约（`GET .../replies` 是否包含退信），而 DSN 会内嵌原始邮件全文，入库就必须再决定存什么，与 `rejected_messages` 上「不存原文」的取向相抵。
 - 把丢弃的入站邮件明细落库供排查 —— 与「关联不上的入站邮件一律不入库」的结论冲突，等于把该结论改成「照样入库」，而明细里必然带着外部可控的头值与内容。
 - 丢弃只留一个总数、不做分类计数 —— 「用户一直没收到回复」时无法判断是「没拉回来」还是「拉回来被丢弃」，而分类计数并不越过日志红线。
@@ -536,6 +532,7 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 
 仓库其他位置：
 
+- `docs/api-contract.yaml` —— **对外 HTTP 接口契约的唯一真源**（OpenAPI 3.1）：三个端点的路径、请求与响应字段、类型、必填、取值枚举、取值约束（长度上限、地址格式、UUID 格式）与错误响应全在这份文件里。`design.md` §4.1 只保留设计口径（为什么用 keyset、为什么不用状态码区分业务语义、时间格式为什么固定六位小数）与物理落点，**不重复任何字段定义**。
 - `.env.example` —— 配置项的占位模板（清单见下表）；仓库只提交这一份；已定名但尚未落进去的那几项见下表的定名状态列。
 - `migrations/` —— Alembic 迁移入口（物理表名与字段清单已定：`pending_messages` / `messages` / `rejected_messages` / `imap_cursors`，首次迁移可以动笔）。
 
