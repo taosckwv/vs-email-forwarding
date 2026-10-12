@@ -54,7 +54,7 @@
 | 服务 | 端口 | 作用 |
 |---|---|---|
 | `postgres:17` | `127.0.0.1:5432` | 开发库 `vs_email_forwarding_dev`（测试库 `vs_email_forwarding_test` 需手工创建，命令见 `compose.dev.yaml` 末尾） |
-| `axllent/mailpit` | `1025`(SMTP) / `1143`(IMAP) / `8025`(Web UI) | 验证**完整回路**：发出去 → 被拉回来 → 关联上原邮件 |
+| `axllent/mailpit` | `1025`(SMTP) / `8025`(Web UI) / `1110`(POP3，未映射到宿主) | 流②发信侧验证：应用发出去的信被它收下并可在 Web UI 查看。**它不提供 IMAP**，流③入站回路不能用它（见 `docs/open-questions.md` D16） |
 
 Mailpit 的 Web UI：<http://127.0.0.1:8025>。
 

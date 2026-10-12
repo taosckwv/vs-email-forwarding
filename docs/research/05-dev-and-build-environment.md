@@ -75,7 +75,7 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 
 #### 开发依赖（本机现在起得来）
 
-- 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 `axllent/mailpit:v1.31.3`。Mailpit 同时提供 SMTP / IMAP / Web UI，用于验证「发出去 → 被拉回来 → 关联上原邮件」的完整回路；两者都**只绑回环**。
+- 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 `axllent/mailpit:v1.31.3`；两者都**只绑回环**。Mailpit 提供 SMTP（1025）与 Web UI（8025），用于流②的发信侧验证；**它不提供 IMAP**（见下），所以流③的入站回路在本地跑不通。
 - 一键起依赖：`scripts/dev-up.sh`（Linux）。应用本体**不在容器里跑**，用 `uv run uvicorn vs_email_forwarding.main:app --reload` 在宿主机跑。
 - **两个镜像均已在开发机上实测拉取成功**（`postgres:17` 与 `axllent/mailpit:v1.31.3`）。
 - 交付链需要的三个基础镜像**也都能在本机拉到**：`python:3.13-slim-trixie`（经 mirror）、`ghcr.io/astral-sh/uv:0.12.20`（直连 ghcr.io）、`postgres:17`（经 mirror）。**但这不等于「本机应承担构建」**——那条属未定项，见下。
@@ -170,7 +170,7 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 
 详见 `docs/open-questions.md`：
 
-- D16 用哪个提供 IMAP 的本地服务补上入站回路（Mailpit 已采用，但它不提供 IMAP）
+- D16 用哪个提供 IMAP 的本地服务补上入站回路（Mailpit 不提供 IMAP）
 - D13 基础镜像 tar 由哪台机器、用什么工具产出
 - Mailpit 的 `MP_*` 环境变量名与 IMAP 能力**已在本机对容器实跑核对完毕**（见「实测证据」），不再是未定项。
 

@@ -4,7 +4,10 @@
 
 ## 依赖怎么起
 
-集成测试需要**真实 PostgreSQL** 与 **Mailpit**（本地 SMTP/IMAP 回路验证）：
+集成测试需要**真实 PostgreSQL** 与 **Mailpit**（本地 SMTP 侧的发信验证）。
+
+> **流③的入站用例目前跑不了**：Mailpit 实测不提供 IMAP（只有 SMTP / Web UI / POP3），
+> 本地没有可用的 IMAP 服务。缺口与候选方案见 `docs/open-questions.md` D16。
 
 ```bash
 bash scripts/dev-up.sh                            # 开发机（Linux）
