@@ -87,7 +87,8 @@ DSH 会话与 bash 工具**以 root 运行**，所有者已明确要求**项目�
 - **不要给 `scripts/check.sh` 加 `2>&1` 或任何流重定向**：多一层重定向只会掩盖真实退出码，`AGENTS.md` §3 已把它写成脚本约定。
 - **pre-commit 钩子已安装**（2026-10）：`.git/hooks/pre-commit` 与 `.git/hooks/commit-msg` 都在，钩子环境已缓存（**缓存按 HOME 分家**：root 用 `/root/.cache/pre-commit/`，从 `/home/tao/.cache/pre-commit/` 整目录拷过去即可离线使用），**日常提交不再需要网络**。pre-commit 只装在项目 `.venv` 里，用 `uv run pre-commit ...` 调用。
 - **`github.com:443` 在本机是「时通时断」**：装钩子环境时必须从 GitHub 克隆三个 hook 仓库（`pre-commit-hooks` / `ruff-pre-commit` / `commitizen`），实测一次 `fetch` 被拒（connection refused）、紧接着重试即成功，且同一次会话里 root 侧 `curl https://github.com` 曾 15s 超时。**结论：不要依据一次失败判定 GitHub 不可用，隔几分钟重试即可**；旧记录「github.com:443 直连被拒」与据此得出的「本机跑不了 pre-commit」均不成立。
-- **git 2.27 下 `pre-commit run --all-files` 用不了**：该路径调 `git ls-files -z --deduplicate`，而这个选项要 git ≥ 2.31（本机是 CentOS 8 `AppStream` 的 **git 2.27.0**，vault 里也没有更新的非 module 包）。**日常提交不受影响**——提交走的是 `git diff --staged`，实测 commit 钩子与 commit-msg 钩子都正常拦下违规。要全量检查改用 `bash scripts/check.sh`（它不依赖 git 的这个选项）。
+- **git 已从源码升到 2.49.1，装在 `/usr/local`**（2026-10）：`/usr/local/bin` 在默认 PATH 里排在 `/usr/bin` 之前，所以**任何用户、任何新会话**默认就是 `/usr/local/bin/git`（实测 root 与 tao、登录 shell 都解析到它）。系统包 `git-2.27.0` **没有被卸载、文件也没被改动**（`rpm -V git` 无输出），仍留在 `/usr/bin/git` 作为后备；vault 里没有更新的 git 包，`pre-commit run --all-files` 需要的 `git ls-files --deduplicate`（需 ≥ 2.31）正是靠这次升级才可用。
+- **git ≥ 2.35 的 `dubious ownership` 限制**：仓库属主是 `tao` 而命令以 root 跑时，git 会拒绝操作（`fatal: detected dubious ownership`）。root 侧已加 `git config --global --add safe.directory '*'`（落在 `/root/.gitconfig`）。**若仓库属主改成 root，这一条就可以删掉。**
 
 #### 文件编码与换行符（硬约定，不是风格偏好）
 
@@ -109,8 +110,9 @@ DSH 会话与 bash 工具**以 root 运行**，所有者已明确要求**项目�
 - **安全与网络**：`getenforce` = `Enforcing`；firewalld `active`；`iptables v1.8.4 (nf_tables)`。
 - **`uv` 的路径**：`uv --version` → `uv 0.13.0 (x86_64-unknown-linux-gnu)`，装在 `/home/tao/.local/bin/uv`——**该目录只加在 tao 的 PATH 上，root 会话里要显式引入**。
 - **Python**：`python3 --version` → `3.13.16`（解析到 `/usr/local/bin/python3`）；`/usr/bin/python3 --version` → `3.6.8`。
+- **`pre-commit run --all-files` 实跑通过（2026-10，git 2.49.1）**：九个钩子全 `Passed`、退出码 0——**这条以前跑不了**（git 2.27 不认 `--deduplicate`），是升级 git 后的直接收益；commit-msg 侧仍由 commitizen 校验。
 - **门禁在本机实跑通过**：以 root 身份执行 `bash scripts/check.sh`，四步全绿、退出码 0（`1 passed, 1 warning`；warning 是 FastAPI/Starlette 的 `httpx` 弃用提示，属既知事项，见 `docs/open-questions.md` E2）。
-- **pre-commit 可用但钩子未装**：`uv run pre-commit --version` → `pre-commit 4.6.2`；`.git/hooks/` 下只有 sample。
+- **pre-commit 版本**：`uv run pre-commit --version` → `pre-commit 4.6.2`；钩子此前只有 sample，已按上文安装完毕。
 
 **Docker**
 
@@ -157,10 +159,11 @@ DSH 会话与 bash 工具**以 root 运行**，所有者已明确要求**项目�
 | `scripts/check.sh` | 门禁入口；四步定义与取舍见 `docs/research/03-dependencies-and-toolchain.md` |
 | `scripts/dev-up.sh` | 起开发依赖（读 `compose.dev.yaml`） |
 | `compose.dev.yaml` | 开发依赖定义：PostgreSQL + GreenMail（SMTP/IMAP/POP3），只绑回环 |
+| `/usr/local/bin/git` | git 2.49.1（源码编译到 `/usr/local`，覆盖默认解析；系统 `git-2.27.0` 仍在 `/usr/bin` 后备）——**在机器上，不在仓库里** |
 | `/etc/docker/daemon.json` | registry mirror（**在机器上，不在仓库里**） |
 | `/etc/yum.repos.d/docker-ce.repo` | docker-ce 安装源，指向 aliyun（**在机器上，不在仓库里**） |
 | `.gitattributes` | 换行符强制规则（一切文本文件 LF） |
-| `.pre-commit-config.yaml` | pre-commit 钩子定义（本机尚未 `install`） |
+| `.pre-commit-config.yaml` | pre-commit 钩子定义（钩子已 `install`，见上文） |
 | `pyproject.toml` | dev 依赖组与工具链配置；依赖清单与门禁配置的结论见 `docs/research/03-dependencies-and-toolchain.md` |
 | `deploy/` | 部署脚本与交付链的落点：新链路脚本尚未实现，其形态属未定项 |
 | `docs/research/01-delivery-and-deploy.md` | 生产服务器与交付链事实（本册不重复） |
