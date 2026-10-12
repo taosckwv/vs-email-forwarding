@@ -172,7 +172,7 @@
 
 - 入站幂等约束**`pending_messages` 与 `messages` 都要建**：只建在 `pending_messages` 上时，过审删行之后游标一旦回退就会重新插入待审行、白走一遍审查，直到写 `messages` 才撞唯一键；两处都有约束，重复的入站邮件在落 `pending_messages` 时即被拒。
 - 入站回复行上直接带 `mailbox` / `uidvalidity` / `uid` 三列，判重与插入因此是同一次插入、天然原子：宕机重跑、游标回退或并发处理都不会产生第二条记录，与「游标管效率、唯一键管同一 `UIDVALIDITY` 内的正确性」一致。
-- **`pending_messages` 不建认领索引**：它只承载在审队列、过审即删行，不随邮件量增长，小表顺序扫描可接受；真出现积压再加（否决记录见 §6「事务与认领」）。
+- **`pending_messages` 不建认领索引**：它只承载在审队列、过审即删行，不随邮件量增长，小表顺序扫描可接受；真出现积压再加（否决记录见 §7「事务与认领」）。
 
 ### 2.3 状态机
 ```text
@@ -383,7 +383,7 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 | 库 | 许可 | 用途 | 换来的好处 | 代价 |
 |---|---|---|---|---|
 | `IMAPClient` | New BSD | IMAP 客户端；同步库，入站拉取流通过 `asyncio.to_thread` 调用，不把阻塞调用放进事件循环 | 把最容易出错的那一段外包出去：IMAP 响应解析、UID 语义、多行与字面量、时区处理都由库负责，我们只做 `email` 解析与分拣——而分拣正确性正是 `AC-11` / `AC-15` 的考点 | 不带 `py.typed`（其自身的 mypy 配置就把 `imapclient.imapclient` 标为 `ignore_errors`），因此按 `docs/research/03-dependencies-and-toolchain.md` 的既定程序在 `[[tool.mypy.overrides]]` 中按 module 精确放行并留下理由，不整体关闭 mypy |
-| `asyncpg` | Apache-2.0 | 数据库驱动，配合 SQLAlchemy 异步方言（连接串形如 `postgresql+asyncpg://…`，与 `config.py` / `.env.example` 现有占位一致） | 异步访问 PostgreSQL 的标准组合 | 不带 `py.typed`——若代码需要直接引用 `asyncpg.exceptions` 区分唯一约束冲突，同样按 module 精确放行；Alembic 迁移走异步外壳（用 SQLAlchemy 的异步引擎跑迁移） |
+| `asyncpg` | Apache-2.0 | 数据库驱动，配合 SQLAlchemy 异步方言（连接串形如 `postgresql+asyncpg://…`，与 `config.py` / `.env.example` 现有占位一致） | 异步访问 PostgreSQL 的标准组合 | 不带 `py.typed`——代码直接引用 `asyncpg.exceptions` 区分唯一约束冲突时，按 `docs/research/03-dependencies-and-toolchain.md` 的既定程序在 `[[tool.mypy.overrides]]` 中按 module 精确放行并留下理由，不整体关闭 mypy；Alembic 迁移走异步外壳（用 SQLAlchemy 的异步引擎跑迁移） |
 | `SQLAlchemy` | MIT | `db/` 的 ORM 模型、引擎与会话 | 本次新增的运行时依赖，许可无 copyleft 义务 | — |
 | `Alembic` | MIT | `migrations/` 迁移 | 同上 | — |
 
@@ -391,7 +391,7 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 
 选型顺序是许可优先于类型便利：`psycopg3` 自带 `py.typed` 且同一库覆盖同步与异步（Alembic 迁移因此更省事），但许可是 LGPL-3.0-only，交付镜像时要承担 copyleft 相关义务，与本项目「私有 + MIT、避免许可摩擦」的取向冲突（许可取向见 `docs/research/06-naming-licensing-and-governance.md`）。
 
-这是两者之间唯一无法用本地纪律化解的代价，`py.typed` 带来的便利不值这一项。否决记录见 §6「依赖选型」。
+这是两者之间唯一无法用本地纪律化解的代价，`py.typed` 带来的便利不值这一项。否决记录见 §7「依赖选型」。
 
 ### 实测证据
 事实来源：各库的 PyPI 页面与仓库内的 `pyproject.toml` / `LICENSE` / `py.typed`。查得当前版本为 `IMAPClient` 4.1.0、`aioimaplib` 2.0.1、`asyncpg` 0.32.0、`psycopg` 3.3.6。
@@ -483,14 +483,14 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 `src/vs_email_forwarding/` 下：
 
 - `flows/` —— 定时任务的入口与编排：四条业务流与保留期清理流的循环与调度器（目录已建，仅有占位文件）。
-- `service/` —— 用例层：同步请求路径的业务编排（提交邮件、查询状态与回复）；目录已建，仅有占位文件。
+- `service/` —— 用例层：同步请求路径的业务编排（提交邮件、查询状态与回复），并负责把仓储交回的 ORM 对象转成 `schemas/` 的模型（§8）；目录已建，仅有占位文件。
 - `core/` —— 纯逻辑（消息 ID 生成、状态机、重试策略），不碰 I/O 与数据库（目录已建，仅有占位文件）。
-- `db/` —— `pending_messages` / `messages` / `rejected_messages` / `imap_cursors` 四张表的 ORM 模型、引擎与会话、仓储层（所有 SQL 都在这；目录已建，仅有占位文件）。
+- `db/` —— `pending_messages` / `messages` / `rejected_messages` / `imap_cursors` 四张表的 ORM 模型、引擎与会话、仓储层（所有 SQL 都在这；目录已建，仅有占位文件）；引擎与会话的生命周期见 `docs/architecture.md` §5，交给 `service/` 与 `api/` 的模型边界见 §8。
 - `providers/` —— `smtp/`、`imap/`、`review/` 适配器，各自以 `base.py` 定接口；业务流程不得直接 import 具体实现库。三层分拣落点见 §3.4。
 - `providers/review/` —— 审查供应商接口（`base.py`：中性输入对象 + `pass` / `reject` 受控枚举）与空实现的落点；必须在此标注「空实现、永远通过」（`NFR-6`）；实现由工厂函数按配置选取（见 §4.2）。
 - `providers/smtp/` 与 `providers/imap/` —— 发信适配器（`From` 取自配置、显式写入 `Reply-To`）与入站拉取适配器（拉取所用的信箱地址即 `Reply-To` 的取值来源）。
 - `api/` —— HTTP 接口层（请求校验、响应序列化、依赖注入），业务编排在 `service/`；鉴权位置预留的结论见 `docs/research/04-security-and-review.md`。
-- `config.py` —— 唯一的配置入口（pydantic-settings），四条业务流间隔字段的默认值为 10（`NFR-2`）；清理间隔、每批条数、主题与正文长度上限、被拉取信箱地址、IMAP 是否 STARTTLS 也收敛在这一层（名称已定，见下面的配置项清单；`config.py` / `.env.example` 待补齐），本层同时承载启动即校验。
+- `config.py` —— 唯一的配置入口（pydantic-settings），四条业务流间隔字段与保留期清理间隔的默认值为 10 / 3600（`NFR-2`）；每批条数、主题与正文长度上限、被拉取信箱地址、IMAP 是否 STARTTLS 也收敛在这一层（名称已定，见下面的配置项清单；`config.py` / `.env.example` 待补齐），本层同时承载启动即校验。
 
 仓库其他位置：
 
@@ -501,7 +501,7 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 | 配置项 | 用途 | 定名状态 |
 |---|---|---|
 | `POLL_REVIEW_OUTBOUND_SECONDS` / `POLL_SEND_SECONDS` / `POLL_FETCH_INBOUND_SECONDS` / `POLL_REVIEW_INBOUND_SECONDS` | 流① / 流② / 流③ / 流④ 的轮询间隔（各默认 10） | 已定（仓库已有） |
-| `POLL_CLEANUP_SECONDS` | 流⑤ 保留期清理的执行间隔（默认 3600） | 已定名，`config.py` / `.env.example` 待补齐 |
+| `POLL_CLEANUP_SECONDS` | 流⑤ 保留期清理的执行间隔（默认 3600） | 已定（仓库已有） |
 | `BATCH_SIZE` | 每批条数，五条流共用（默认 100） | 已定名，`config.py` / `.env.example` 待补齐 |
 | `MAX_SUBJECT_CHARS` | 主题长度上限，API 层校验，超限返回 422 且不落库（默认 500，单位是字符） | 已定名，`config.py` / `.env.example` 待补齐 |
 | `MAX_BODY_BYTES` | 正文长度上限，API 层校验，超限返回 422 且不落库（默认 1048576 = 1 MiB，单位是字节） | 已定名，`config.py` / `.env.example` 待补齐 |
@@ -516,5 +516,17 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 | `DATABASE_URL` | 异步驱动连接串，形如 `postgresql+asyncpg://…` | 已定（仓库已有） |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | compose 里 postgres 容器的初始化参数，须与 `DATABASE_URL` 一致 | 已定（仓库已有） |
 
-## 8. 未定项
+## 8. 会话边界与模型转换
+分层与依赖方向见 `docs/architecture.md`；本节只定「ORM 对象到哪儿为止」这一条，落点是 `db/`、`service/` 与 `api/` 的函数签名。
+
+- **`service/` 只交出 Pydantic / 中性对象**：`db/` 的 ORM 对象不出 `db/` 层——仓储函数把 ORM 行交给 `service/`，`service/` 在自身作用域内立即转换为 `schemas/` 的响应模型或中性对象，再交给 `api/`。
+- **`api/` 不依赖 `db/`**：`api/` 的函数签名里不出现会话、ORM 模型或 SQLAlchemy 类型，它只认 `schemas/` 与 `service/`（`docs/architecture.md` §2 的依赖方向由此在类型层面成立，而不只是约定）。
+- **转换落在 `service/` 而不是 `api/`**：`api/` 只做请求校验与响应序列化；`service/` 已经掌握事务边界，ORM 相关的读取（含需要访问的字段）都在它自己的会话有效期内完成，不存在「会话已关、`api/` 再去触发懒加载」的路径。
+- **`flows/` 同样不越界**：它只消费仓储返回的中性对象与自身需要的字段，不把 ORM 行传到别的层或别的 tick。
+
+### 已否决方向
+- **`service/` 直接把 ORM 对象交给 `api/`** —— `api/` 会因此依赖 `db/` 的模型类型，且 ORM 实例与会话绑定：会话一关，任何懒加载或过期字段访问都会在接口层抛出，错误位置与责任层错位。省下的那一次转换，代价是把会话生命周期泄漏到最外层。
+- **在 `db/` 仓储层直接返回 Pydantic 模型** —— `db/` 会反向依赖 `schemas/`，破坏「`db/` 不依赖任何业务层」这条硬规则，也让「`schemas/` 只被 `api/` 用」不再成立。
+
+## 9. 未定项
 本特性的未定项与全仓未定项的唯一清单都在 `docs/open-questions.md`；本文件不复述任何条目。
