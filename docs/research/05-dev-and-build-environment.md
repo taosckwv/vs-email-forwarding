@@ -79,15 +79,17 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 - 一键起依赖：`scripts/dev-up.sh`（Linux）。应用本体**不在容器里跑**，用 `uv run uvicorn vs_email_forwarding.main:app --reload` 在宿主机跑。
 - **两个镜像均已在开发机上实测拉取成功**（`postgres:17` 与 `axllent/mailpit:v1.31.3`）。
 - 交付链需要的三个基础镜像**也都能在本机拉到**：`python:3.13-slim-trixie`（经 mirror）、`ghcr.io/astral-sh/uv:0.12.20`（直连 ghcr.io）、`postgres:17`（经 mirror）。**但这不等于「本机应承担构建」**——那条属未定项，见下。
-- Mailpit 是否最终采用**仍是未定项**（见「未定项」）。
+- **Mailpit 不提供 IMAP**（这是本机实测结论，不是推测）：只有 SMTP（1025）+ Web UI（8025）+ **POP3**（1110），**上游把 IMAP 的 issue 以 `not_planned` 关闭**（证据见下）。本项目的流③按 IMAP 拉取回复，所以本地跑不通「发出去 → 被拉回来 → 关联上原邮件」这条回路——**这不是 compose 配置错，是 Mailpit 的产品边界**。该缺口登记为 `docs/open-questions.md` **D16**（`D6`「是否采用 Mailpit」由此被取代并移除）。
+- `compose.dev.yaml` 里 mailpit 服务的 `1143` 端口映射与 `MP_IMAP_*` 两个环境变量**实测无效**（Mailpit 无 IMAP 服务，变量被忽略），待 D16 拍板后一并处理。
 
 ### 本机侧的执行环境
 
 - 门禁的四步定义与取舍见 `docs/research/03-dependencies-and-toolchain.md`。
 - 本册只记**本机特有的执行前提**：`uv` 在 tao 的 PATH 上、`python3` 是 3.13、项目命令一律以 tao 跑、`.venv` 属主必须是 tao。
 - **不要给 `scripts/check.sh` 加 `2>&1` 或任何流重定向**：多一层重定向只会掩盖真实退出码，`AGENTS.md` §3 已把它写成脚本约定。
-- **pre-commit 钩子在本机尚未安装**（`pre-commit install` 没跑过）。pre-commit 只装在项目 `.venv` 里，要用 `uv run pre-commit ...` 调用。
-- **本机跑不了 pre-commit 的钩子环境**：`pre-commit run` 首次执行要 `git fetch` GitHub 上的 hook 仓库，而本机 `github.com:443` 直连被拒（`SSL_ERROR_SYSCALL` / connection refused；`codeload.github.com` 与 PyPI 可达）。因此**唯一稳定的门禁入口是 `bash scripts/check.sh`**——它不依赖任何网络。
+- **pre-commit 钩子已安装**（2026-10）：`.git/hooks/pre-commit` 与 `.git/hooks/commit-msg` 都在，三个钩子环境已缓存在 `/home/tao/.cache/pre-commit/`，**日常提交不再需要网络**。pre-commit 只装在项目 `.venv` 里，用 `uv run pre-commit ...` 调用。
+- **`github.com:443` 在本机是「时通时断」**：装钩子环境时必须从 GitHub 克隆三个 hook 仓库（`pre-commit-hooks` / `ruff-pre-commit` / `commitizen`），实测一次 `fetch` 被拒（connection refused）、紧接着重试即成功，且同一次会话里 root 侧 `curl https://github.com` 曾 15s 超时。**结论：不要依据一次失败判定 GitHub 不可用，隔几分钟重试即可**；旧记录「github.com:443 直连被拒」与据此得出的「本机跑不了 pre-commit」均不成立。
+- **git 2.27 下 `pre-commit run --all-files` 用不了**：该路径调 `git ls-files -z --deduplicate`，而这个选项要 git ≥ 2.31（本机是 CentOS 8 `AppStream` 的 **git 2.27.0**，vault 里也没有更新的非 module 包）。**日常提交不受影响**——提交走的是 `git diff --staged`，实测 commit 钩子与 commit-msg 钩子都正常拦下违规。要全量检查改用 `bash scripts/check.sh`（它不依赖 git 的这个选项）。
 
 #### 文件编码与换行符（硬约定，不是风格偏好）
 
@@ -127,6 +129,9 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 - **tao 无 docker 组时确实会被卡住**：未加组前以 tao 跑 `scripts/dev-up.sh` 直接走「[阻塞] docker 命令存在，但连不上 Docker 守护进程」并以退出码 1 结束；`usermod -aG docker tao` 后（以 `sg docker` 等效验证）`docker info` 成功。
 - **`dev-up.sh` 现在能过前置检查**：以 tao 身份（带 docker 组）执行 `bash scripts/dev-up.sh` 走到 `docker compose -f compose.dev.yaml up -d` 这一步，退出码 0。验证时用 PATH 前置的探测 shim **只拦截 `up`**、其余透传，因此**没有真的起容器**——`compose.dev.yaml` 的 Mailpit 未拍板，不该由本次任务替它决定。
 - **`compose.dev.yaml` 能被 compose v2 解析**：`docker compose -f compose.dev.yaml config --quiet` 退出码 0；解析出的两个服务与 `platform: linux/amd64` 与文件内容一致。
+- **`scripts/dev-up.sh` 实跑成功（2026-10，真实起容器）**：`docker compose -f compose.dev.yaml ps` 两个服务都 `Up (healthy)`；Mailpit Web UI `curl` 返回 **200**；Mailpit `/api/v1/info` 返回 `{"Version":"v1.31.3", ...}`；PostgreSQL `pg_isready` → `accepting connections`，`select version()` → `PostgreSQL 17.11`，开发库 `vs_email_forwarding_dev` 已自动建出（测试库仍需手工建）；四个端口（5432 / 1025 / 1143 / 8025）都只绑 `127.0.0.1`。
+- **Mailpit 的 `MP_*` 变量与 IMAP 能力实测**：容器内 `env` 确认 `MP_SMTP_AUTH_ACCEPT_ANY`、`MP_SMTP_AUTH_ALLOW_INSECURE`、`MP_IMAP_AUTH_ACCEPT_ANY`、`MP_IMAP_AUTH_ALLOW_INSECURE` 都传进去了。用一次性 venv（`imaplib` + `smtplib`）做真实往返：**SMTP 侧任意凭据 `AUTH PLAIN` 登录成功并投递成功**（`MP_SMTP_AUTH_*` 生效）。**IMAP 侧连不上**：`imaplib.IMAP4("127.0.0.1", 1143)` 一建连就 `EOF`，裸 socket 收到的 greeting 是空串，而**容器日志只有 `[smtpd]`、`[http]`、`[pop3]` 三类启动行，没有 IMAP 行**。
+- **Mailpit 不支持 IMAP 的证据链**：`docker run --rm axllent/mailpit:v1.31.3 --help | grep -ci imap` → **0**；镜像 `ExposedPorts` 只有 `1025/tcp`、`8025/tcp`、`1110/tcp`（镜像 ENV 里没有任何 `MP_IMAP_*`）；`--help` 里有 `--pop3`（默认 `[::]:1110`）而无任何 IMAP 选项。上游 issue **#587「IMAP support?」与 #730「[Feat] Imap Support」均以 `state_reason: not_planned` 关闭**（#249 的 `completed` 落在 POP3 上）。
 
 **digest 漂移（交付链要用的读数）**
 
@@ -165,8 +170,8 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 
 详见 `docs/open-questions.md`：
 
-- D6 本地邮件捕获工具（Mailpit）是否采用（本机具备验证条件）
+- D16 用哪个提供 IMAP 的本地服务补上入站回路（Mailpit 已采用，但它不提供 IMAP）
 - D13 基础镜像 tar 由哪台机器、用什么工具产出
-- 本册另记一条**尚无编号**的未定项：mailpit 的 `MP_*` 环境变量名尚未在本机对容器实跑核对。
+- Mailpit 的 `MP_*` 环境变量名与 IMAP 能力**已在本机对容器实跑核对完毕**（见「实测证据」），不再是未定项。
 
 D3（开发机的 Docker 能力）**已关闭**：结论已写入本册——开发机跑得了 Docker，不再列为未定项。
