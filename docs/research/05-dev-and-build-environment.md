@@ -15,7 +15,7 @@
 
 #### 项目命令一律以 `root` 身份执行
 
-DSH 会话与 bash 工具**以 root 运行**，所有者已明确要求**项目命令与文件操作直接用 root**——
+DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也是 root**；所有者已明确要求**项目命令与文件操作直接用 root**——
 不要再用 `runuser -u tao`（该口径已于 2026-10 被取代）。
 
 - 一切项目命令（`uv`、`pytest`、门禁脚本、`scripts/dev-up.sh`）直接以 root 执行：
@@ -31,7 +31,7 @@ DSH 会话与 bash 工具**以 root 运行**，所有者已明确要求**项目�
 
 #### `python3` 是 3.13，系统 3.6 仍在但**绝不可删**
 
-- `uv` 是 **0.13.0**，装在 `/home/tao/.local/bin/uv`（属主 tao）。它**在 tao 的 PATH 上**。
+- `uv` 是 **0.13.0**，装在 `/home/tao/.local/bin/uv`。该目录只加在 tao 的 PATH 上，**root 会话要用就显式引入**（见上文）。
 - 系统 `python3` → `/usr/local/bin/python3` → `python3.13` → `/usr/local/share/uv-python/cpython-3.13-linux-x86_64-gnu/bin/python3.13`。**3.13.16**，与 `.python-version` 的 `3.13` 一致。
 - 项目虚拟环境由 uv 托管（`/home/tao/.local/share/uv/python/`）供 `.venv` 使用。
 - **`/usr/bin/python3` 仍是 3.6.8**，那是 `platform-python3.6`。**dnf 依赖它，删不得**（`python3-dnf` 硬依赖 `/usr/libexec/platform-python` + `python(abi) = 3.6`）。
@@ -88,7 +88,7 @@ DSH 会话与 bash 工具**以 root 运行**，所有者已明确要求**项目�
 - **pre-commit 钩子已安装**（2026-10）：`.git/hooks/pre-commit` 与 `.git/hooks/commit-msg` 都在，钩子环境已缓存（**缓存按 HOME 分家**：root 用 `/root/.cache/pre-commit/`，从 `/home/tao/.cache/pre-commit/` 整目录拷过去即可离线使用），**日常提交不再需要网络**。pre-commit 只装在项目 `.venv` 里，用 `uv run pre-commit ...` 调用。
 - **`github.com:443` 在本机是「时通时断」**：装钩子环境时必须从 GitHub 克隆三个 hook 仓库（`pre-commit-hooks` / `ruff-pre-commit` / `commitizen`），实测一次 `fetch` 被拒（connection refused）、紧接着重试即成功，且同一次会话里 root 侧 `curl https://github.com` 曾 15s 超时。**结论：不要依据一次失败判定 GitHub 不可用，隔几分钟重试即可**；旧记录「github.com:443 直连被拒」与据此得出的「本机跑不了 pre-commit」均不成立。
 - **git 已从源码升到 2.49.1，装在 `/usr/local`**（2026-10）：`/usr/local/bin` 在默认 PATH 里排在 `/usr/bin` 之前，所以**任何用户、任何新会话**默认就是 `/usr/local/bin/git`（实测 root 与 tao、登录 shell 都解析到它）。系统包 `git-2.27.0` **没有被卸载、文件也没被改动**（`rpm -V git` 无输出），仍留在 `/usr/bin/git` 作为后备；vault 里没有更新的 git 包，`pre-commit run --all-files` 需要的 `git ls-files --deduplicate`（需 ≥ 2.31）正是靠这次升级才可用。
-- **git ≥ 2.35 的 `dubious ownership` 限制**：仓库属主是 `tao` 而命令以 root 跑时，git 会拒绝操作（`fatal: detected dubious ownership`）。root 侧已加 `git config --global --add safe.directory '*'`（落在 `/root/.gitconfig`）。**若仓库属主改成 root，这一条就可以删掉。**
+- **仓库属主已统一成 `root:root`**（2026-10，全仓 5393 项，含 `.git` 与 `.venv`），因此 git ≥ 2.35 的 `dubious ownership` 限制**不再触发**，也**不需要** `safe.directory` 这类豁免（曾经加过的那条已从 `/root/.gitconfig` 移除）。**tao 从此对该仓库没有写权限**——这与「命令一律以 root 跑」是一致的。
 
 #### 文件编码与换行符（硬约定，不是风格偏好）
 
