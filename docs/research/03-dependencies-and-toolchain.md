@@ -11,7 +11,7 @@
 - **Python 3.13 是目标版本**：`.python-version` 锁定 `3.13`，`pyproject.toml` 的 `requires-python` 为 `>=3.13,<3.14`，`uv.lock` 记录的解析约束是 `==3.13.*`——三处一致，`.python-version` 不得改动。
 - **依赖与解释器管理一律用 `uv`**：由 uv 安装独立的官方 CPython 解释器（不依赖系统 Python）、创建虚拟环境、解析依赖并维护锁文件 `uv.lock`、管理依赖分组。一条 `uv sync` 就对齐解释器与全部依赖，队友克隆后不需要手工建 venv。`uv.lock` 是解析与锁定结果的唯一真源，随依赖变更一起提交。
 - **Web 框架 FastAPI + uvicorn**；**配置用 pydantic-settings**（唯一配置入口，读 `.env`）；**日志用 structlog**；**测试用 pytest**（配 `pytest-asyncio`，`asyncio_mode = "auto"`）。
-- **运行时依赖保持最小集**：`fastapi`、`uvicorn[standard]`、`pydantic-settings`、`structlog` 四项，加上数据与邮件访问四项——`sqlalchemy`、`alembic`、`asyncpg`、`IMAPClient`（**选型理由、代价与许可见 `specs/0001-email-forwarding-service/design.md` 的「依赖选型」与「实测证据」**）。开发依赖另在 `[dependency-groups] dev` 里：`ruff`、`mypy`、`pytest`、`pytest-asyncio`、`httpx`、`pre-commit`、`commitizen`。`httpx` 是 FastAPI `TestClient` 的必需依赖，**不是运行时依赖**。
+- **运行时依赖保持最小集**：`fastapi`、`uvicorn[standard]`、`pydantic-settings`、`structlog` 四项，加上数据与邮件访问四项——`sqlalchemy`、`alembic`、`asyncpg`、`IMAPClient`（**选型理由、代价与许可见 `specs/0001-email-forwarding-service/design.md` 的「依赖选型」与「实测证据」**）。开发依赖另在 `[dependency-groups] dev` 里：`ruff`、`mypy`、`pytest`、`pytest-asyncio`、`httpx`、`pre-commit`、`commitizen`、`pytest-cov`、`mutmut`。`httpx` 是 FastAPI `TestClient` 的必需依赖，**不是运行时依赖**；`pytest-cov` 与 `mutmut` 是**测试质量的度量工具**，同样不是运行时依赖。
 - **新增运行时依赖前先在本册留下结论再动手**，不允许「先装上再补记录」。
 
 **为什么是 3.13**
@@ -26,7 +26,16 @@
 
 - 开发机（CentOS 8 Linux 虚拟机）的 `python3` 已是 **3.13**，与项目锁定的 `.python-version` 一致；但**一律用 `uv run` 执行**（`uv run ruff` / `uv run mypy` / `uv run pytest`），**不要直接调用 `python`**——让解释器与依赖统一由 uv 管理。
 - **`uvloop` 在 Windows 上无 wheel**，`uvicorn[standard]` 在 Windows 上不会安装它；生产与开发机都是 Linux，可正常获得 uvloop 与服务端性能优化。
-- 本机**不需要 Docker 就能跑完门禁**：门禁四步与 `tests/unit/` 都是纯逻辑，不依赖容器。开发依赖容器另由 `scripts/dev-up.sh` 起（见 `docs/research/05-dev-and-build-environment.md`）。
+- 本机**不需要 Docker 就能跑完门禁**：门禁五步与 `tests/unit/` 都是纯逻辑，不依赖容器——第 5 步的变异测试同样只跑 `tests/unit`。开发依赖容器另由 `scripts/dev-up.sh` 起（见 `docs/research/05-dev-and-build-environment.md`）。
+
+**测试质量的度量口径（门禁第 4、5 步的依据）**
+
+- **覆盖率只作诊断，不作门槛**：第 4 步用 `pytest-cov` 输出 `term-missing`，作用是暴露「没有任何测试执行到」的行；**不设 `--cov-fail-under`**。覆盖率衡量的是执行，不是验证，单靠它会系统性高估信心。
+- **断言质量用变异测试度量**：第 5 步用 `mutmut` 向被测代码注入人工缺陷，看测试能不能杀死它们。**判据是结构性红线，不是百分比阈值**——只有三种情况失败：① 工具运行失败；② 变异体总数为 0（配置失效，门禁形同虚设）；③ 被杀数为 0 且存在存活变异（断言与实现完全同义反复）。其余一律通过，并输出 killed / survived / total 与存活清单，**存活变异逐条交人工评审**。
+- **不设变异分数阈值**：一个数字一旦成为目标就会被反向优化（写同义反复测试、滥用 `# pragma: no mutate` 把存活抹掉），而且本阶段没有任何实测依据支撑某个具体数字。
+- **变异范围固定为 `tests/unit`**：门禁结论必须与环境无关——容器起没起不能改变门禁是否通过，因此不把需要 Docker 的集成测试纳入变异运行；集成路径由集成测试自身覆盖并由人工核对。
+- **`mutate_only_covered_lines = true`**：只变异被测试执行到的行，于是「存活变异」＝**执行过但没有被断言验证**的缺口；「完全没被执行」的行交给第 4 步的 `term-missing` 暴露。两个工具的分工因此不重叠，而不是各说一遍。
+- **`mutants/` 是工具的工作目录**（源码副本 + 运行缓存），进 `.gitignore`，不提交。
 
 **门禁（不跑 CI）**
 
@@ -34,8 +43,8 @@
 - **门禁全部落在本地，没有任何自动兜底**：没有人会在 PR 上替你跑检查，配置错误也不会被流水线拦住。提交前必须自己跑一键脚本并全绿。
 - **门禁分两层**：
   1. **pre-commit**——ruff format、ruff lint、commitizen 校验提交信息格式，外加基础文件卫生（行尾空白、文件末尾换行、YAML / TOML 可解析、合并冲突标记、大文件、行尾统一为 LF）。
-  2. **一键脚本**——`scripts/check.sh`，固定四步、顺序不可调整：
-     `uv run ruff format --check .` → `uv run ruff check .` → `uv run mypy src` → `uv run pytest`。
+  2. **一键脚本**——`scripts/check.sh`，固定五步、顺序不可调整：
+     `uv run ruff format --check .` → `uv run ruff check .` → `uv run mypy src` → `uv run pytest`（带覆盖率输出）→ `uv run mutmut run`（变异测试）。
 - 一键脚本的两个刻意设计：**不接受参数**（避免「本地跑的参数与别人不同」导致门禁不可比），**不加「先起容器」逻辑**（让门禁依赖尽量少，才能随手就跑）。任一步失败立即以非零退出码结束，后续步骤不再执行。
 - **已知代价**：`git commit --no-verify` 可以跳过 pre-commit，且没有任何远端机制拦截；「这个改动跑过测试了吗」只能靠信任。这是接受不跑 CI 的直接代价，不另做补偿机制。
 - **标准不得为了变绿而放宽**：mypy 要求完整类型标注、不允许 `# type: ignore` 兜底；`mypy src` 是门禁的一部分。某个库确实缺类型存根时，处置是先在册里留下结论，再在 `[[tool.mypy.overrides]]` 中按 module 精确放行，**不得整体关闭**。pytest 的标准同样不放宽。
@@ -78,11 +87,17 @@
 
 ## 实测证据
 
-- **门禁四项全绿**（在当前工作副本上逐一执行，命令入口即 `scripts/check.sh` 的四个步骤）：
-  - `ruff format --check .` → `58 files already formatted`；
+- **门禁五项全绿**（在当前工作副本上逐一执行，命令入口即 `scripts/check.sh` 的五个步骤）：
+  - `ruff format --check .` → `56 files already formatted`；
   - `ruff check .` → 零告警，退出码 0；
-  - `mypy src` → `Success: no issues found in 15 source files`；
-  - `pytest` → `1 passed`。
+  - `mypy src` → `Success: no issues found in 17 source files`；
+  - `pytest --cov --cov-report=term-missing` → `1 passed`，覆盖率表 `TOTAL 146 条语句 / 30 条未执行 / 80%`；
+  - `mutmut run` → **70 个变异体**，`killed 21 / survived 49`，退出码 0（未触发三个红线中的任何一个）。
+- **同一次快照上「覆盖率 80% 而变异分数约 30%」**——这正是把覆盖率降为诊断指标、把断言质量交给变异测试的实测依据：覆盖率说明「大部分行被执行过」，变异分数说明「大部分行为没有被断言验证」。
+- **第 5 步的三条红线已用合成统计逐条自测**：`killed=0 / survived=5` → 退出码 1（全部存活＝同义反复）；`total=0` → 退出码 1（配置失效）；`killed=3 / survived=2` → 退出码 0（正常放行）。
+- **变异测试的增量重跑成本可接受**：第二次运行复用 `mutants/` 里的缓存，实测约 3 秒（`mutants/` 被删除时才是全量重跑）。这正是「门禁脚本不吃参数」与「变异范围固定」两条设计能成立的前提。
+- **当前唯一测试的变异分数极低，这正是不设百分比阈值的直接依据**：`tests/unit/test_health.py` 的 `test_healthz_returns_ok` 只能杀死 70 个变异体中的 21 个（约 30%）；存活变异集中在 `logging.py`、`config.py`、`main.py`——这些代码**被执行过**（覆盖率不为零），但没有任何断言验证过它们的行为。覆盖率看不出这件事，变异测试看得出。若把变异分数设成某个百分比门槛，今天就必须为这些代码补断言或把门槛调低，两条路都不是现在该做的事。
+- **新增开发依赖的许可**：`mutmut` BSD-3-Clause、`pytest-cov` MIT、`coverage` Apache-2.0、`libcst` MIT、`textual` MIT、`setproctitle` BSD-3-Clause——全部为宽松许可，与本仓库的 MIT 兼容，未引入 copyleft。
 - **`ruff check` 的全部告警只来自 `RUF001` / `RUF002` / `RUF003`，零处来自其他规则**。把这三条从 `ignore` 中移出后复现（`ruff check . --select RUF001,RUF002,RUF003 --statistics`）：共 **314 处**，其中 `RUF002` 191 处、`RUF001` 92 处、`RUF003` 31 处，**没有第四种规则出现**。当前 `ignore` 生效时同一份代码报 0 处，且没有冒出任何其他规则的告警——这正是「只有中文标点这一处例外，其余标准未动」的直接证据。
 - 同一次 `pytest` 还输出一条 `StarletteDeprecationWarning`：`Using httpx with starlette.testclient is deprecated; install httpx2 instead`，来源是虚拟环境中的 `fastapi/testclient.py`。它说明**测试是跑通的**（`httpx` 在 3.13 上实际可用），风险性质是「将来会不会被上游弃用」，已登记为未定项 E2。
 - **`uvloop` 在 Windows 上确实不装**：`uv.lock` 中该依赖带 `sys_platform != 'win32'` 标记；开发机（Linux）实测已装 `uvloop 0.22.1`，生产同为 Linux，同样可获得。
@@ -108,6 +123,11 @@
 - 关掉整个 RUF 规则族 —— 原因：RUF 族还有其他有价值的规则，不能整族关闭。
 - **现在就**把例外改成 `per-file-ignores` 逐文件列举 —— 原因：中文标点在这类文件里**分布极广**，逐文件列举的维护成本高于收益，也不会比全局例外更安全。若将来真的出现全角字符混进标识符或字面量这类**真问题**，再按本册「结论」里那条路径重新评估——届时属于新的决策，要按 `AGENTS.md` §6 重写本册。
 - 为无类型库整体关闭 mypy 检查 —— 原因：本册既定处置是**按 module 精确放行并在册里留下结论**，整体关闭等于降低门禁标准（既有结论的重申）。
+- **把变异分数设成百分比阈值**（例如核心域 ≥80%、一般逻辑 ≥60–70%）—— 原因：数字一旦成为目标就会被反向优化（写同义反复测试、滥用 `# pragma: no mutate` 把存活抹掉），而且没有实测依据支撑任何具体取值；当前基线只有约 30%，任何百分比都会立刻变成「补断言」或「降门槛」的二选一。门禁只卡三条结构性红线，存活清单交人工评审。
+- **只加覆盖率、不加变异测试** —— 原因：覆盖率衡量执行、不衡量验证。当前工作副本上 70 个变异体里 49 个存活，而覆盖率并非零——这一类「执行了但没被断言验证」的缺口只有变异测试看得见。
+- **把集成测试纳入变异运行范围** —— 原因：门禁结论会随容器是否启动而改变，直接破坏「所有人跑的是同一套门禁」这条前提。
+- **不在门禁里跑变异、只留一条文档命令** —— 原因：本项目不跑 CI，没有任何自动兜底；不进门禁就等于不存在，只会退化成口头约定。
+- 使用 mutmut 2 —— 原因：mutmut 3+ 的执行模型支持函数级缓存与增量重跑（实测重跑约 3 秒），2 的模型做不到，会让门禁慢到没人愿意跑。
 - 把放行写成**没有对应 import 的** `[[tool.mypy.overrides]]` —— 原因：mypy 会把它报成 `unused section(s)` 并打进 `scripts/check.sh` 的输出，制造一条需要被忽略的噪音，也等于留一条无代码支撑的例外；放行只随真正 import 该库的模块落地。
 
 ## 落地位置
@@ -117,9 +137,12 @@
 - `uv.lock` —— 依赖解析与锁定的唯一真源，随依赖变更一起提交。
 - `.pre-commit-config.yaml` —— pre-commit 挂钩清单与 `commit-msg` 阶段；启用命令为 `uv run pre-commit install --install-hooks` 与 `uv run pre-commit install --hook-type commit-msg`。
 - `scripts/check.sh` —— 一键门禁的唯一入口（必须 LF、无 BOM）；Windows 版 `check.ps1` 已删除。
-- `scripts/README.md` —— 脚本清单、门禁为什么重要、与 Docker 的关系、常见问题处置。
+- `scripts/README.md` —— 脚本清单、门禁为什么重要、与 Docker 的关系、五步门禁各自的判据与常见问题处置。
 - `tests/unit/` —— 不依赖数据库与网络的纯逻辑单测，边界写在 `tests/unit/README.md`；需要真实 PostgreSQL 与邮件服务的用例放 `tests/integration/`。
 - `docs/open-questions.md` —— 未定项的唯一清单（本册「未定项」段只放指针）。
+- `docs/testing.md` —— **测试规范与测试说明的唯一出处**：单测 / 集成测试规则、AI 写测试的作业流程、评审检查表、pytest 标记约定。门禁的「怎么跑」在 `scripts/README.md`，「什么算合格」在本文件与 `docs/testing.md`。
+- `pyproject.toml` 的 `[tool.mutmut]` 与 `[tool.coverage.*]` —— 变异与覆盖率的**配置**（变异范围、只变异被覆盖的行、覆盖率 source 与排除项）。**门禁的判据不写在这里**（配置能改，判据必须只有一处），判据在 `scripts/check.sh`。
+- `.gitignore` —— `mutants/`（变异测试的工作目录：源码副本与运行缓存）；覆盖率产物 `.coverage` / `coverage.xml` / `htmlcov/` 此前已在忽略清单里。
 - `deploy/` —— 构建与交付脚本的落点；`DOCKER_BUILDKIT=0` 的显式拦截必须落在其中的构建脚本里（脚本尚未实现，见未定项 D2）。
 - `AGENTS.md` —— §3 命令入口、§7 编码约定、§9 提交与 PR、§10 不要做的事，与本册互为规则与结论的分工。
 

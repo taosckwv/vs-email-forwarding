@@ -44,6 +44,9 @@ dependencies = [
 
 # 开发依赖：uv 原生 dependency-groups 写法。
 # 注意：httpx 是 FastAPI TestClient 的必需依赖，不是运行时依赖。
+# pytest-cov 与 mutmut 是测试质量的度量工具（覆盖率 / 变异测试），同样不是运行时依赖；
+# 引入理由、门禁判据与许可实测见 docs/research/03-dependencies-and-toolchain.md，
+# 测试侧规则见 docs/testing.md。
 [dependency-groups]
 dev = [
     "ruff",
@@ -53,6 +56,8 @@ dev = [
     "httpx",
     "pre-commit",
     "commitizen",
+    "pytest-cov",
+    "mutmut",
 ]
 
 [tool.uv]
@@ -139,6 +144,43 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q"
 asyncio_default_fixture_loop_scope = "function"
+# 集成测试用例必须打 @pytest.mark.integration（未登记的标记会触发 PytestUnknownMarkWarning）。
+# 标记约定与「容器未起时为什么跳过、跳过不等于通过」见 docs/testing.md §8。
+markers = [
+    "integration: 需要真实 PostgreSQL 与邮件服务（由 scripts/dev-up.sh 提供）；容器未起时跳过",
+]
+
+# ---------------------------------------------------------------------------
+# 覆盖率（pytest-cov）：只作诊断，不设门槛
+# 它暴露「没有任何测试执行到」的行；判据与「为什么不做验收门槛」见
+# docs/research/03-dependencies-and-toolchain.md 的「测试质量的度量口径」。
+# 命令在 scripts/check.sh 的第 4 步，不写进 addopts：门禁怎么跑只允许有一个出处。
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["vs_email_forwarding"]
+branch = true
+
+[tool.coverage.report]
+# 与变异测试的分工：覆盖率暴露「没被执行到的行」，
+# mutmut 暴露「执行了但没有被断言验证的行」（见下方 [tool.mutmut]）。
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
+
+# ---------------------------------------------------------------------------
+# 变异测试（mutmut）：证明断言真的能失败
+# 范围固定为 tests/unit —— 门禁结论不得随容器是否启动而改变。
+# 门禁判据（三条结构性红线，不设百分比阈值）在 scripts/check.sh，
+# 依据见 docs/research/03-dependencies-and-toolchain.md。
+# ---------------------------------------------------------------------------
+[tool.mutmut]
+source_paths = ["src/vs_email_forwarding"]
+pytest_add_cli_args_test_selection = ["tests/unit"]
+# 只变异被测试执行到的行：此时「存活变异」= 执行过但没有被断言验证的缺口。
+mutate_only_covered_lines = true
 
 # ---------------------------------------------------------------------------
 # commitizen：只做提交信息校验与辅助发版；版本号与 CHANGELOG 手工维护。

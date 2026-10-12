@@ -82,7 +82,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 
 ### 本机侧的执行环境
 
-- 门禁的四步定义与取舍见 `docs/research/03-dependencies-and-toolchain.md`。
+- 门禁的五步定义与判据见 `docs/research/03-dependencies-and-toolchain.md`；脚本侧说明见 `scripts/README.md`。
 - 本册只记**本机特有的执行前提**：项目命令以 root 跑、`uv` 要显式入 PATH、`python3` 是 3.13。
 - **不要给 `scripts/check.sh` 加 `2>&1` 或任何流重定向**：多一层重定向只会掩盖真实退出码，`AGENTS.md` §3 已把它写成脚本约定。
 - **pre-commit 钩子已安装**（2026-10）：`.git/hooks/pre-commit` 与 `.git/hooks/commit-msg` 都在，钩子环境已缓存（**缓存按 HOME 分家**：root 用 `/root/.cache/pre-commit/`，从 `/home/tao/.cache/pre-commit/` 整目录拷过去即可离线使用），**日常提交不再需要网络**。pre-commit 只装在项目 `.venv` 里，用 `uv run pre-commit ...` 调用。
@@ -111,7 +111,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 - **`uv` 的路径**：`uv --version` → `uv 0.13.0 (x86_64-unknown-linux-gnu)`，装在 `/home/tao/.local/bin/uv`——**该目录只加在 tao 的 PATH 上，root 会话里要显式引入**。
 - **Python**：`python3 --version` → `3.13.16`（解析到 `/usr/local/bin/python3`）；`/usr/bin/python3 --version` → `3.6.8`。
 - **`pre-commit run --all-files` 实跑通过（2026-10，git 2.49.1）**：九个钩子全 `Passed`、退出码 0——**这条以前跑不了**（git 2.27 不认 `--deduplicate`），是升级 git 后的直接收益；commit-msg 侧仍由 commitizen 校验。
-- **门禁在本机实跑通过**：以 root 身份执行 `bash scripts/check.sh`，四步全绿、退出码 0（`1 passed, 1 warning`；warning 是 FastAPI/Starlette 的 `httpx` 弃用提示，属既知事项，见 `docs/open-questions.md` E2）。
+- **门禁在本机实跑通过**：以 root 身份执行 `bash scripts/check.sh`，**五步全绿、退出码 0**（`1 passed, 1 warning`；warning 是 FastAPI/Starlette 的 `httpx` 弃用提示，属既知事项，见 `docs/open-questions.md` E2；第 5 步变异测试 70 个变异体、杀死 21、存活 49，按结构性红线放行）。
 - **pre-commit 版本**：`uv run pre-commit --version` → `pre-commit 4.6.2`；钩子此前只有 sample，已按上文安装完毕。
 
 **Docker**
@@ -156,7 +156,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 
 | 位置 | 内容 |
 |---|---|
-| `scripts/check.sh` | 门禁入口；四步定义与取舍见 `docs/research/03-dependencies-and-toolchain.md` |
+| `scripts/check.sh` | 门禁入口；五步定义与判据见 `docs/research/03-dependencies-and-toolchain.md` 与 `scripts/README.md` |
 | `scripts/dev-up.sh` | 起开发依赖（读 `compose.dev.yaml`） |
 | `compose.dev.yaml` | 开发依赖定义：PostgreSQL + GreenMail（SMTP/IMAP/POP3），只绑回环 |
 | `/usr/local/bin/git` | git 2.49.1（源码编译到 `/usr/local`，覆盖默认解析；系统 `git-2.27.0` 仍在 `/usr/bin` 后备）——**在机器上，不在仓库里** |

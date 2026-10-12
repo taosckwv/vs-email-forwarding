@@ -54,3 +54,7 @@ $RECYCLE.BIN/
 data/
 *.tar
 .tools/
+
+# --- 测试工具的工作目录 ---
+# mutants/ 是 mutmut 的源码副本与运行缓存（门禁第 5 步），不提交。
+mutants/

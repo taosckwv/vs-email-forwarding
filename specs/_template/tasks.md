@@ -54,7 +54,8 @@
 - [ ] `tasks.md` 中所有任务已勾选
 - [ ] `spec.md` 中每条 `AC-n` 都已被验证，结果已回填「验收结果」
 - [ ] 每条 `FR-n` 都有 `AC-n` 覆盖
-- [ ] 本地门禁已跑过：`ruff format --check`、`ruff check`、`mypy src`、`pytest`
+- [ ] 本地门禁已跑过：`ruff format --check`、`ruff check`、`mypy src`、`pytest`（带覆盖率）、`mutmut`（变异测试）
+- [ ] 新增的每条测试都有「能失败」的证据（先红或改坏实现证明它会红），且期望值不是由被测代码生成的（见 `docs/testing.md`）
 - [ ] 无密钥、真实主机名 / 端口 / 账号入库
 - [ ] 日志与异常信息中不含邮件正文、收件人地址、凭据
 - [ ] 涉及不可逆决策的部分已按 `AGENTS.md` §6 更新落点（本特性 `design.md`，或跨特性底座对应的 `docs/research/` 主题册）的决策段

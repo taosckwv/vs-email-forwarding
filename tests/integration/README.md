@@ -34,3 +34,7 @@ docker compose -f compose.dev.yaml up -d          # 等价写法
 
 约定：本目录不放 `__init__.py`；文件名 `test_*.py`。测试数据（邮件样本等）放
 `tests/fixtures/`。
+
+规则与标记：**该写什么、断言落点、评审检查表见 `docs/testing.md`**（唯一出处，本文件不复述）；
+本目录的用例必须打 `@pytest.mark.integration`，容器未起时按标记跳过——**跳过不等于通过**，
+涉及数据库语义的验收必须先在起了容器的前提下跑完（`docs/testing.md` §6、§8）。

@@ -16,3 +16,6 @@ uv run pytest tests/unit
 ```
 
 约定：本目录不放 `__init__.py`；测试文件命名 `test_*.py`，测试函数命名 `test_*`。
+
+规则：**该写什么、期望值从哪来、怎么写才算合格，见 `docs/testing.md`**（唯一出处，本文件不复述）。
+本目录属于门禁第 5 步（变异测试）的**唯一范围**——见 `pyproject.toml` 的 `[tool.mutmut]`。

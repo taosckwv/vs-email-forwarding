@@ -34,7 +34,7 @@
 
 ## 实测证据
 
-- 门禁与测试基线（四项全绿、`ruff` 告警口径等）见 `docs/research/03-dependencies-and-toolchain.md`；测试依赖的弃用提示见 `docs/open-questions.md` 的 E2。
+- 门禁与测试基线（全绿口径、`ruff` 告警口径、覆盖率与变异测试的判据等）见 `docs/research/03-dependencies-and-toolchain.md`；测试该写什么见 `docs/testing.md`；测试依赖的弃用提示见 `docs/open-questions.md` 的 E2。
 - **业务逻辑尚未实现**：`src/vs_email_forwarding/flows/`、`src/vs_email_forwarding/service/`、`src/vs_email_forwarding/db/`、`src/vs_email_forwarding/providers/` 下只有包占位文件，当前唯一可用的端点是 `/healthz`。
 - **集成测试的依赖与覆盖重点已写明**：`tests/integration/` 需要真实 PostgreSQL（测试库）与本地邮件捕获服务，覆盖状态机转换、单次 tick 幂等、并发抢占不重复发信、回复关联四类最容易出错的路径。
 - **开发库与测试库的初始化方式不同**：`compose.dev.yaml` 里只有开发库会在数据卷首次初始化时自动建出；测试库需要手工创建一次，该说明在文件末尾。

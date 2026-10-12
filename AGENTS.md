@@ -20,6 +20,7 @@
 | 开发机、Docker 与构建环境 | `docs/research/05-dev-and-build-environment.md` |
 | 命名、许可与仓库治理 | `docs/research/06-naming-licensing-and-governance.md` |
 | 代码分层与依赖方向（哪一层能调哪一层、两条触发路径怎么走） | `docs/architecture.md` |
+| 写测试要守什么规则（该写什么、期望值从哪来、怎么评审、pytest 标记约定） | `docs/testing.md` |
 | 某特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `specs/<特性>/design.md` |
 
 文档总入口是 `docs/README.md`；**未定项的唯一清单**是 `docs/open-questions.md`。
@@ -49,7 +50,7 @@ uv sync
 # 本地起服务
 uv run uvicorn vs_email_forwarding.main:app --reload
 
-# 一键门禁：ruff format --check + ruff check + mypy src + pytest
+# 一键门禁：ruff format --check + ruff check + mypy src + pytest（含覆盖率）+ mutmut
 bash scripts/check.sh
 
 # 起开发依赖（PostgreSQL + GreenMail），读 compose.dev.yaml
@@ -80,7 +81,8 @@ bash scripts/dev-up.sh
 | `docs/README.md` | **文档唯一入口**：人的任务式导航、AI 先读顺序、分区清单、写作与维护规范 | 结论与规则正文（分别在 `research/` 与 `AGENTS.md`） |
 | `docs/research/` | **跨特性底座的结论真源**：一册一主题，只写当前结论、实测证据、已否决方向、落地位置、未定项指针 | 决策过程、时间线、被取代的旧结论、派生快照 |
 | `docs/open-questions.md` | **未定项的唯一清单** | 已决定的结论（决定后移入对应主题册或该特性的 `design.md`） |
-| `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署 / 测试说明 | 需求与验收标准（那属于 `specs/`） |
+| `docs/testing.md` | **测试规范与测试说明的唯一出处**：单测 / 集成测试规则、AI 写测试的作业流程、评审检查表、pytest 标记约定 | 需求与验收标准（属 `specs/`）、逐条 `AC-n` 的测试落点（属该特性的 `plan.md`） |
+| `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署说明 | 需求与验收标准（那属于 `specs/`） |
 | `specs/` | **每个特性一个目录**的需求、设计、计划、任务（`spec.md` / `design.md` / `plan.md` / `tasks.md`，见 §5） | 实现代码 |
 | `skills/` | 可复用的固定流程（见 `skills/README.md`） | 一次性任务说明 |
 | `deploy/` | 部署脚本与交付链的落点（**当前为空，待实现**，见 `docs/open-questions.md` D2） | 应用代码 |
@@ -145,6 +147,11 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 
 - **类型标注必须完整**：`mypy src` 是门禁的一部分，不允许用 `# type: ignore` 兜底。
 - **格式与静态检查**：ruff 负责格式化与 lint，不要手工和它对抗；提交前必须跑过 `scripts/check.*`。
+- **测试必须绑定业务行为，期望值独立于被测实现**：每条测试要能说出它在验证哪条业务规则、`AC-n` 或不变量；**禁止用被测代码（含其内部函数）生成期望值**——`assert f(x) == f(x)` 这类同义反复断言恒绿，比没有测试更危险。
+- **没有红过的测试不算测试**：新增测试必须留下失败证据（先写测试看到红，或改坏实现证明它会红），并写进 PR 描述。
+- **禁止为了让测试变绿而改测试**：改期望值、删断言、加 `skip` / `xfail`、弱化断言（`is not None`、`raises(Exception)`）、重新生成夹具，一律按缺陷处理；**测试文件的改动是一等评审项**。
+- **集成测试用真实依赖**：真实 PostgreSQL 与邮件服务由 `scripts/dev-up.sh` 提供，**不得为了「跑通」把数据库换成 mock**（理由见 `docs/research/02-runtime-and-scheduling.md`）。
+- 测试的完整规范——单测 / 集成测试规则、AI 写测试的作业流程、评审检查表、pytest 标记约定——见 `docs/testing.md`（**唯一出处，本文件不复述**）。
 - **日志用 structlog**，禁止 `print`。日志中不得出现邮件正文、账号口令、收件人地址（见 §8）。
 - **配置只从 `vs_email_forwarding.config` 读**，禁止在模块里直接 `os.environ[...]`。所有可变项（监听地址、SMTP/IMAP 主机与账号、数据库连接串、发件人地址、轮询间隔）都收敛在 `.env`，仓库里只有 `.env.example` 占位。
 - **服务的固定语义常量只从 `vs_email_forwarding.constants` 取**（状态取值、重试上限与退避表、受控枚举集合、丢弃原因）。判据是「**改了它等于改产品行为**」：这类值不属于环境配置，**不得**为它新增 `.env` 项。`constants.py` 是共享叶子层——**不得 import 任何项目内模块**，各层（含 `db/`）都可以 import 它。
@@ -177,7 +184,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
   - `docs: 补充部署预演说明`
 
   由 commitizen 在 `commit-msg` 阶段校验，格式错误会被 pre-commit 拦下。
-- 提交前必须跑过 `scripts/check.*`（ruff format/lint + mypy + pytest）。**本项目不跑 CI，没有任何自动兜底——门禁只能自己跑。**
+- 提交前必须跑过 `scripts/check.*`（ruff format/lint + mypy + pytest + 覆盖率 + 变异测试）。**本项目不跑 CI，没有任何自动兜底——门禁只能自己跑。**
 - PR 必须使用 `.github/PULL_REQUEST_TEMPLATE.md`，并**填写关联的 spec 编号**；涉及不可逆决策时同时关联它的落点：跨特性底座关联 `docs/research/` 下对应的主题册，某特性的设计结论关联该特性的 `specs/<特性>/design.md`。
 - 本仓库**没有 CI workflow，也不要新建**。门禁全部在本地（pre-commit + 一键脚本）。
 
@@ -193,6 +200,9 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 - ❌ 不要在流处理里裸写 SQL，不要绕过 `providers/` 直接调外部库。
 - ❌ 不要写不可测试的验收标准，不要跳过 `specs/` 直接改代码。
 - ❌ 不要为了让门禁通过而放宽 ruff / mypy 配置（改配置属于不可逆决策，要先按 §6 更新对应落点的决策段）。
+- ❌ 不要为了让测试变绿而改测试：改期望值、删断言、加 `skip` / `xfail`、弱化断言、重新生成夹具，一律按缺陷处理（规则见 §7 与 `docs/testing.md`）。
+- ❌ 不要让被测代码生成测试的期望值（含「先跑一次把输出粘进断言」）——那是恒绿的同义反复断言。
+- ❌ 不要为了「跑通」把集成测试的真实数据库 / 邮件服务换成 mock；容器没起就起来再跑（`bash scripts/dev-up.sh`）。
 - ❌ 不要在日志里打印邮件正文、收件人地址或凭据。
 - ❌ 不要改动 `.gitattributes` 里的换行符规则（一切文本文件 LF）。
 - ❌ 不要用 `.gitkeep` 顶替职责 `README.md`，也不要留下空目录——Git 不跟踪空目录，别人克隆下来什么都没有。

@@ -29,7 +29,7 @@ bash scripts/dev-up.sh                                # 起开发依赖（Postgr
 - 项目**锁定 Python 3.13**（`.python-version`）；开发机的 `python3` 已是 3.13，但仍**一律用 `uv run` 执行**，让解释器与依赖由 uv 统一管理。
 - **开发机是一台 CentOS 8 Linux 虚拟机，已装 Docker**（26.1.3，与生产对齐），因此开发依赖容器在本机起得来、`tests/integration/` 的容器依赖也能在本机跑。
 - 项目命令**以 root 身份**执行；`uv` 装在 `/home/tao/.local/bin/`，**该目录不在 root 的 PATH 上**，需要时先 `export PATH=/home/tao/.local/bin:$PATH`。
-- 门禁固定四步：`ruff format --check` → `ruff check` → `mypy src` → `pytest`。**本仓库不跑 CI**，门禁只能自己跑，没有任何自动兜底。
+- 门禁固定五步：`ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut`（变异测试）。**本仓库不跑 CI**，门禁只能自己跑，没有任何自动兜底；测试侧规则见 `docs/testing.md`，门禁判据见 `docs/research/03-dependencies-and-toolchain.md`。
 - 开发依赖（PostgreSQL 与本地邮件服务器 **GreenMail**）由 `compose.dev.yaml` 与 `scripts/dev-up.*` 提供：GreenMail 同时提供 SMTP 与 IMAP，本地可离线跑通「发出去 → 被拉回来 → 关联上原邮件」的完整回路（见 `docs/research/05-dev-and-build-environment.md`）。
 
 ---
