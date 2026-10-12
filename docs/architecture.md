@@ -33,6 +33,7 @@
 
         schemas/   Pydantic 请求 / 响应模型（只被 api/ 用）
         config.py  唯一配置入口（pydantic-settings）+ 启动即校验
+        constants.py  服务固定语义常量（状态取值、重试算术、受控枚举）；共享叶子层，谁都能 import 它
         main.py    FastAPI 组装：挂路由、随 lifespan 启停定时任务
 ```
 
@@ -48,13 +49,15 @@
 | `providers/` | 各自 `base.py` 定义的接口 | `db/`、`core/`、`flows/`、`service/`、`api/` |
 | `db/` | 无——只依赖 ORM 与会话本身 | 任何业务层：`core/`、`providers/`、`flows/`、`service/`、`api/` |
 | `core/` | 无——纯逻辑 | 项目内任何模块、I/O 与数据库 |
+| `constants.py` | 无——**共享叶子层**，只放常量 | 项目内任何模块（含 `config.py`）、I/O 与判定逻辑 |
 | `schemas/` | 无 | ORM 模型 |
 
-三条硬规则：
+四条硬规则：
 
 - **单向**：依赖只能自上而下（`api/` → `service/` → `db/` / `providers/` / `core/`），不得反向、不得成环。
 - **跨边界只经接口**：外部能力一律走 `providers/` 各自的 `base.py`，业务流程不得 import 具体实现库；落库一律走 `db/` 的仓储层，业务流程不得裸写 SQL。
 - **纯逻辑不许下沉 I/O**：`core/` 不得引入 I/O 与数据库访问，它必须能被单测直接调用。
+- **共享叶子层是唯一例外**：`constants.py` 只放服务固定语义的常量，**不 import 任何项目内模块、不做 I/O、不含判定逻辑**，因此**各层（含依赖为「无」的 `db/`）都可以 import 它**。它的边界判据是「改了它等于改产品行为」——随环境变化的值属 `config.py`（`AGENTS.md` §7）。
 
 ## 3. 两条触发路径
 

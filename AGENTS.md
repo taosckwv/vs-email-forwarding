@@ -73,6 +73,7 @@ bash scripts/dev-up.sh
 | `src/vs_email_forwarding/schemas/` | Pydantic 请求 / 响应模型 | ORM 模型 |
 | `src/vs_email_forwarding/db/` | ORM 模型、引擎与会话、**仓储层（所有 SQL 都在这）** | 业务规则 |
 | `src/vs_email_forwarding/core/` | 纯逻辑：消息 ID 生成、状态机、重试策略 | I/O 与数据库访问 |
+| `src/vs_email_forwarding/constants.py` | **服务固定语义的常量（共享叶子层）**：状态取值、受控枚举集合、重试上限与退避表、丢弃原因 | 随环境变化的值（那是 `.env` 与 `config.py`）、任何 import 项目内模块的代码、判定逻辑 |
 | `src/vs_email_forwarding/config.py` | 唯一的配置入口（pydantic-settings，读 `.env`） | 别处再读一次环境变量 |
 | `tests/unit/` | 纯逻辑单测，不依赖数据库与网络 | 需要真实 Postgres 的用例 |
 | `tests/integration/` | 需要真实 PostgreSQL / 邮件服务的用例 | 纯逻辑断言 |
@@ -146,6 +147,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 - **格式与静态检查**：ruff 负责格式化与 lint，不要手工和它对抗；提交前必须跑过 `scripts/check.*`。
 - **日志用 structlog**，禁止 `print`。日志中不得出现邮件正文、账号口令、收件人地址（见 §8）。
 - **配置只从 `vs_email_forwarding.config` 读**，禁止在模块里直接 `os.environ[...]`。所有可变项（监听地址、SMTP/IMAP 主机与账号、数据库连接串、发件人地址、轮询间隔）都收敛在 `.env`，仓库里只有 `.env.example` 占位。
+- **服务的固定语义常量只从 `vs_email_forwarding.constants` 取**（状态取值、重试上限与退避表、受控枚举集合、丢弃原因）。判据是「**改了它等于改产品行为**」：这类值不属于环境配置，**不得**为它新增 `.env` 项。`constants.py` 是共享叶子层——**不得 import 任何项目内模块**，各层（含 `db/`）都可以 import 它。
 - **数据库访问必须走仓储层**（`vs_email_forwarding/db/`）。用例层、流处理层与路由层**不得裸写 SQL**，也不得直接拼 ORM 查询。
 - **外部能力一律通过 `providers/` 的接口访问**，不允许在业务流程里直接 `import` 具体实现库。
 - 时间一律使用带时区的 `datetime`（按 UTC 存储），不要用裸的 `datetime.now()`。
