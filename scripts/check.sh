@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# vs-email-forwarding 一键门禁（Linux / macOS 版，CentOS 8 可用）
+# vs-email-forwarding 一键门禁
 #
-# 与 scripts/check.ps1 **行为完全一致**：按固定顺序执行 4 步，任何一步失败立即
-# 以非零退出码结束，后续步骤不再执行。
+# 按固定顺序执行 4 步，任何一步失败立即以非零退出码结束，后续步骤不再执行。
 #
 #   1) uv run ruff format --check .   代码格式检查
 #   2) uv run ruff check .            静态检查（lint）

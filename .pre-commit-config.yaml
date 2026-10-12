@@ -21,9 +21,8 @@ repos:
       - id: check-added-large-files
         args: ["--maxkb=1024"]
       - id: mixed-line-ending
-        # .ps1/.bat 由 .gitattributes 强制 CRLF，其余一律 LF。
+        # 仓库不含 Windows 脚本，一律 LF（与 .gitattributes 一致）。
         args: ["--fix=lf"]
-        exclude: \.(ps1|psm1|bat|cmd)$
 
   # --- 格式化与 lint（ruff）---
   - repo: https://github.com/astral-sh/ruff-pre-commit

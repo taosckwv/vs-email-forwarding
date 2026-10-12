@@ -45,13 +45,7 @@ specs/
 
 创建方式：复制模板目录，然后重命名。
 
-```powershell
-# Windows
-Copy-Item -Recurse specs/_template specs/0001-outbound-review-pipeline
-```
-
 ```bash
-# Linux / CentOS 8
 cp -r specs/_template specs/0001-outbound-review-pipeline
 ```
 

@@ -11,7 +11,7 @@ HTTP 调用，不启动 uvicorn、不连 PostgreSQL、不发真实邮件。
 
 运行：
 
-```powershell
+```bash
 uv run pytest tests/unit
 ```
 

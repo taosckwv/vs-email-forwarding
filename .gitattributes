@@ -1,6 +1,6 @@
 # ============================================================================
 # vs-email-forwarding .gitattributes
-# 开发机是 Windows，生产部署在 CentOS 8 容器内。
+# 开发机是 CentOS 8 Linux，生产部署在 CentOS 8 容器内；仓库不含 Windows 脚本。
 # 若换行符不做强制约束，.sh 带 CRLF 进容器后会直接报
 # "bad interpreter: No such file or directory"。这里把规则钉死。
 # ============================================================================
@@ -11,10 +11,6 @@
 # --- 脚本换行符（关键，勿改）---
 *.sh   text eol=lf
 *.bash text eol=lf
-*.ps1  text eol=crlf
-*.psm1 text eol=crlf
-*.bat  text eol=crlf
-*.cmd  text eol=crlf
 
 # --- 文本类显式声明 ---
 *.py    text eol=lf

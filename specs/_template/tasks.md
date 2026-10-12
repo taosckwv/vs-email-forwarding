@@ -45,7 +45,7 @@
 - [ ] `T-7` 补齐 `tests/unit/` 与 `tests/integration/` 用例 — `AC-n`
 - [ ] `T-8` 更新 `docs/` 下受影响的说明文档
 - [ ] `T-9` 若涉及表结构 / API 契约变更，按 `AGENTS.md` §6 更新本特性 `design.md` 的决策段；若涉及部署形态等跨特性底座，更新 `docs/research/` 下对应主题册
-- [ ] `T-10` 运行 `scripts/check.ps1`（或 `check.sh`）并确保全部通过
+- [ ] `T-10` 运行 `bash scripts/check.sh` 并确保全部通过
 
 ---
 

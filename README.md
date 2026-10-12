@@ -17,18 +17,20 @@
 
 ## 快速开始（开发机）
 
-```powershell
+```bash
 uv sync                                               # 按 .python-version 准备 Python 3.13 并同步依赖
 uv run uvicorn vs_email_forwarding.main:app --reload  # 本地起服务（当前只有 /healthz）
-./scripts/check.ps1                                   # 一键门禁；Linux / CentOS 8 用 bash scripts/check.sh
+bash scripts/check.sh                                 # 一键门禁
+bash scripts/dev-up.sh                                # 起开发依赖（PostgreSQL + Mailpit，需要 Docker）
 ```
 
 要点：
 
-- 项目**锁定 Python 3.13**（`.python-version`），而本机默认的 `python` 是别的版本，因此**一律用 `uv run` 执行**，不要直接调用 `python`。
-- **不要给 `scripts/check.ps1` 加 `2>&1` 或任何流重定向**：`uv` 会把正常的构建日志写到 stderr，Windows PowerShell 5.1 会把它变成 `NativeCommandError` 并中断脚本。脚本本身没有问题。
+- 项目**锁定 Python 3.13**（`.python-version`）；开发机的 `python3` 已是 3.13，但仍**一律用 `uv run` 执行**，让解释器与依赖由 uv 统一管理。
+- **开发机是一台 CentOS 8 Linux 虚拟机，已装 Docker**（26.1.3，与生产对齐），因此开发依赖容器在本机起得来、`tests/integration/` 的容器依赖也能在本机跑。
+- 项目命令**以仓库属主身份**执行（本仓库属主是 `tao`）；`uv` 在该用户的 PATH 上。
 - 门禁固定四步：`ruff format --check` → `ruff check` → `mypy src` → `pytest`。**本仓库不跑 CI**，门禁只能自己跑，没有任何自动兜底。
-- 开发依赖（PostgreSQL 与本地邮件捕获服务）由 `compose.dev.yaml` 与 `scripts/dev-up.*` 提供，但**本机装不了 Docker Desktop，因此在本机起不来**：`dev-up.ps1` 只会打印安装提示并以非零退出码结束，别在这里白试。
+- 开发依赖（PostgreSQL 与本地邮件捕获服务）由 `compose.dev.yaml` 与 `scripts/dev-up.*` 提供。**Mailpit 是否最终采用仍是未定项**（见 `docs/open-questions.md` D6）。
 
 ---
 

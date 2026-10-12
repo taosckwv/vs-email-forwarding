@@ -6,9 +6,9 @@
 
 集成测试需要**真实 PostgreSQL** 与 **Mailpit**（本地 SMTP/IMAP 回路验证）：
 
-```powershell
-./scripts/dev-up.ps1                              # Windows
-docker compose -f compose.dev.yaml up -d          # 通用 / Linux
+```bash
+bash scripts/dev-up.sh                            # 开发机（Linux）
+docker compose -f compose.dev.yaml up -d          # 等价写法
 ```
 
 ## 数据库隔离

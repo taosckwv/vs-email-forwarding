@@ -23,7 +23,7 @@
 
 ## 自查清单
 
-- [ ] 本地门禁已跑过且全部通过：`scripts/check.ps1`（或 `check.sh`）—— 即 `ruff format --check`、`ruff check`、`mypy src`、`pytest`
+- [ ] 本地门禁已跑过且全部通过：`bash scripts/check.sh` —— 即 `ruff format --check`、`ruff check`、`mypy src`、`pytest`
 - [ ] 无密钥、口令、真实主机名 / 端口 / 账号进入仓库或提交历史
 - [ ] 日志与异常信息中不含邮件正文、附件内容、收件人地址、原始 MIME
 - [ ] 涉及数据库访问的改动**没有**裸写 SQL，也没有绕过仓储层

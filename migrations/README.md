@@ -10,7 +10,7 @@
 
 初始化时机与命令（届时由数据模型规格规定）：
 
-```powershell
+```bash
 uv run alembic init migrations     # 生成 env.py / script.py.mako / versions/
 uv run alembic revision --autogenerate -m "建立初始表结构"
 uv run alembic upgrade head

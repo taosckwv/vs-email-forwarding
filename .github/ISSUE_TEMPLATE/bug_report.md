@@ -9,7 +9,7 @@ labels: bug
 
 <!-- 必选一个，并补充版本信息 -->
 
-- [ ] 开发机（Windows）
+- [ ] 开发机（CentOS 8 + Docker）
 - [ ] 生产服务器（CentOS 8 + Docker，与公网隔离）
 - [ ] 其他：
 

@@ -9,8 +9,7 @@
 # 用法（可以从任意目录调用，脚本自己推导仓库根）：
 #     bash scripts/dev-up.sh
 #
-# 前置条件：宿主机能跑 Docker。**本项目那台开发机（Windows）跑不了**——它装不了 Docker Desktop，
-#   所以本脚本要在能跑 Docker 的 Linux 机器上执行（见 docs/research/05-dev-and-build-environment.md）。
+# 前置条件：宿主机能跑 Docker（开发机已装，见 docs/research/05-dev-and-build-environment.md）。
 # =============================================================================
 set -euo pipefail
 
