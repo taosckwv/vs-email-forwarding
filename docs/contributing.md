@@ -115,7 +115,7 @@ chore: 升级 ruff 到 v0.16.x
 | 调度 / 幂等 / 数据库 / 流水线 | `docs/research/02-runtime-and-scheduling.md` |
 | 技术栈 / 依赖 / 门禁 / ruff / CI | `docs/research/03-dependencies-and-toolchain.md` |
 | 审查 / 发件人身份 / 日志与信息红线 | `docs/research/04-security-and-review.md` |
-| 开发机 / 构建环境 / Windows 坑 / 本地门禁 | `docs/research/05-dev-and-build-environment.md` |
+| 开发机、Docker 与构建环境 | `docs/research/05-dev-and-build-environment.md` |
 | 命名 / 许可 / 仓库治理 | `docs/research/06-naming-licensing-and-governance.md` |
 
 决策记录只写**结论与理由**，不写实现细节，也不写过程与时间线。
@@ -132,41 +132,32 @@ chore: 升级 ruff 到 v0.16.x
 
 **没有任何自动兜底**：仓库里没有 CI workflow，也不会新建。提交前请自行跑过：
 
-```powershell
-./scripts/check.ps1        # Windows
-bash scripts/check.sh      # Linux / CentOS 8
+```bash
+bash scripts/check.sh
 ```
 
 脚本依次执行：`ruff format --check` → `ruff check` → `mypy src` → `pytest`。
 
-**首次克隆后安装钩子**（只需一次）：
+**首次克隆后安装钩子**（只需一次；本机尚未安装）：
 
-```powershell
+```bash
 uv run pre-commit install --install-hooks
 uv run pre-commit install --hook-type commit-msg
 ```
 
 **手动全量检查**：
 
-```powershell
+```bash
 uv run pre-commit run --all-files
 ```
 
-### 5.1 已知环境问题（Windows，实测踩过）
+> **注意**：本机 `github.com:443` 直连被拒，而 pre-commit 首次执行要 `git fetch` 它自己的 hook 仓库，因此**在这台开发机上跑不通**。门禁以 `bash scripts/check.sh` 为准——它不依赖网络（见 `docs/research/05-dev-and-build-environment.md`）。
 
-这两条都是**环境问题，不是仓库配置问题**，重试或按下面处理即可，不要为此改仓库配置：
+### 5.1 本机执行前提
 
-1. **提交时报 `` `pre-commit` not found. Did you forget to activate your virtualenv? ``**
-   原因：git 钩子脚本由 pre-commit 生成，里面用 `[ -x "$INSTALL_PYTHON" ]` 判断虚拟环境解释器；在 Windows 上该值是反斜杠路径（且本仓库路径含空格与中文），git 自带的 bash 判断失败，于是回退到「在 PATH 上找 `pre-commit`」——而 `pre-commit` 只装在 `.venv\Scripts\` 里，未激活时不在 PATH 上。
-   处理（任选其一）：提交前激活虚拟环境；或把 pre-commit 装到已在 PATH 上的目录：
-   `python -m pip install --user pre-commit`（**版本请与 `pyproject.toml` 中锁定的一致**）。
+开发机是 **CentOS 8 Linux 虚拟机，项目命令一律以仓库属主身份执行**；`uv` 在该用户的 PATH 上，开发依赖容器在本机起得来。完整环境事实（Docker 版本与镜像源、SELinux、Python 3.13、编码与换行符硬约定）见 `docs/research/05-dev-and-build-environment.md`，**本文件不重复**。
 
-2. **`pre-commit` 首次为钩子建环境时报 `PermissionError: [WinError 5]`**
-   现象：`virtualenv` 在预热 pip 时删除 `%TEMP%\...\pip*.exe` 被拒（该文件刚写入即被杀毒软件或索引服务锁住），报错形如
-   `RuntimeError: failed to build image pip because: ... PermissionError: [WinError 5] 拒绝访问`。
-   处理：**直接再提交一次**即可通过（失败的那次不会留下坏环境）。
-   若反复出现，把 virtualenv 的 app-data 指到一个干净目录（用户级环境变量，生效于新开的终端）：
-   `VIRTUALENV_OVERRIDE_APP_DATA=%LOCALAPPDATA%\pc-venv-data`
+**pre-commit 钩子在本机装不上**（安装与运行都要 `git fetch` GitHub，而本机 `github.com` 直连被拒）；首次克隆后那两条命令在有 GitHub 访问的机器上执行。**本机的门禁一律用 `bash scripts/check.sh`。**
 
 其他约定：
 

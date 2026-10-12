@@ -17,7 +17,7 @@
 | 调度载体、幂等抢占硬约束、重试语义 | `docs/research/02-runtime-and-scheduling.md` |
 | 技术栈、依赖清单、本地门禁 | `docs/research/03-dependencies-and-toolchain.md` |
 | 安全审查、API 鉴权口径、日志与信息红线 | `docs/research/04-security-and-review.md` |
-| 开发机、构建环境与 Windows 环境坑 | `docs/research/05-dev-and-build-environment.md` |
+| 开发机、Docker 与构建环境 | `docs/research/05-dev-and-build-environment.md` |
 | 命名、许可与仓库治理 | `docs/research/06-naming-licensing-and-governance.md` |
 | 代码分层与依赖方向（哪一层能调哪一层、两条触发路径怎么走） | `docs/architecture.md` |
 | 某特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `specs/<特性>/design.md` |
@@ -36,13 +36,13 @@
 
 **不得在未确认前实现仍属未定的条目**——未定项的完整清单只在 `docs/open-questions.md`，**本文件不复述它**。设计阶段那一批条目（数据模型字段、依赖选型、重试分类、审查接口形态等）**已经拍板并落入 `specs/0001-email-forwarding-service/design.md` 与 `docs/research/` 各册**，不再是未定项。
 
-**环境硬事实（会直接阻塞工作，故在此保留一句）**：开发机是未暴露嵌套虚拟化的虚拟机，**装不了 Docker Desktop**（WSL2 / Hyper-V 两个后端都依赖硬件虚拟化与 SLAT）；Linux 上的 Docker 不受影响。因此镜像改为**在生产服务器上本地构建**，基础镜像以 tar 带入。详见 `docs/research/05-dev-and-build-environment.md` 与 `docs/research/01-delivery-and-deploy.md`。
+**环境硬事实（会直接阻塞工作，故在此保留一句）**：开发机是 **CentOS 8 Linux 虚拟机，跑得了 Docker**——项目命令一律**以仓库属主身份**执行，`uv` 在该用户 PATH 上；旧 Windows 开发机**已弃用**。镜像**当前仍在生产服务器上本地构建**，是否改到开发机留到开发完成后再定。详见 `docs/research/05-dev-and-build-environment.md` 与 `docs/research/01-delivery-and-deploy.md`。
 
 ---
 
 ## 3. 常用命令
 
-```powershell
+```bash
 # 安装 / 同步依赖（按 .python-version 准备 Python 3.13）
 uv sync
 
@@ -50,15 +50,13 @@ uv sync
 uv run uvicorn vs_email_forwarding.main:app --reload
 
 # 一键门禁：ruff format --check + ruff check + mypy src + pytest
-# ⚠️ 不要给它加 2>&1 或任何流重定向：uv 的正常构建日志会走 stderr，
-#    Windows PowerShell 5.1 会把它变成 NativeCommandError 而中断脚本（脚本本身没问题）
-./scripts/check.ps1        # Windows
-bash scripts/check.sh      # Linux / CentOS 8
+bash scripts/check.sh
 
 # 起开发依赖（PostgreSQL + Mailpit），读 compose.dev.yaml
-./scripts/dev-up.ps1       # Windows
-bash scripts/dev-up.sh     # Linux
+bash scripts/dev-up.sh
 ```
+
+项目命令一律**以仓库属主身份**执行（开发机上的属主是 `tao`）。
 
 部署脚本与交付链**尚未实现**——`deploy/` 目前是空的（只留一份职责 `README.md`）。**不要擅自新建部署脚本**：新链路（在 CentOS 8 生产服务器上本地构建 + 基础镜像以 tar 带入）的脚本形态仍是未定项，见 `docs/open-questions.md` D2。
 
@@ -152,11 +150,8 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 - **外部能力一律通过 `providers/` 的接口访问**，不允许在业务流程里直接 `import` 具体实现库。
 - 时间一律使用带时区的 `datetime`（按 UTC 存储），不要用裸的 `datetime.now()`。
 - **文件编码与换行符是硬约定，不是风格偏好**——写错会让脚本直接跑不起来，而不是显示难看一点：
-  - **一切 PowerShell 脚本（`scripts/*.ps1` 等）必须保存为 UTF-8 with BOM。**
-    - 原因：在 Windows PowerShell 5.1 下，**没有 BOM 的 `.ps1` 会被按 GBK 解码**，脚本里的中文注释会引发**语法错误**——不是显示成乱码，而是脚本根本跑不起来。
-    - 因此**用编辑器重写这些 `.ps1` 时必须确认 BOM 没有被剥掉**，这是后续改动中最容易被破坏的一点。提交前若不确定，检查文件开头三个字节是否为 `EF BB BF`。
-  - **换行符以 `.gitattributes` 为准，不要自行改动其中的规则**：`.ps1` / `.psm1` / `.bat` / `.cmd` 强制 `eol=crlf`，其余文本文件（`.sh`、`.py`、`.toml`、`.yaml`、`.yml`、`.json`、`.md`、`.sql`、`Dockerfile`、`.env*`）强制 `eol=lf`。`.sh` 带 CRLF 进了容器会直接报 `bad interpreter`。
-  - **除 `.ps1` 系列外，其余文本文件一律 UTF-8 无 BOM + LF**。
+  - **一切文本文件一律 UTF-8 无 BOM + LF。** 仓库不含 Windows 脚本（`.ps1` / `.bat` 已删除）。
+  - **换行符以 `.gitattributes` 为准，不要自行改动其中的规则**：`.sh` / `.bash` 与其余文本文件（`.py`、`.toml`、`.yaml`、`.yml`、`.json`、`.md`、`.sql`、`Dockerfile`、`.env*`）一律 `eol=lf`。`.sh` 带 CRLF 进了容器会直接报 `bad interpreter`。
 
 ---
 
@@ -197,7 +192,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 - ❌ 不要写不可测试的验收标准，不要跳过 `specs/` 直接改代码。
 - ❌ 不要为了让门禁通过而放宽 ruff / mypy 配置（改配置属于不可逆决策，要先按 §6 更新对应落点的决策段）。
 - ❌ 不要在日志里打印邮件正文、收件人地址或凭据。
-- ❌ 不要在无 BOM 的情况下重写 `.ps1`（Windows PowerShell 5.1 会按 GBK 解码，中文注释直接导致语法错误），也不要改动 `.gitattributes` 里的换行符规则。
+- ❌ 不要改动 `.gitattributes` 里的换行符规则（一切文本文件 LF）。
 - ❌ 不要用 `.gitkeep` 顶替职责 `README.md`，也不要留下空目录——Git 不跟踪空目录，别人克隆下来什么都没有。
 
 ---

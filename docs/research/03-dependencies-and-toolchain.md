@@ -24,10 +24,9 @@
 
 **本机环境事实**
 
-- 开发机默认 `python` 是 **3.14**，而项目锁定的是 **3.13**，两者不一致。因此**一律用 `uv run` 执行**（`uv run ruff` / `uv run mypy` / `uv run pytest`），**不要直接调用 `python`**——直接用会拿到 3.14 的环境，报出与项目无关的错。
-- 本机另有一个 **Microsoft Store 版 Python 3.13**（在 `WindowsApps` 下），在虚拟环境与路径上有已知怪癖，**不使用**；项目一律以 `uv` 管理的 3.13 为准。
-- **`uvloop` 在 Windows 上无 wheel**，`uvicorn[standard]` 在 Windows 上不会安装它；生产是 Linux，可正常获得 uvloop 与服务端性能优化。因此本机不装 uvloop **不是缺陷**，也不需要为它做任何特殊处理。
-- 本机**不需要 Docker 就能跑完门禁**：门禁四步与 `tests/unit/` 都是纯逻辑，不依赖容器。
+- 开发机（CentOS 8 Linux 虚拟机）的 `python3` 已是 **3.13**，与项目锁定的 `.python-version` 一致；但**一律用 `uv run` 执行**（`uv run ruff` / `uv run mypy` / `uv run pytest`），**不要直接调用 `python`**——让解释器与依赖统一由 uv 管理。
+- **`uvloop` 在 Windows 上无 wheel**，`uvicorn[standard]` 在 Windows 上不会安装它；生产与开发机都是 Linux，可正常获得 uvloop 与服务端性能优化。
+- 本机**不需要 Docker 就能跑完门禁**：门禁四步与 `tests/unit/` 都是纯逻辑，不依赖容器。开发依赖容器另由 `scripts/dev-up.sh` 起（见 `docs/research/05-dev-and-build-environment.md`）。
 
 **门禁（不跑 CI）**
 
@@ -35,7 +34,7 @@
 - **门禁全部落在本地，没有任何自动兜底**：没有人会在 PR 上替你跑检查，配置错误也不会被流水线拦住。提交前必须自己跑一键脚本并全绿。
 - **门禁分两层**：
   1. **pre-commit**——ruff format、ruff lint、commitizen 校验提交信息格式，外加基础文件卫生（行尾空白、文件末尾换行、YAML / TOML 可解析、合并冲突标记、大文件、行尾统一为 LF）。
-  2. **一键脚本**——`scripts/check.ps1`（Windows / PowerShell）与 `scripts/check.sh`（Linux，CentOS 8 可用），两者**行为完全一致**、固定四步、顺序不可调整：
+  2. **一键脚本**——`scripts/check.sh`，固定四步、顺序不可调整：
      `uv run ruff format --check .` → `uv run ruff check .` → `uv run mypy src` → `uv run pytest`。
 - 一键脚本的两个刻意设计：**不接受参数**（避免「本地跑的参数与别人不同」导致门禁不可比），**不加「先起容器」逻辑**（让门禁依赖尽量少，才能随手就跑）。任一步失败立即以非零退出码结束，后续步骤不再执行。
 - **已知代价**：`git commit --no-verify` 可以跳过 pre-commit，且没有任何远端机制拦截；「这个改动跑过测试了吗」只能靠信任。这是接受不跑 CI 的直接代价，不另做补偿机制。
@@ -79,15 +78,15 @@
 
 ## 实测证据
 
-- **门禁四项全绿**（在当前工作副本上逐一执行，命令入口即 `scripts/check.ps1` / `scripts/check.sh` 的四个步骤）：
+- **门禁四项全绿**（在当前工作副本上逐一执行，命令入口即 `scripts/check.sh` 的四个步骤）：
   - `ruff format --check .` → `58 files already formatted`；
   - `ruff check .` → 零告警，退出码 0；
   - `mypy src` → `Success: no issues found in 15 source files`；
   - `pytest` → `1 passed`。
 - **`ruff check` 的全部告警只来自 `RUF001` / `RUF002` / `RUF003`，零处来自其他规则**。把这三条从 `ignore` 中移出后复现（`ruff check . --select RUF001,RUF002,RUF003 --statistics`）：共 **314 处**，其中 `RUF002` 191 处、`RUF001` 92 处、`RUF003` 31 处，**没有第四种规则出现**。当前 `ignore` 生效时同一份代码报 0 处，且没有冒出任何其他规则的告警——这正是「只有中文标点这一处例外，其余标准未动」的直接证据。
 - 同一次 `pytest` 还输出一条 `StarletteDeprecationWarning`：`Using httpx with starlette.testclient is deprecated; install httpx2 instead`，来源是虚拟环境中的 `fastapi/testclient.py`。它说明**测试是跑通的**（`httpx` 在 3.13 上实际可用），风险性质是「将来会不会被上游弃用」，已登记为未定项 E2。
-- **`uvloop` 在 Windows 上确实不装**：`uv.lock` 中该依赖带 `sys_platform != 'win32'` 标记，本机虚拟环境实测 `uvloop` 未安装。
-- **解释器不一致是实测事实**：虚拟环境中的解释器为 **Python 3.13.15**，而 PATH 上默认的 `python` 指向 **`C:\Python314\python.exe`**（3.14）。二者不一致正是「一律用 `uv run`」这条结论的依据。
+- **`uvloop` 在 Windows 上确实不装**：`uv.lock` 中该依赖带 `sys_platform != 'win32'` 标记；开发机（Linux）实测已装 `uvloop 0.22.1`，生产同为 Linux，同样可获得。
+- **解释器与依赖一律交给 uv 管理**：虚拟环境中的解释器实测为 **Python 3.13.16**，与 `.python-version` 的 `3.13` 一致；「一律用 `uv run`」是为了让解释器与依赖只由一处决定，而不是因为存在版本不一致。
 - **`.github/` 下没有 `workflows/`**：实测只有 `ISSUE_TEMPLATE/`（`bug_report.md`、`feature_request.md`）与 `PULL_REQUEST_TEMPLATE.md`。
 - **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
 - **门禁全绿的适用范围**：业务逻辑尚未实现，`src/` 下只有包占位与一个能返回 `/healthz` 的最小入口。因此上述绿只证明**工程配置与工具链可用**，不证明任何业务正确性。
@@ -115,7 +114,7 @@
 - `.python-version` —— 锁定 3.13（不得改动）。
 - `uv.lock` —— 依赖解析与锁定的唯一真源，随依赖变更一起提交。
 - `.pre-commit-config.yaml` —— pre-commit 挂钩清单与 `commit-msg` 阶段；启用命令为 `uv run pre-commit install --install-hooks` 与 `uv run pre-commit install --hook-type commit-msg`。
-- `scripts/check.ps1` —— 一键门禁的 Windows 入口（必须保存为 UTF-8 with BOM）；`scripts/check.sh` —— Linux / CentOS 8 入口（必须 LF、无 BOM），两者步骤与失败行为完全一致。
+- `scripts/check.sh` —— 一键门禁的唯一入口（必须 LF、无 BOM）；Windows 版 `check.ps1` 已删除。
 - `scripts/README.md` —— 脚本清单、门禁为什么重要、与 Docker 的关系、常见问题处置。
 - `tests/unit/` —— 不依赖数据库与网络的纯逻辑单测，边界写在 `tests/unit/README.md`；需要真实 PostgreSQL 与邮件服务的用例放 `tests/integration/`。
 - `docs/open-questions.md` —— 未定项的唯一清单（本册「未定项」段只放指针）。

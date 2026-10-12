@@ -23,7 +23,7 @@
 | 部署、交付、构建镜像、服务器侧约束 | `research/01-delivery-and-deploy.md` |
 | 加依赖、换工具、跑门禁、了解技术栈 | `research/03-dependencies-and-toolchain.md` |
 | 改安全审查、API 鉴权口径、日志与信息红线 | `research/04-security-and-review.md` |
-| 在本机开发、环境报错、Windows 上的坑 | `research/05-dev-and-build-environment.md` |
+| 在本机开发、跑门禁、环境报错 | `research/05-dev-and-build-environment.md` |
 | 命名、许可、提交与 PR 规范 | `research/06-naming-licensing-and-governance.md`、`contributing.md` |
 | 报告安全问题 | `security.md` |
 | 看还有哪些没定、每条阻塞了什么 | `open-questions.md` |
@@ -47,7 +47,7 @@
 | 调度载体、幂等抢占硬约束、数据库与部署形态、重试语义的数字 | `research/02-runtime-and-scheduling.md` |
 | 技术栈与依赖清单、本地门禁、版本与镜像标签、ruff 取舍、构建环境 | `research/03-dependencies-and-toolchain.md` |
 | 安全审查占位与合规风险、API 鉴权口径、日志与信息红线 | `research/04-security-and-review.md` |
-| 开发机、构建环境与 Windows 环境坑 | `research/05-dev-and-build-environment.md` |
+| 开发机、Docker 与构建环境 | `research/05-dev-and-build-environment.md` |
 | 命名、许可与仓库治理 | `research/06-naming-licensing-and-governance.md` |
 | 代码分层与依赖方向（层怎么切、哪一层能调哪一层、两条触发路径） | `architecture.md` |
 
