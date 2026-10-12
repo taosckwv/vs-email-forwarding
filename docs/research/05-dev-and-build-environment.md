@@ -75,12 +75,13 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 
 #### 开发依赖（本机现在起得来）
 
-- 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 `axllent/mailpit:v1.31.3`；两者都**只绑回环**。Mailpit 提供 SMTP（1025）与 Web UI（8025），用于流②的发信侧验证；**它不提供 IMAP**（见下），所以流③的入站回路在本地跑不通。
+- 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 **`greenmail/standalone:2.1.14`**；两者都**只绑回环**。GreenMail 同时提供 **SMTP（3025）与 IMAP（3143）**，因此流②的发信侧与**流③的入站回路都能在本地离线跑通**（另有 POP3 3110、SMTP API 8080；SMTPS 3465 / IMAPS 3993 未映射）。
 - 一键起依赖：`scripts/dev-up.sh`（Linux）。应用本体**不在容器里跑**，用 `uv run uvicorn vs_email_forwarding.main:app --reload` 在宿主机跑。
-- **两个镜像均已在开发机上实测拉取成功**（`postgres:17` 与 `axllent/mailpit:v1.31.3`）。
+- **两个镜像均已在开发机上实测拉取成功**（`postgres:17` 与 `greenmail/standalone:2.1.14`）。
 - 交付链需要的三个基础镜像**也都能在本机拉到**：`python:3.13-slim-trixie`（经 mirror）、`ghcr.io/astral-sh/uv:0.12.20`（直连 ghcr.io）、`postgres:17`（经 mirror）。**但这不等于「本机应承担构建」**——那条属未定项，见下。
-- **Mailpit 不提供 IMAP**（这是本机实测结论，不是推测）：只有 SMTP（1025）+ Web UI（8025）+ **POP3**（1110），**上游把 IMAP 的 issue 以 `not_planned` 关闭**（证据见下）。本项目的流③按 IMAP 拉取回复，所以本地跑不通「发出去 → 被拉回来 → 关联上原邮件」这条回路——**这不是 compose 配置错，是 Mailpit 的产品边界**。该缺口登记为 `docs/open-questions.md` **D16**（`D6`「是否采用 Mailpit」由此被取代并移除）。
-- `compose.dev.yaml` 里 mailpit 服务的 `1143` 端口映射与 `MP_IMAP_*` 两个环境变量**实测无效**（Mailpit 无 IMAP 服务，变量被忽略），待 D16 拍板后一并处理。
+- **邮件服务用 GreenMail，不用 Mailpit**（所有者拍板，2026-10；`D16` 由此关闭，`D6`「是否采用 Mailpit」被取代并移除）。**Mailpit 不提供 IMAP**（只有 SMTP + Web UI + POP3，上游把 IMAP 的 issue 以 `not_planned` 关闭）⇒ 它**不可能**同时覆盖收发两个协议，用它就跑不通「发出去 → 被拉回来 → 关联上原邮件」。**被否决方向：用 Mailpit 做本地回路验证**（证据见「实测证据」）。
+- GreenMail 的三个实测行为要记住：① **按账号分信箱**——投给 `reply@example.com` 的信要用该账号登录才看得到（正好贴合 `IMAP_USERNAME` 的用法）；② **消息只活在容器生命周期里**（没挂卷，`down` 即清空，集成测试不必担心上一轮残留）；③ **端口与 Mailpit 完全不同**（SMTP 3025 / IMAP 3143），`.env` 与文档里的 `1025/1143` 一律作废。
+- GreenMail 官方镜像**没有 healthcheck 命令**（镜像里只有 JRE 与一个启动脚本），所以 `compose.dev.yaml` 里不给它写 healthcheck；判断它好了没有看容器日志里的 `Starting GreenMail standalone v2.1.14 ... protocol='imap'`。
 
 ### 本机侧的执行环境
 
@@ -125,12 +126,14 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 - **`containerd.io` 的 obsoletes 与 podman 的 requires 硬冲突**：`docker-ce 26.1.3` 要求 `containerd.io >= 1.6.24`；`containerd.io` 声明 `obsoletes: containerd, runc`，而 `containers-common` 与 `podman` 要求 `runc`（字面包名）。`dnf` 因此必须 `--allowerasing`，实际连带移除 `podman` / `podman-catatonit` / `containers-common` / `podman-docker` 四个包。`crun` 虽是另一个 `oci-runtime` 提供者，但 `containers-common` 要的是**字面 `runc` 包**，所以换 runtime 解决不了。
 - **mirror 的端到端验证（不是只看状态码）**：对 `docker.1panel.live` 手工走完 registry v2 协议——`/v2/library/hello-world/manifests/latest` 返回 **HTTP 200** 的 OCI image index（11062 字节，20 个子 manifest），取出子 manifest（HTTP 200）后下载其 layer blob（HTTP 200，2415 字节），**且 blob 的 sha256 与 manifest 里的 digest 校验一致**（`sha256sum -c` 报 OK）。这一步才判定「源真能用」。
 - **只凭状态码会误判**：`docker.1ms.run` 的 `/v2/` 返回 401（未认证，属正常），`hub.rat.dev` 返回 302（只是跳转），两者都**不足以**证明能拉取。
-- **实际拉取成功（本机实测，全部 exit 0）**：`docker pull hello-world` 且 `docker run --rm hello-world` 打印成功信息；`postgres:17`；`axllent/mailpit:v1.31.3`；`python:3.13-slim-trixie`；`ghcr.io/astral-sh/uv:0.12.20`。
+- **实际拉取成功（本机实测，全部 exit 0）**：`docker pull hello-world` 且 `docker run --rm hello-world` 打印成功信息；`postgres:17`；`greenmail/standalone:2.1.14`（310MB，见下）；`python:3.13-slim-trixie`；`ghcr.io/astral-sh/uv:0.12.20`。
 - **tao 无 docker 组时确实会被卡住**：未加组前以 tao 跑 `scripts/dev-up.sh` 直接走「[阻塞] docker 命令存在，但连不上 Docker 守护进程」并以退出码 1 结束；`usermod -aG docker tao` 后（以 `sg docker` 等效验证）`docker info` 成功。
-- **`dev-up.sh` 现在能过前置检查**：以 tao 身份（带 docker 组）执行 `bash scripts/dev-up.sh` 走到 `docker compose -f compose.dev.yaml up -d` 这一步，退出码 0。验证时用 PATH 前置的探测 shim **只拦截 `up`**、其余透传，因此**没有真的起容器**——`compose.dev.yaml` 的 Mailpit 未拍板，不该由本次任务替它决定。
+- **`dev-up.sh` 曾以探测 shim 只验证过前置检查**（拦 `up` 不真起容器，退出码 0）。**后续已改为真实跑通**，见下面「`scripts/dev-up.sh` 实跑成功」。
 - **`compose.dev.yaml` 能被 compose v2 解析**：`docker compose -f compose.dev.yaml config --quiet` 退出码 0；解析出的两个服务与 `platform: linux/amd64` 与文件内容一致。
 - **`scripts/dev-up.sh` 实跑成功（2026-10，真实起容器）**：`docker compose -f compose.dev.yaml ps` 两个服务都 `Up (healthy)`；Mailpit Web UI `curl` 返回 **200**；Mailpit `/api/v1/info` 返回 `{"Version":"v1.31.3", ...}`；PostgreSQL `pg_isready` → `accepting connections`，`select version()` → `PostgreSQL 17.11`，开发库 `vs_email_forwarding_dev` 已自动建出（测试库仍需手工建）；四个端口（5432 / 1025 / 1143 / 8025）都只绑 `127.0.0.1`。
 - **Mailpit 的 `MP_*` 变量与 IMAP 能力实测**：容器内 `env` 确认 `MP_SMTP_AUTH_ACCEPT_ANY`、`MP_SMTP_AUTH_ALLOW_INSECURE`、`MP_IMAP_AUTH_ACCEPT_ANY`、`MP_IMAP_AUTH_ALLOW_INSECURE` 都传进去了。用一次性 venv（`imaplib` + `smtplib`）做真实往返：**SMTP 侧任意凭据 `AUTH PLAIN` 登录成功并投递成功**（`MP_SMTP_AUTH_*` 生效）。**IMAP 侧连不上**：`imaplib.IMAP4("127.0.0.1", 1143)` 一建连就 `EOF`，裸 socket 收到的 greeting 是空串，而**容器日志只有 `[smtpd]`、`[http]`、`[pop3]` 三类启动行，没有 IMAP 行**。
+- **GreenMail 替换 Mailpit 的实测（2026-10）**：`docker pull greenmail/standalone:2.1.14`（310MB，digest `sha256:1ef95a96…`，与 `latest` 相同；**经 mirror 拉取偏慢，实测一次 300s 超时，放后台才拉完**）。容器启动日志列出六个协议与 HTTP API：`smtp 3025`、`smtps 3465`、`pop3 3110`、`pop3s 3995`、`imap 3143`、`imaps 3993`、`GreenMail API server at http://0.0.0.0:8080/`，版本 `GreenMail standalone v2.1.14`，启动参数含 `-Dgreenmail.auth.disabled`。
+- **GreenMail 的完整回路实测通过**：用 `smtplib` 投递原邮件与一封带 `In-Reply-To` / `References` 的回复（均成功，任意口令可 AUTH），再以**收件人账号** `reply@example.com` 登录 `imaplib.IMAP4(127.0.0.1, 3143)`：信箱被按账号自动建出、`SELECT INBOX` → `OK`、两封信原样取回（`Message-ID` 与 `In-Reply-To` / `References` 保持），并按 `HEADER In-Reply-To "<probe-1@example.com>"` **搜索命中回复**——即流③的关联做法可行。另实测：**信箱内容跨进程持久在容器里**（前一次的探针邮件仍在），但**不是持久化存储**——`docker compose down` 删掉容器后信箱即清空，所以集成测试不会受上一轮残留影响。
 - **Mailpit 不支持 IMAP 的证据链**：`docker run --rm axllent/mailpit:v1.31.3 --help | grep -ci imap` → **0**；镜像 `ExposedPorts` 只有 `1025/tcp`、`8025/tcp`、`1110/tcp`（镜像 ENV 里没有任何 `MP_IMAP_*`）；`--help` 里有 `--pop3`（默认 `[::]:1110`）而无任何 IMAP 选项。上游 issue **#587「IMAP support?」与 #730「[Feat] Imap Support」均以 `state_reason: not_planned` 关闭**（#249 的 `completed` 落在 POP3 上）。
 
 **digest 漂移（交付链要用的读数）**
@@ -156,7 +159,7 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 |---|---|
 | `scripts/check.sh` | 门禁入口；四步定义与取舍见 `docs/research/03-dependencies-and-toolchain.md` |
 | `scripts/dev-up.sh` | 起开发依赖（读 `compose.dev.yaml`） |
-| `compose.dev.yaml` | 开发依赖定义：PostgreSQL + Mailpit，只绑回环 |
+| `compose.dev.yaml` | 开发依赖定义：PostgreSQL + GreenMail（SMTP/IMAP/POP3），只绑回环 |
 | `/etc/docker/daemon.json` | registry mirror（**在机器上，不在仓库里**） |
 | `/etc/yum.repos.d/docker-ce.repo` | docker-ce 安装源，指向 aliyun（**在机器上，不在仓库里**） |
 | `.gitattributes` | 换行符强制规则（一切文本文件 LF） |
@@ -170,8 +173,6 @@ DSH 会话与 bash 工具**以 root 运行**，而仓库与 `.venv` 属主是 **
 
 详见 `docs/open-questions.md`：
 
-- D16 用哪个提供 IMAP 的本地服务补上入站回路（Mailpit 不提供 IMAP）
 - D13 基础镜像 tar 由哪台机器、用什么工具产出
-- Mailpit 的 `MP_*` 环境变量名与 IMAP 能力**已在本机对容器实跑核对完毕**（见「实测证据」），不再是未定项。
 
-D3（开发机的 Docker 能力）**已关闭**：结论已写入本册——开发机跑得了 Docker，不再列为未定项。
+**已关闭、不再列为未定项**：D3（开发机的 Docker 能力——跑得了 Docker）；D16（本地 IMAP 捕获服务——结论为改用 GreenMail，实测证据见上）；Mailpit 的 `MP_*` 变量名与 IMAP 能力（已对容器实跑核对完毕）。

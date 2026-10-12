@@ -21,7 +21,7 @@
 uv sync                                               # 按 .python-version 准备 Python 3.13 并同步依赖
 uv run uvicorn vs_email_forwarding.main:app --reload  # 本地起服务（当前只有 /healthz）
 bash scripts/check.sh                                 # 一键门禁
-bash scripts/dev-up.sh                                # 起开发依赖（PostgreSQL + Mailpit，需要 Docker）
+bash scripts/dev-up.sh                                # 起开发依赖（PostgreSQL + GreenMail，需要 Docker）
 ```
 
 要点：
@@ -30,7 +30,7 @@ bash scripts/dev-up.sh                                # 起开发依赖（Postgr
 - **开发机是一台 CentOS 8 Linux 虚拟机，已装 Docker**（26.1.3，与生产对齐），因此开发依赖容器在本机起得来、`tests/integration/` 的容器依赖也能在本机跑。
 - 项目命令**以仓库属主身份**执行（本仓库属主是 `tao`）；`uv` 在该用户的 PATH 上。
 - 门禁固定四步：`ruff format --check` → `ruff check` → `mypy src` → `pytest`。**本仓库不跑 CI**，门禁只能自己跑，没有任何自动兜底。
-- 开发依赖（PostgreSQL 与本地邮件捕获工具）由 `compose.dev.yaml` 与 `scripts/dev-up.*` 提供。**Mailpit 实测不提供 IMAP**（只有 SMTP / Web UI / POP3），因此本地跑不通流③的入站回路；缺口与下一步见 `docs/open-questions.md` D16。
+- 开发依赖（PostgreSQL 与本地邮件服务器 **GreenMail**）由 `compose.dev.yaml` 与 `scripts/dev-up.*` 提供：GreenMail 同时提供 SMTP 与 IMAP，本地可离线跑通「发出去 → 被拉回来 → 关联上原邮件」的完整回路（见 `docs/research/05-dev-and-build-environment.md`）。
 
 ---
 

@@ -57,12 +57,6 @@
 - **已定**：保留期 **30 天**、自提交时刻起算、到期后邮件与其回复一起移除（`NFR-8`）；清理是**第五条进程内后台任务**，间隔为配置项，范围为邮件表与 `rejected` 表并由外键级联删除回复——调度地位见 `docs/research/02-runtime-and-scheduling.md`，范围与间隔见 `specs/0001-email-forwarding-service/design.md`。
 - **未定**：是否存在**合规要求**的更长期保留。若有，属需求变更，要回到 `spec.md` 改 `NFR-8`，不是设计层能自行决定的事。
 
-### D16. 本地 IMAP 捕获服务用什么（**Mailpit 已实测不提供 IMAP**）
-
-- **已定**：**Mailpit 不提供 IMAP**——只有 SMTP + Web UI + POP3，上游把 IMAP 相关 issue 以 `not_planned` 关闭（本机实测证据见 `docs/research/05-dev-and-build-environment.md`）。因此**它不可能同时提供 SMTP 与 IMAP**，D6 原本「用 Mailpit 同时覆盖收发两个协议」的形态不成立；本机继续用它的 SMTP / Web UI 侧（已实跑生效）。
-- **未定**：本项目的流③必须用 IMAP 拉取回复，而本地没有可用的 IMAP 服务 ⇒ **本地跑不通「发出去 → 被拉回来 → 关联上原邮件」这条回路**。要补上这个缺口，可选：① 另加一个提供 IMAP 的本地测试服务（候选：GreenMail，Java 实现、SMTP/IMAP/POP3 齐全，镜像名与可行性**尚未在本机核实**）；② 改用真实邮箱做集成测试（放弃「不依赖真实账号」这一好处）；③ 一期先不做本地入站回路，只支持打真实邮箱。**由所有者决定。**
-- **阻塞**：`compose.dev.yaml` 里 mailpit 服务的 1143/IMAP 映射与 `MP_IMAP_*` 变量、`scripts/README.md` 的端口表，以及 `tests/integration/` 的入站回路用例。
-
 ### D8. 服务器侧 Docker 是否有可升级路径
 
 - **待确认**：Docker 官方已不再支持 CentOS 8 作为宿主；服务器上这版 Engine 构建于 2024-05-16，容器运行时补丁停在该时间点（**不预设存在任何具体漏洞**）。

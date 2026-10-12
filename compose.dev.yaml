@@ -9,9 +9,10 @@
 #
 # 前提：本机已安装并启动 Docker（开发机是 CentOS 8 Linux 虚拟机，已装 26.1.3）。
 #
-# ⚠️ 待确认：Mailpit 这个开发依赖本身尚未在对话中确认（见
-#    docs/open-questions.md D6）。如果最终不采用 Mailpit，删掉下面的 mailpit 服务，
-#    并同步调整 .env.example 里的 SMTP/IMAP 指向。
+# 邮件服务用 GreenMail（不是 Mailpit）：本项目流③必须用 IMAP 拉取回复，而 Mailpit
+# 不提供 IMAP（只有 SMTP / Web UI / POP3，上游 issue #587、#730 均 not_planned）。
+# GreenMail 同时提供 SMTP 与 IMAP，本地才能跑通「发出去 → 被拉回来 → 关联上原邮件」。
+# 决策与实测证据见 docs/research/05-dev-and-build-environment.md（D16 已由此关闭）。
 # =============================================================================
 
 name: vs-email-forwarding-dev
@@ -53,38 +54,39 @@ services:
       - vs-email-forwarding-dev
 
   # ---------------------------------------------------------------------------
-  # Mailpit：一个容器同时提供 SMTP + IMAP + Web UI，是本项目回路验证的核心工具
+  # GreenMail：本地假邮件服务器，SMTP + IMAP + POP3 齐全（Java，2.1.14）
   #
   # 它验证的是**完整回路**，而不只是"能发信"：
-  #   应用发信（SMTP 1025）-> Mailpit 收下 -> 应用用 IMAP（1143）把"回复"拉回来
-  #   -> 用 References / In-Reply-To 关联回原邮件 -> 查询回复接口能查到。
-  # 换句话说：**发出去 → 被拉回来 → 关联上原邮件** 这条链路只有 Mailpit 能离线跑通，
-  # 不需要真实邮箱账号，也不会把测试邮件发到外网。
+  #   应用发信（SMTP 3025）-> GreenMail 按收件人分信箱收下 -> 应用用 IMAP（3143）
+  #   以该信箱账号登录、把"回复"拉回来 -> 用 References / In-Reply-To 关联回原邮件。
+  # 官方镜像启动参数自带 `-Dgreenmail.auth.disabled`，因此**任意账号口令都能登录**，
+  # 本地开发不必配真凭据；测试邮件只进这个容器，不会发到外网。
   #
-  # Web UI: http://127.0.0.1:8025 （能看到所有收下的邮件，也可手动"回复"制造入站邮件）
+  # 三个必须知道的行为（实测，见 docs/research/05-dev-and-build-environment.md）：
+  #   * **按账号分信箱**：投给 reply@example.com 的信，要用该账号登录 IMAP 才看得到
+  #     （Mailpit 是全局一个收件箱）——这正好贴合 IMAP_USERNAME 的用法。
+  #   * **消息只活在容器生命周期里**：没有挂数据卷，`down` 之后信箱自然清空，
+  #     集成测试不必担心上一轮的信残留（想保留就自己加卷）。
+  #   * 端口与 Mailpit 完全不同：SMTP 3025 / IMAP 3143（另有 SMTPS 3465、IMAPS 3993）。
   # ---------------------------------------------------------------------------
-  mailpit:
-    # 锁到具体小版本 v1.31.3（撰写时最新稳定版）。开发依赖也锁版本：
-    # Mailpit 的 IMAP 行为在小版本之间有过变化，不锁会让"本机能过、同事跑不过"。
-    image: axllent/mailpit:v1.31.3
-    container_name: vs-email-forwarding-dev-mailpit
+  greenmail:
+    # 锁到具体小版本（与 latest 同 digest：sha256:1ef95a96…）；开发依赖也锁版本，
+    # 不锁会让"本机能过、同事跑不过"。
+    image: greenmail/standalone:2.1.14
+    container_name: vs-email-forwarding-dev-greenmail
     # 与生产同架构的**运行期保险**（架构由构建期决定），并依赖 compose v2
     platform: linux/amd64
     environment:
-      # 允许任意账号密码登录 SMTP/IMAP：本地开发不必配真凭据。
-      # 变量名以 Mailpit 官方文档为准（尚未在本机对容器实跑核对过）。
-      MP_SMTP_AUTH_ACCEPT_ANY: 1
-      MP_SMTP_AUTH_ALLOW_INSECURE: 1
-      MP_IMAP_AUTH_ACCEPT_ANY: 1
-      MP_IMAP_AUTH_ALLOW_INSECURE: 1
       TZ: UTC
     ports:
-      # SMTP：应用发信用
-      - "127.0.0.1:1025:1025"
-      # IMAP：应用拉取入站回复用（Mailpit 默认监听 1143）
-      - "127.0.0.1:1143:1143"
-      # Web UI：人工看邮件 / 手工回信
-      - "127.0.0.1:8025:8025"
+      # SMTP：应用发信用（同时用来模拟"同事的回复"投递进来）
+      - "127.0.0.1:3025:3025"
+      # IMAP：应用拉取入站回复用
+      - "127.0.0.1:3143:3143"
+      # POP3：想在常用邮件客户端里看收下的信时用（应用不用它）
+      - "127.0.0.1:3110:3110"
+      # 需要看/灌邮件时再放开：GreenMail 的 HTTP API（无 Web UI，Mailpit 那种界面没有）
+      # - "127.0.0.1:8080:8080"
     networks:
       - vs-email-forwarding-dev
 
@@ -129,9 +131,10 @@ networks:
 #   注意 .env 里的 DATABASE_URL 要指向本地开发库（应用跑在宿主机上，
 #   所以主机名用 127.0.0.1，与生产用服务名 postgres 的写法不同）：
 #     DATABASE_URL=postgresql+asyncpg://vs_email_forwarding:vs_email_forwarding_dev@127.0.0.1:5432/vs_email_forwarding_dev
-#   同理 SMTP/IMAP 指向 Mailpit：
-#     SMTP_HOST=127.0.0.1  SMTP_PORT=1025  SMTP_STARTTLS=false
-#     IMAP_HOST=127.0.0.1  IMAP_PORT=1143
+#   同理 SMTP/IMAP 指向 GreenMail：
+#     SMTP_HOST=127.0.0.1  SMTP_PORT=3025  SMTP_STARTTLS=false
+#     IMAP_HOST=127.0.0.1  IMAP_PORT=3143
+#   注意 SMTP_STARTTLS=false：GreenMail 的 3025 是明文端口（STARTTLS 在 3465 的 smtps 上）。
 #
 #   # 如果确实想连容器里的应用冒烟（可选，需先在本机构建镜像）：
 #   # app:

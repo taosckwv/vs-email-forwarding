@@ -52,7 +52,7 @@ uv run uvicorn vs_email_forwarding.main:app --reload
 # 一键门禁：ruff format --check + ruff check + mypy src + pytest
 bash scripts/check.sh
 
-# 起开发依赖（PostgreSQL + Mailpit），读 compose.dev.yaml
+# 起开发依赖（PostgreSQL + GreenMail），读 compose.dev.yaml
 bash scripts/dev-up.sh
 ```
 

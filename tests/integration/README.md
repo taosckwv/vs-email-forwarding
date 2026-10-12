@@ -4,10 +4,11 @@
 
 ## 依赖怎么起
 
-集成测试需要**真实 PostgreSQL** 与 **Mailpit**（本地 SMTP 侧的发信验证）。
+集成测试需要**真实 PostgreSQL** 与 **GreenMail**（本地 SMTP + IMAP，覆盖流②发信与流③入站）：
 
-> **流③的入站用例目前跑不了**：Mailpit 实测不提供 IMAP（只有 SMTP / Web UI / POP3），
-> 本地没有可用的 IMAP 服务。缺口与候选方案见 `docs/open-questions.md` D16。
+> GreenMail **按账号分信箱**：投给 `reply@example.com` 的信要用该账号登录 IMAP 才看得到，
+> 这正好贴合 `IMAP_USERNAME` 的用法。它启动时自带 `auth.disabled`，账号口令随便填。
+> 消息只活在容器生命周期里（没挂卷），`down` 之后信箱自然清空。
 
 ```bash
 bash scripts/dev-up.sh                            # 开发机（Linux）
