@@ -882,3 +882,210 @@ class TestCursorAdvance:
                 .all()
             )
         assert pending_for_uid == [existing_id]  # 重复行未写入，原行仍在
+
+
+# ---------------------------------------------------------------------------
+# T-10：保留期清理 —— 分批 + SKIP LOCKED + NOT EXISTS（plan §5.5 / NFR-8 / AC-22）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.db.repositories.cleanup import (  # noqa: E402
+    cleanup_expired_messages,
+    cleanup_expired_rejected,
+)
+
+_OLD: datetime = _NOW - timedelta(days=400)  # 早于任何保留期（夹具用，非保留期取值）
+_NEW: datetime = _NOW + timedelta(hours=1)  # 晚于 cutoff（未到期）
+
+
+async def _insert_message_full(
+    db_engine: AsyncEngine,
+    *,
+    created_at: datetime,
+    parent_id: uuid.UUID | None = None,
+    direction: str = "outbound",
+) -> uuid.UUID:
+    message_id = uuid.uuid4()
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            sa.insert(Message).values(
+                id=message_id,
+                direction=direction,
+                status="failed" if direction == "outbound" else "received",
+                message_id=f"<fixture-{message_id}@example.com>"
+                if direction == "outbound"
+                else None,
+                recipient="colleague@example.com",
+                subject="夹具主题（无真实收件人）",
+                body="夹具正文",
+                parent_id=parent_id,
+                mailbox="reply@example.com" if direction == "inbound" else None,
+                uidvalidity=111 if direction == "inbound" else None,
+                uid=9000 if direction == "inbound" else None,
+                created_at=created_at,
+            )
+        )
+    return message_id
+
+
+async def _insert_pending_child(db_engine: AsyncEngine, parent_id: uuid.UUID) -> uuid.UUID:
+    """构造一条仍指向出站父行的入站待审行（保护 NOT EXISTS 的考点）。"""
+    pending_id = uuid.uuid4()
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            sa.insert(PendingMessage).values(
+                id=pending_id,
+                direction="inbound",
+                parent_id=parent_id,
+                recipient="reply@example.com",
+                subject="待审回复",
+                body="待审正文",
+                mailbox="reply@example.com",
+                uidvalidity=111,
+                uid=8000,
+                created_at=_NEW,
+            )
+        )
+    return pending_id
+
+
+async def _insert_rejected_row(db_engine: AsyncEngine, created_at: datetime) -> uuid.UUID:
+    rejected_id = uuid.uuid4()
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            sa.insert(RejectedMessage).values(
+                id=rejected_id,
+                direction="outbound",
+                source="review_rejected",
+                created_at=created_at,
+                reviewed_at=created_at,
+            )
+        )
+    return rejected_id
+
+
+async def _count(db_engine: AsyncEngine, model: type) -> int:
+    async with db_engine.connect() as conn:
+        return len((await conn.execute(sa.select(model.id))).all())  # type: ignore[attr-defined]
+
+
+class TestCleanupBatching:
+    """只删到期行；分批上限由入参控制；pending_messages 不参与清理。"""
+
+    async def test_deletes_only_expired_and_respects_batch_size(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        for _ in range(3):
+            await _insert_message_full(db_engine, created_at=_OLD)
+        await _insert_message_full(db_engine, created_at=_NEW)  # 未到期，必须保留
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            deleted = await cleanup_expired_messages(session, cutoff=_NOW, batch_size=2)
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 批次上限 2 生效：一次 tick 只删 2 行（剩余留给下一轮）。
+        assert deleted == 2
+        remaining = await _count(db_engine, Message)
+        assert remaining == 2  # 1 条未到期 + 1 条到期但未轮到
+
+    async def test_nothing_expired_deletes_zero_rows(self, db_engine: AsyncEngine) -> None:
+        await _insert_message_full(db_engine, created_at=_NEW)
+        await _insert_rejected_row(db_engine, _NEW)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            deleted_messages = await cleanup_expired_messages(session, cutoff=_NOW, batch_size=10)
+            deleted_rejected = await cleanup_expired_rejected(session, cutoff=_NOW, batch_size=10)
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 写 0 行按幂等忽略、不报错（plan §5.4 流⑤）。
+        assert deleted_messages == 0
+        assert deleted_rejected == 0
+
+    async def test_pending_messages_not_touched(self, db_engine: AsyncEngine) -> None:
+        await _insert_pending_child(db_engine, parent_id=uuid.uuid4())
+        before = await _count(db_engine, PendingMessage)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            await cleanup_expired_messages(session, cutoff=_NOW, batch_size=10)
+            await cleanup_expired_rejected(session, cutoff=_NOW, batch_size=10)
+            await session.commit()
+        finally:
+            await session.close()
+
+        # pending_messages 是纯队列、不参与清理（plan §5.5）。
+        assert await _count(db_engine, PendingMessage) == before
+
+
+class TestCleanupProtection:
+    """出站行仍有入站待审行指向时不删（NOT EXISTS）；拒审表独立清理。"""
+
+    async def test_parent_with_pending_child_is_protected(self, db_engine: AsyncEngine) -> None:
+        protected_parent = await _insert_message_full(db_engine, created_at=_OLD)
+        unprotected_parent = await _insert_message_full(db_engine, created_at=_OLD)
+        await _insert_pending_child(db_engine, protected_parent)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            deleted = await cleanup_expired_messages(session, cutoff=_NOW, batch_size=10)
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 有入站待审行指向的出站行不删——否则流④ 写回复行会撞 parent_id 外键
+        # 把正常回复误报成拒审（AC-22 后半段的考点）。
+        assert deleted == 1
+        async with db_engine.connect() as conn:
+            still_there = (
+                await conn.execute(sa.select(Message.id).where(Message.id == protected_parent))
+            ).first()
+            gone = (
+                await conn.execute(sa.select(Message.id).where(Message.id == unprotected_parent))
+            ).first()
+        assert still_there is not None
+        assert gone is None
+
+    async def test_reply_rows_removed_with_parent_by_cascade(self, db_engine: AsyncEngine) -> None:
+        parent = await _insert_message_full(db_engine, created_at=_OLD)
+        # 回复行是入站行（direction 反向禁止：出站行不得有 parent_id）。
+        await _insert_message_full(
+            db_engine, created_at=_OLD, parent_id=parent, direction="inbound"
+        )
+        # 回复行不单独删：由 parent_id 外键级联清除（plan §5.5）。
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            deleted = await cleanup_expired_messages(session, cutoff=_NOW, batch_size=10)
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 父行与回复行都是 messages 行、都已到期，都会被选中；
+        # 「回复不单独删」指的是不需要专门的回复清理语句（级联兜底）。
+        assert deleted == 2
+        assert await _count(db_engine, Message) == 0
+
+    async def test_rejected_cleaned_independently(self, db_engine: AsyncEngine) -> None:
+        old_rejected = await _insert_rejected_row(db_engine, _OLD)
+        await _insert_rejected_row(db_engine, _NEW)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            deleted = await cleanup_expired_rejected(session, cutoff=_NOW, batch_size=10)
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert deleted == 1
+        async with db_engine.connect() as conn:
+            remaining = (
+                await conn.execute(
+                    sa.select(RejectedMessage.id).where(RejectedMessage.id == old_rejected)
+                )
+            ).first()
+        assert remaining is None
