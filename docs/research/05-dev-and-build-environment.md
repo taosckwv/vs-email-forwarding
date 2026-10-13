@@ -111,7 +111,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 - **`uv` 的路径**：`uv --version` → `uv 0.13.0 (x86_64-unknown-linux-gnu)`，装在 `/home/tao/.local/bin/uv`——**该目录只加在 tao 的 PATH 上，root 会话里要显式引入**。
 - **Python**：`python3 --version` → `3.13.16`（解析到 `/usr/local/bin/python3`）；`/usr/bin/python3 --version` → `3.6.8`。
 - **`pre-commit run --all-files` 实跑通过（2026-10，git 2.49.1）**：九个钩子全 `Passed`、退出码 0——**这条以前跑不了**（git 2.27 不认 `--deduplicate`），是升级 git 后的直接收益；commit-msg 侧仍由 commitizen 校验。
-- **门禁在本机实跑通过**：以 root 身份执行 `bash scripts/check.sh`，**五步全绿、退出码 0**（`1 passed, 1 warning`；warning 是 FastAPI/Starlette 的 `httpx` 弃用提示，属既知事项，见 `docs/open-questions.md` E2；第 5 步变异测试 70 个变异体、杀死 21、存活 49，按结构性红线放行）。
+- **门禁在本机实跑通过**：以 root 身份执行 `bash scripts/check.sh`，**五步全绿、退出码 0**（`125 passed, 4 warnings`；warning 是 FastAPI/Starlette 的 `httpx` 弃用提示，属既知事项，见 `docs/open-questions.md` E2；第 5 步变异测试 125 个变异体、杀死 59、存活 66，按结构性红线放行）。
 - **pre-commit 版本**：`uv run pre-commit --version` → `pre-commit 4.6.2`；钩子此前只有 sample，已按上文安装完毕。
 
 **Docker**

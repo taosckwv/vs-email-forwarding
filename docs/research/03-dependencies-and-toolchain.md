@@ -89,16 +89,15 @@
 
 ## 实测证据
 
-- **门禁五项全绿**（**早期快照：业务逻辑尚未实现时**；当前值见本节末的 `py.typed` 条）：
-  - `ruff format --check .` → `56 files already formatted`；
+- **门禁五项全绿**（在当前工作副本上逐一执行，命令入口即 `scripts/check.sh` 的五个步骤）：
+  - `ruff format --check .` → `72 files already formatted`；
   - `ruff check .` → 零告警，退出码 0；
-  - `mypy src` → `Success: no issues found in 17 source files`；
-  - `pytest --cov --cov-report=term-missing` → `1 passed`，覆盖率表 `TOTAL 146 条语句 / 30 条未执行 / 80%`；
-  - `mutmut run` → **70 个变异体**，`killed 21 / survived 49`，退出码 0（未触发三个红线中的任何一个）。
-- **同一次快照上「覆盖率 80% 而变异分数约 30%」**——这正是把覆盖率降为诊断指标、把断言质量交给变异测试的实测依据：覆盖率说明「大部分行被执行过」，变异分数说明「大部分行为没有被断言验证」。
+  - `mypy src` → `Success: no issues found in 26 source files`；
+  - `pytest --cov --cov-report=term-missing` → `125 passed`，覆盖率 `98%`；
+  - `mutmut run` → **125 个变异体**，`killed 59 / survived 66`，退出码 0（未触发三个红线中的任何一个）。
+- **覆盖率与变异分数的分工**（同一次快照上覆盖率 98%、变异分数约 47% = 59/125）——这正是把覆盖率降为诊断指标、把断言质量交给变异测试的实测依据：覆盖率说明「大部分行被执行过」，变异分数说明「相当一部分行为没有被断言验证」。当前 66 条存活集中在 `logging.py`、`db/models.py`、`main.py`（阶段 1 存量模块）——这些代码**被执行过**（覆盖率不为零），但没有任何断言验证过它们的行为；覆盖率看不出这件事，变异测试看得出。
 - **第 5 步的三条红线已用合成统计逐条自测**：`killed=0 / survived=5` → 退出码 1（全部存活＝同义反复）；`total=0` → 退出码 1（配置失效）；`killed=3 / survived=2` → 退出码 0（正常放行）。
 - **变异测试的增量重跑成本可接受**：第二次运行复用 `mutants/` 里的缓存，实测约 3 秒（`mutants/` 被删除时才是全量重跑）。这正是「门禁脚本不吃参数」与「变异范围固定」两条设计能成立的前提。
-- **当前唯一测试的变异分数极低，这正是不设百分比阈值的直接依据**：`tests/unit/test_health.py` 的 `test_healthz_returns_ok` 只能杀死 70 个变异体中的 21 个（约 30%）；存活变异集中在 `logging.py`、`config.py`、`main.py`——这些代码**被执行过**（覆盖率不为零），但没有任何断言验证过它们的行为。覆盖率看不出这件事，变异测试看得出。若把变异分数设成某个百分比门槛，今天就必须为这些代码补断言或把门槛调低，两条路都不是现在该做的事。
 - **新增开发依赖的许可**：`mutmut` BSD-3-Clause、`pytest-cov` MIT、`coverage` Apache-2.0、`libcst` MIT、`textual` MIT、`setproctitle` BSD-3-Clause——全部为宽松许可，与本仓库的 MIT 兼容，未引入 copyleft。
 - **`ruff check` 的全部告警只来自 `RUF001` / `RUF002` / `RUF003`，零处来自其他规则**。把这三条从 `ignore` 中移出后复现（`ruff check . --select RUF001,RUF002,RUF003 --statistics`）：共 **314 处**，其中 `RUF002` 191 处、`RUF001` 92 处、`RUF003` 31 处，**没有第四种规则出现**。当前 `ignore` 生效时同一份代码报 0 处，且没有冒出任何其他规则的告警——这正是「只有中文标点这一处例外，其余标准未动」的直接证据。
 - 同一次 `pytest` 还输出一条 `StarletteDeprecationWarning`：`Using httpx with starlette.testclient is deprecated; install httpx2 instead`，来源是虚拟环境中的 `fastapi/testclient.py`。它说明**测试是跑通的**（`httpx` 在 3.13 上实际可用），风险性质是「将来会不会被上游弃用」，已登记为未定项 E2。
@@ -109,7 +108,7 @@
 - **门禁全绿的适用范围**：业务逻辑尚未实现，`src/` 下只有包占位与一个能返回 `/healthz` 的最小入口。因此上述绿只证明**工程配置与工具链可用**，不证明任何业务正确性。
 - **依赖许可与类型标注的实测结果**见 `specs/0001-email-forwarding-service/design.md` 的「实测证据」一节（本册不复述）。
 - **两个无类型存根库的实测结论**：`asyncpg` 与 `imapclient` 的包目录下都不存在 `py.typed`，在 `src/` 下 import 它们后跑 `mypy src` 各报一条 `Skipping analyzing "…": module is installed, but missing library stubs or py.typed marker [import-untyped]`；`sqlalchemy` 与 `alembic` 都有 `py.typed`，因此不放行——这正是放行范围只覆盖前两个的依据。**这两条放行还没有落进 `pyproject.toml`**（该文件 mypy 段记有这条处置）：没有对应 import 的 `[[tool.mypy.overrides]]` 会被 mypy 报成 `unused section(s)`，所以放行与第一个真正 import 该库的模块同一次改动落地。
-- **本包 `py.typed` 的实测结论**（阶段 2 收口后补）：`src/vs_email_forwarding/` 此前没有 `py.typed`（而 `pyproject.toml` 已带 `Typing :: Typed` classifier，属声明与实物不一致）。补 marker 前单独对测试树跑 mypy 会把本包当无类型第三方库：`uv run mypy tests` → **17 条**（16 条 `import-untyped` + 1 条 `var-annotated`）；补 marker 后同命令 **Success（6 files）**。marker 让类型真正流进测试代码，随即暴露两条此前被 `Any` 掩盖的真实问题并已修掉（`test_repositories.py` 的 `FromClause` 没有 `.delete()`；`test_repository_statements.py` 向 `_iter_clause_elements` 传了 `ColumnElement | None`），修后 `uv run mypy src tests` → **Success（32 files）**。构建产物实测：`uv build` 的 wheel 含 `vs_email_forwarding/py.typed`（`RECORD` 有条目），sdist 含同路径，**无需 `[tool.hatch.build]` 配置**（hatchling 默认收录包目录下全部文件）。当前门禁快照：`ruff format --check` 72 files、`ruff check` 零告警、**`mypy src` → 26 source files 零问题**、`pytest --cov` 125 passed（覆盖率 98%）、`mutmut run` 125 个变异体（killed 59 / survived 66，未触发红线）。
+- **本包 `py.typed` 的实测结论**（阶段 2 收口后补）：`src/vs_email_forwarding/` 此前没有 `py.typed`（而 `pyproject.toml` 已带 `Typing :: Typed` classifier，属声明与实物不一致）。补 marker 前单独对测试树跑 mypy 会把本包当无类型第三方库：`uv run mypy tests` → **17 条**（16 条 `import-untyped` + 1 条 `var-annotated`）；补 marker 后同命令 **Success（6 files）**。marker 让类型真正流进测试代码，随即暴露两条此前被 `Any` 掩盖的真实问题并已修掉（`test_repositories.py` 的 `FromClause` 没有 `.delete()`；`test_repository_statements.py` 向 `_iter_clause_elements` 传了 `ColumnElement | None`），修后 `uv run mypy src tests` → **Success（32 files）**。构建产物实测：`uv build` 的 wheel 含 `vs_email_forwarding/py.typed`（`RECORD` 有条目），sdist 含同路径，**无需 `[tool.hatch.build]` 配置**（hatchling 默认收录包目录下全部文件）；当前门禁的五个数字见本节第 1 条。
 - **`sqlalchemy[asyncio]` 的实测证据**（随第一个异步引擎模块落地）：启用 extra 前虚拟环境里没有任何 `greenlet`（`grep -c 'name = "greenlet"' uv.lock` → **0**；`import greenlet` → `ModuleNotFoundError: No module named 'greenlet'`），`import sqlalchemy.ext.asyncio` 实测失败：`ImportError: The SQLAlchemy asyncio module requires that the Python 'greenlet' library is installed.  In order to ensure this dependency is available, use the 'sqlalchemy[asyncio]' install target:  'pip install sqlalchemy[asyncio]'`，该异常的 `__cause__` 为 `ModuleNotFoundError: No module named 'greenlet'`。`sqlalchemy-2.1.4.dist-info/METADATA` 实测含 `Provides-Extra: asyncio` 与 `Requires-Dist: greenlet>=1; extra == "asyncio"`——即 `greenlet` 由 SQLAlchemy 自身声明、**不引入新上游**；同一份 METADATA 里 `[postgresql-asyncpg]`、`[aiomysql]`、`[aioodbc]`、`[asyncmy]`、`[aiosqlite]` 五个 extra 也都以 `sqlalchemy[asyncio]` 为前置。启用 extra 后 `uv sync` 只新增 `greenlet==3.5.6`（`Requires-Python: >=3.10`，本机 Python 3.13 装到 cp313 wheel），`uv.lock` 在 sqlalchemy 包的 `[package.optional-dependencies]` 下记录 `asyncio = [{ name = "greenlet" }]`——它确实来自该 extra，而不是新增的顶层依赖。许可实测：`greenlet-3.5.6.dist-info/METADATA` 的 `License-Expression: MIT AND PSF-2.0`，随包 `License-File: LICENSE` 与 `LICENSE.PSF`；两段都是宽松许可，与本仓库 MIT 兼容，未引入 copyleft。启用后再测 `import sqlalchemy.ext.asyncio` 正常导入（sqlalchemy 2.1.4）。
 
 ## 已否决方向
@@ -127,8 +126,8 @@
 - 关掉整个 RUF 规则族 —— 原因：RUF 族还有其他有价值的规则，不能整族关闭。
 - **现在就**把例外改成 `per-file-ignores` 逐文件列举 —— 原因：中文标点在这类文件里**分布极广**，逐文件列举的维护成本高于收益，也不会比全局例外更安全。若将来真的出现全角字符混进标识符或字面量这类**真问题**，再按本册「结论」里那条路径重新评估——届时属于新的决策，要按 `AGENTS.md` §6 重写本册。
 - 为无类型库整体关闭 mypy 检查 —— 原因：本册既定处置是**按 module 精确放行并在册里留下结论**，整体关闭等于降低门禁标准（既有结论的重申）。
-- **把变异分数设成百分比阈值**（例如核心域 ≥80%、一般逻辑 ≥60–70%）—— 原因：数字一旦成为目标就会被反向优化（写同义反复测试、滥用 `# pragma: no mutate` 把存活抹掉），而且没有实测依据支撑任何具体取值；当前基线只有约 30%，任何百分比都会立刻变成「补断言」或「降门槛」的二选一。门禁只卡三条结构性红线，存活清单交人工评审。
-- **只加覆盖率、不加变异测试** —— 原因：覆盖率衡量执行、不衡量验证。当前工作副本上 70 个变异体里 49 个存活，而覆盖率并非零——这一类「执行了但没被断言验证」的缺口只有变异测试看得见。
+- **把变异分数设成百分比阈值**（例如核心域 ≥80%、一般逻辑 ≥60–70%）—— 原因：数字一旦成为目标就会被反向优化（写同义反复测试、滥用 `# pragma: no mutate` 把存活抹掉），而且没有实测依据支撑任何具体取值；当前基线是 125 个变异体里 59 个被杀（约 47%），任何常见百分比阈值都会立刻变成「补断言」或「降门槛」的二选一。门禁只卡三条结构性红线，存活清单交人工评审。
+- **只加覆盖率、不加变异测试** —— 原因：覆盖率衡量执行、不衡量验证。当前工作副本上 125 个变异体里 66 个存活，而覆盖率是 98%——这一类「执行了但没被断言验证」的缺口只有变异测试看得见。
 - **把集成测试纳入变异运行范围** —— 原因：门禁结论会随容器是否启动而改变，直接破坏「所有人跑的是同一套门禁」这条前提。
 - **不在门禁里跑变异、只留一条文档命令** —— 原因：本项目不跑 CI，没有任何自动兜底；不进门禁就等于不存在，只会退化成口头约定。
 - 使用 mutmut 2 —— 原因：mutmut 3+ 的执行模型支持函数级缓存与增量重跑（实测重跑约 3 秒），2 的模型做不到，会让门禁慢到没人愿意跑。
