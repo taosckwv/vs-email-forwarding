@@ -24,7 +24,7 @@ from typing import Final
 from sqlalchemy.dialects import postgresql
 
 from vs_email_forwarding.constants import MAX_CLAIMABLE_ATTEMPT_COUNT
-from vs_email_forwarding.db.repositories import pending
+from vs_email_forwarding.db.repositories import inbound, pending
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 _REPOSITORIES_DIR: Final = _REPO_ROOT / "src" / "vs_email_forwarding" / "db" / "repositories"
@@ -158,3 +158,40 @@ class TestNoBareSqlOrTwoStepClaim:
         # 退避算术的真源是 constants 的退避表（15s / 30s / 60s，AC-9 的输入）；
         # 这里只断言仓储引用它，不自行携带第二份数字。
         assert "RETRY_BACKOFF_SECONDS" in _repository_sources()["pending.py"]
+
+
+class TestInboundIdempotentInsert:
+    """入库幂等插入（`AC-11`）：两处入站唯一键的冲突目标必须显式声明（plan §2.9）。
+
+    冲突目标是 ``(mailbox, uidvalidity, uid)`` **部分唯一索引**（``WHERE direction =
+    'inbound'``，design.md §2.2）——推断部分索引必须带同一 WHERE 谓词，否则 PostgreSQL
+    找不到匹配的唯一约束；裸 ``on_conflict_do_nothing()`` 也因此被打回（须带显式目标）。
+    """
+
+    def test_inbound_pending_insert_targets_partial_unique_key(self) -> None:
+        sql = str(
+            inbound.inbound_pending_insert_statement().compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        assert "INSERT INTO pending_messages" in sql
+        # 冲突目标 = 三列入站唯一键 + 部分索引推断谓词（design.md §2.2 索引表）。
+        assert (
+            "ON CONFLICT (mailbox, uidvalidity, uid) WHERE direction = 'inbound' DO NOTHING" in sql
+        )
+
+    def test_inbound_received_insert_targets_partial_unique_key(self) -> None:
+        sql = str(
+            inbound.inbound_received_insert_statement().compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        assert "INSERT INTO messages" in sql
+        # messages 侧同键同谓词：过审删行后游标回退重拉的重复由它兜底（design.md §2.2）。
+        assert (
+            "ON CONFLICT (mailbox, uidvalidity, uid) WHERE direction = 'inbound' DO NOTHING" in sql
+        )

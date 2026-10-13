@@ -1249,3 +1249,277 @@ class TestRepliesKeysetPagination:
         assert collected == set(ids) | set(new_ids)
         assert new_ids[0] in {row.id for row in page2}
         assert len(page2) == 3  # 剩余 2 条旧回复 + 1 条新回复
+
+
+# ---------------------------------------------------------------------------
+# T-12：入库幂等插入与两处入站唯一键
+# （design §2.2「pending_messages 与 messages 各一份」、§3.4 流③ 落库、
+# §3.5 流④ 过审落库；AC-11 的库内侧）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.constants import RECEIVED_STATE  # noqa: E402
+from vs_email_forwarding.db.repositories.inbound import (  # noqa: E402
+    approve_inbound_pending,
+    insert_inbound_pending,
+)
+
+_UIDVALIDITY: int = 555  # 与其余节的夹具（111 / 777 / 888）错开，避免串节撞键
+
+
+async def _insert_inbound_pending_row(
+    db_engine: AsyncEngine,
+    *,
+    uid: int,
+    uidvalidity: int = _UIDVALIDITY,
+    mailbox: str = "reply@example.com",
+    subject: str = "夹具回复主题",
+    recipient: str = "reply@example.com",
+    pending_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """手工造一条入站待审行（夹具数据，docs/testing.md R10：等同断言，改动须评审）。
+
+    ``parent_id`` 不传时取随机值：待审表无外键，仅过审搬运（messages 有 FK）时须传真实父行。
+    """
+    row_id = pending_id or uuid.uuid4()
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            sa.insert(PendingMessage).values(
+                id=row_id,
+                direction="inbound",
+                message_id=None,
+                recipient=recipient,
+                subject=subject,
+                body="夹具回复正文",
+                parent_id=parent_id or uuid.uuid4(),
+                mailbox=mailbox,
+                uidvalidity=uidvalidity,
+                uid=uid,
+                attempt_count=1,
+                next_attempt_at=_NOW,
+                created_at=_NOW - timedelta(hours=1),
+            )
+        )
+    return row_id
+
+
+class TestInboundPendingInsertIdempotency:
+    """流③ 入库幂等（AC-11 库内侧）：同一 (mailbox, uidvalidity, uid) 只入库一次。"""
+
+    async def test_second_fetch_of_same_uid_is_ignored(self, db_engine: AsyncEngine) -> None:
+        # 游标回退后重拉同一封：三要素不变，第二次必须按幂等忽略（AC-11）。
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            first = await insert_inbound_pending(
+                session,
+                recipient="reply@example.com",
+                subject="夹具回复主题",
+                body="夹具回复正文",
+                body_format="text",
+                parent_id=uuid.uuid4(),
+                mailbox="reply@example.com",
+                uidvalidity=_UIDVALIDITY,
+                uid=3001,
+                now=_NOW,
+            )
+            # 重拉发生在之后：now 与内容都变了，也不得改写或追加。
+            second = await insert_inbound_pending(
+                session,
+                recipient="other@example.com",
+                subject="重拉后的主题",
+                body="重拉后的正文",
+                body_format="text",
+                parent_id=uuid.uuid4(),
+                mailbox="reply@example.com",
+                uidvalidity=_UIDVALIDITY,
+                uid=3001,
+                now=_NOW + timedelta(hours=2),
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert first is True
+        assert second is False
+        async with db_engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    sa.select(
+                        PendingMessage.subject,
+                        PendingMessage.recipient,
+                        PendingMessage.created_at,
+                        PendingMessage.next_attempt_at,
+                    )
+                )
+            ).all()
+        # 库中恰一行，且是第一次的数据：第二次不覆盖任何列（created_at 仍为入库时刻）。
+        assert len(rows) == 1
+        assert rows[0][0] == "夹具回复主题"
+        assert rows[0][1] == "reply@example.com"
+        assert rows[0][2] == _NOW
+        assert rows[0][3] == _NOW
+
+    async def test_different_uidvalidity_allows_new_row(self, db_engine: AsyncEngine) -> None:
+        # 唯一键只管同一 UIDVALIDITY 内的重复（design §3.4「唯一键管同一 UIDVALIDITY 内
+        # 的正确性」）：信箱轮换后同 UID 属于新邮件，必须可入库。
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            before = await insert_inbound_pending(
+                session,
+                recipient="reply@example.com",
+                subject="轮换前",
+                body="夹具回复正文",
+                body_format="text",
+                parent_id=uuid.uuid4(),
+                mailbox="reply@example.com",
+                uidvalidity=_UIDVALIDITY,
+                uid=3002,
+                now=_NOW,
+            )
+            after = await insert_inbound_pending(
+                session,
+                recipient="reply@example.com",
+                subject="轮换后",
+                body="夹具回复正文",
+                body_format="text",
+                parent_id=uuid.uuid4(),
+                mailbox="reply@example.com",
+                uidvalidity=_UIDVALIDITY + 1,
+                uid=3002,
+                now=_NOW,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert before is True
+        assert after is True
+        async with db_engine.connect() as conn:
+            count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+        assert count == 2
+
+
+class TestInboundReceivedInsertIdempotency:
+    """流④ 过审落库：messages 侧入站唯一键的终态兜底（design §2.2 说明第 3 条）。"""
+
+    async def test_approve_writes_received_row_and_finalizes_pending(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        parent_id = await _insert_message_full(db_engine, created_at=_NOW - timedelta(hours=2))
+        pending_id = await _insert_inbound_pending_row(db_engine, uid=3003, parent_id=parent_id)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            finalized = await approve_inbound_pending(session, pending_id, now=_NOW)
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert finalized is True
+        async with db_engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    sa.select(
+                        Message.status,
+                        Message.created_at,
+                        Message.received_at,
+                        Message.reviewed_at,
+                        Message.attempt_count,
+                        Message.next_attempt_at,
+                        Message.parent_id,
+                        Message.uidvalidity,
+                        Message.uid,
+                    ).where(Message.id == pending_id)
+                )
+            ).all()
+            pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+        # 跨表 ID 同值一行 received；created_at 原样搬运（§2.5：不得重新取 now 覆盖），
+        # received_at / reviewed_at / next_attempt_at 取绑定的 now，attempt_count 重置 0。
+        assert len(rows) == 1
+        (
+            status,
+            created_at,
+            received_at,
+            reviewed_at,
+            attempt_count,
+            next_attempt_at,
+            parent,
+            validity,
+            uid,
+        ) = rows[0]
+        assert status == RECEIVED_STATE
+        assert created_at == _NOW - timedelta(hours=1)
+        assert received_at == _NOW
+        assert reviewed_at == _NOW
+        assert attempt_count == 0
+        assert next_attempt_at == _NOW
+        assert parent == parent_id
+        assert validity == _UIDVALIDITY
+        assert uid == 3003
+        # 待审行同事务删除：库中不再有待审行。
+        assert pending_count == 0
+
+    async def test_approve_with_existing_target_row_ignores_duplicate(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        # messages 侧唯一键的兜底场景：同一封回复的 messages 行已存在（例：上次过审
+        # 落库后游标回退又重拉出一行待审），过审不得写出第二条 received 行。
+        parent_id = await _insert_message_full(db_engine, created_at=_NOW - timedelta(hours=2))
+        pending_id = await _insert_inbound_pending_row(db_engine, uid=3004, parent_id=parent_id)
+        earlier = _NOW - timedelta(minutes=30)
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                sa.insert(Message).values(
+                    id=uuid.uuid4(),
+                    direction="inbound",
+                    status="received",
+                    parent_id=parent_id,
+                    recipient="reply@example.com",
+                    subject="先落库的回复",
+                    body="夹具回复正文",
+                    mailbox="reply@example.com",
+                    uidvalidity=_UIDVALIDITY,
+                    uid=3004,
+                    created_at=earlier,
+                    received_at=earlier,
+                )
+            )
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            finalized = await approve_inbound_pending(session, pending_id, now=_NOW)
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 待审行已收尾，但 messages 恰一行、且是先落库那条（received_at 未被覆盖）。
+        assert finalized is True
+        async with db_engine.connect() as conn:
+            received_rows = (
+                await conn.execute(
+                    sa.select(Message.received_at, Message.subject).where(
+                        Message.direction == "inbound"
+                    )
+                )
+            ).all()
+            pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+        assert len(received_rows) == 1
+        assert received_rows[0][0] == earlier
+        assert received_rows[0][1] == "先落库的回复"
+        assert pending_count == 0
+
+    async def test_approve_missing_pending_returns_false(self, db_engine: AsyncEngine) -> None:
+        # 待审行不存在（已被其他执行体收尾）时按幂等忽略，不写任何行。
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            finalized = await approve_inbound_pending(session, uuid.uuid4(), now=_NOW)
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert finalized is False
+        async with db_engine.connect() as conn:
+            message_count = len((await conn.execute(sa.select(Message.id))).all())
+            pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+        assert message_count == 0
+        assert pending_count == 0

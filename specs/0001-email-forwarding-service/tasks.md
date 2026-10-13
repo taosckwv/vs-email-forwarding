@@ -33,7 +33,7 @@
 - [x] `T-9` （前置 `T-5`）`imap_cursors` 的读取、初始化（`UIDNEXT - 1`）、`UIDVALIDITY` 变化时重置、与分拣落库在**同一事务**内推进 — `FR-7` / `AC-39`
 - [x] `T-10` （前置 `T-5`）保留期清理：按 `BATCH_SIZE` 分批 + `FOR UPDATE SKIP LOCKED` + `NOT EXISTS` 排除仍有入站待审行指向的出站行 — `NFR-8` / `AC-22`
 - [x] `T-11` （前置 `T-5`）`messages` 的出站查询与回复 keyset 分页（`received_at ASC, id ASC`）— `FR-10` / `AC-41`
-- [ ] `T-12` （前置 `T-5`）入库幂等插入（撞唯一键 / 主键 / `rowcount = 0` 一律按幂等忽略）与两处入站唯一键 — `FR-7` / `AC-11`
+- [x] `T-12` （前置 `T-5`）入库幂等插入（撞唯一键 / 主键 / `rowcount = 0` 一律按幂等忽略）与两处入站唯一键 — `FR-7` / `AC-11`
 
 ## 阶段 3：纯逻辑与外部能力接口
 
