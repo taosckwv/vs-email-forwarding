@@ -5,7 +5,7 @@
 | spec 编号 | `0001` |
 | 对应规格 | `specs/0001-email-forwarding-service/spec.md` |
 | 对应设计 | `specs/0001-email-forwarding-service/design.md` |
-| 状态 | `待确认` |
+| 状态 | `已确认` |
 
 ## 1. 技术方案概述
 
@@ -33,7 +33,7 @@
 
 | 文件 | 动作 | 说明 |
 |---|---|---|
-| `src/vs_email_forwarding/constants.py` | `新增` | 六态取值与中文名、合法迁移、`messages.status` 的 `CHECK` 取值集合、十一类丢弃原因、拒审来源、`ErrorClass`、`MAX_ATTEMPTS = 4` 与退避表 `{1: 15, 2: 30, 3: 60}`、`4xx`/`5xx` 区间、时间戳格式。**只放取值的文本，不放判定逻辑**；不得 import 任何项目内模块 |
+| `src/vs_email_forwarding/constants.py` | `已落地（本轮只做核对）` | 六态取值与中文名、合法迁移、`messages.status` 的 `CHECK` 取值集合、十一类丢弃原因、拒审来源、`ErrorClass`、`MAX_ATTEMPTS = 4` 与退避表 `{1: 15, 2: 30, 3: 60}`、`4xx`/`5xx` 区间、时间戳格式。**这批取值已在前几轮提交里落地**（依据 `docs/README.md` §4.9「文档与代码不一致时以代码为准」），本轮只做与 `design.md` §2.3 / §3.4 的逐项核对（`T-1`）。**只放取值的文本，不放判定逻辑**；不得 import 任何项目内模块 |
 
 **为什么它必须独立成层**：这些取值同时被 `db/`（`CHECK` 常量与列值）、`core/`（判定与退避）、`schemas/`（响应枚举）、`flows/`（计数与分类）用到，而 `docs/architecture.md` §2 的依赖表把 `db/` 写成「无——只依赖 ORM 与会话本身」。若把它们放进 `core/`，`db/` 就得反向依赖 `core/`，直接违规；放进 `config.py` 则会把「服务固定语义」与「随环境变化的配置」混成一个模块，并诱发把重试次数加进 `.env`（那会破坏 `AGENTS.md` §8.7）。因此改为**新增一层零依赖的叶子模块**，并在架构文档中声明它是唯一例外。
 
@@ -44,7 +44,7 @@
 | 文件 | 动作 | 说明 |
 |---|---|---|
 | `src/vs_email_forwarding/core/message_id.py` | `新增` | 出站 `Message-ID` 的生成与解析：形如 `<{UUID}@{域}>`，域取自 `MAIL_FROM_ADDRESS`（带显示名时先取 `<...>` 内的地址，`design.md` §3.1） |
-| `src/vs_email_forwarding/core/retry.py` | `新增` | 重试算术：从 `constants.MAX_ATTEMPTS` / `RETRY_BACKOFF_SECONDS` 算出下一次 `next_attempt_at`，并据 `SMTP_TRANSIENT_*` / `SMTP_PERMANENT_*` 区间把返回码分类（**取值来自 `constants.py`，本模块只写算术**） |
+| `src/vs_email_forwarding/core/retry.py` | `新增` | 重试算术：`next_attempt_at(now, attempt) -> datetime`（**`now` 由调用方传入**，本模块不自行取时、不碰时钟），并据 `SMTP_TRANSIENT_*` / `SMTP_PERMANENT_*` 区间把返回码分类（**取值来自 `constants.py`，本模块只写算术**） |
 | `src/vs_email_forwarding/core/states.py` | `新增` | **唯一的六态判定函数**：按 `design.md` §4.1 的优先级自上而下判定，并给出每个状态的物理落点；库内与对外共用同一套取值，**没有状态映射层** |
 | `src/vs_email_forwarding/core/inbound.py` | `新增` | 入站纯判定：DSN 结构判定（`multipart/report` + `message/delivery-status`）、MDN 判定、`In-Reply-To` / `References` 解析与关联匹配；丢弃原因从 `constants.DISCARD_REASONS` 取（`design.md` §3.4） |
 
@@ -131,26 +131,28 @@
 | `deploy/run.sh` | `新增` | 起服务 + 冒烟：`docker compose up -d` 后轮询 `/healthz`（默认 30 次 × 2s，可用环境变量覆盖）；从 `.env` 解析端口要容忍 CR、引号与行尾注释；宿主无 `curl` 时降级为容器内 Python 标准库探测。**`compose.yaml` 的注释已经引用了这个名字** |
 | `deploy/check_archive.py` | `新增` | 交付前单平台归档自检：**不依赖 Docker、只用 Python 标准库**；支持 OCI（`index.json`）与 legacy docker-archive（`manifest.json`）两种布局；显式指定期望基础镜像个数（新链路 = 3）；退出码固定 `0` / `1` / `2`；**必须在生成 `.sha256` 旁路文件之前执行** |
 | `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：三件脚本各自的用途、入口、判据出处，并写明 D2-乙 那侧脚本**本期不在范围**、随 D13 推迟 |
-| `tests/unit/test_message_id.py` | `新增` | 纯逻辑：`Message-ID` 生成与带显示名时取域的解析（§7.3） |
-| `tests/unit/test_retry_policy.py` | `新增` | 纯逻辑：退避表、`4xx` / `5xx` 分类、终态判据（§7.3） |
-| `tests/unit/test_states.py` | `新增` | 纯逻辑：六态判定的优先级与库内落点（§7.3） |
-| `tests/unit/test_inbound_sorting.py` | `新增` | 纯逻辑：DSN / MDN 结构判定、`References` 解析与关联匹配、十一类丢弃原因（§7.3） |
-| `tests/unit/test_validation.py` | `新增` | 纯逻辑：请求校验（多收件人、非法地址、CR/LF 头注入、超限、非法 `body_format`）与 `validate_startup()` 三条判据（§7.3） |
-| `tests/unit/test_api_contract.py` | `新增` | 契约一致性：把 FastAPI 应用生成的 OpenAPI（`app.openapi()`）与 `docs/api-contract.yaml` 逐字段比对（路径、字段名、必填、`enum`），防两处漂移 |
-| `tests/unit/test_constants_consistency.py` | `新增` | 三方取值一致：`docs/api-contract.yaml` 的 `MessageState` / `BodyFormat` 枚举 == `constants.py` 的取值集合 == 迁移与 `db/models.py` 中 `CHECK` 的取值集合；另断言 `constants.py` **零项目内 import**（共享叶子层的硬约束，靠静态读源码判定） |
-| `tests/unit/test_repository_statements.py` | `新增` | 抢占写法唯一（`AC-26`）：静态 AST 扫描认领函数、断言不存在「先 `SELECT` 判断再 `UPDATE`」的两步写法，并断言认领语句编译出的 SQL 同时含 `FOR UPDATE` 与 `SKIP LOCKED`（§7.1 / §7.3） |
-| `tests/unit/test_config_hygiene.py` | `新增` | 配置口径（`AC-27`）：除 `config.py` 外没有模块直接读环境变量、没有第二处读 `.env`；`git ls-files` 含 `.env.example` 且不含 `.env` |
-| `tests/unit/test_review_placeholder.py` | `新增` | 空实现标注（`AC-25`）：`providers/review/{base,always_pass}.py` 开头注释含「空实现」「永远通过」，`docs/security.md` 安全边界一节关键词可检索 |
-| `tests/unit/test_schemas.py` | `新增` | 响应模型：字段集合与契约一致、时间序列化为 UTC RFC 3339 六位小数 + `Z`（`NFR-7` / `AC-17`） |
-| `tests/integration/conftest.py` | `新增` | 集成夹具：真实 PostgreSQL（测试库 `vs_email_forwarding_test`）、假 SMTP / 假 IMAP、可替换的假审查实现、测试库清表（§7.2） |
-| `tests/integration/test_review_outbound_flow.py` | `新增` | 流① 集成用例（§7.3） |
-| `tests/integration/test_send_flow.py` | `新增` | 流② 集成用例，含 `AC-8` / `AC-9` / `AC-29` / `AC-30` / `AC-34` / `AC-37` / `AC-40` |
-| `tests/integration/test_fetch_inbound_flow.py` | `新增` | 流③ 集成用例，含 `AC-10` ~ `AC-14` / `AC-38` / `AC-39` |
-| `tests/integration/test_review_inbound_flow.py` | `新增` | 流④ 集成用例 |
-| `tests/integration/test_cleanup_flow.py` | `新增` | 流⑤ 集成用例（`AC-22`） |
-| `tests/integration/test_api_contract.py` | `新增` | 三个端点的 HTTP 契约，含 `AC-1` ~ `AC-5` / `AC-15` ~ `AC-18` / `AC-31` / `AC-33` / `AC-35` / `AC-36` |
-| `tests/integration/test_repositories.py` | `新增` | 仓储层并发与幂等：`FOR UPDATE SKIP LOCKED`、条件 UPDATE、收割支、清理的 `NOT EXISTS`、keyset 翻页（`AC-26` / `AC-41`） |
-| `tests/integration/test_startup_validation.py` | `新增` | 三条启动校验各自制造一次违规，断言进程非零退出且不监听端口（`AC-32`） |
+| `tests/unit/test_message_id.py` | `新增` | 纯逻辑：`Message-ID` 生成与带显示名时取域的解析（随 `T-13` 先红，§7.3） |
+| `tests/unit/test_retry_policy.py` | `新增` | 纯逻辑：退避表、`4xx` / `5xx` 分类、终态判据，以及 `AC-21` 的最坏路径算术（随 `T-14` 先红，§7.3） |
+| `tests/unit/test_states.py` | `新增` | 纯逻辑：六态判定的优先级与库内落点（随 `T-15` 先红，§7.3） |
+| `tests/unit/test_inbound_sorting.py` | `新增` | 纯逻辑：DSN / MDN 结构判定、`References` 解析与关联匹配、十一类丢弃原因（随 `T-16` 先红，§7.3） |
+| `tests/unit/test_scheduler_intervals.py` | `新增` | `AC-23` 的确定性判定：调度器构造时读到的间隔 == 配置值（改配置后重建即为新值），并静态断言间隔与批量不以字面量出现在源码中（随 `T-22` 先红，§7.3） |
+| `tests/unit/test_request_validation.py` | `新增` | 纯逻辑：请求校验（多收件人、非法地址、CR/LF 头注入、超限、非法 `body_format`）（随 `T-30` 先红，§7.3） |
+| `tests/unit/test_settings_validation.py` | `新增` | 纯逻辑：`validate_startup()` 三条判据各自制造一次违规（随 `T-32` 先红，§7.3） |
+| `tests/unit/test_api_contract.py` | `新增` | 契约一致性：把 FastAPI 应用生成的 OpenAPI（`app.openapi()`）与 `docs/api-contract.yaml` 逐字段比对（路径、字段名、必填、`enum`），防两处漂移（随 `T-38`；**留阶段 5**——三方产物齐备后才写得出） |
+| `tests/unit/test_constants_consistency.py` | `新增` | 三方取值一致：`docs/api-contract.yaml` 的 `MessageState` / `BodyFormat` 枚举 == `constants.py` 的取值集合 == 迁移与 `db/models.py` 中 `CHECK` 的取值集合；另断言 `constants.py` **零项目内 import**（共享叶子层的硬约束，靠静态读源码判定）（随 `T-38`；**留阶段 5**） |
+| `tests/unit/test_repository_statements.py` | `新增` | 抢占写法唯一（`AC-26`）：静态 AST 扫描认领函数、断言不存在「先 `SELECT` 判断再 `UPDATE`」的两步写法，并断言认领语句编译出的 SQL 同时含 `FOR UPDATE` 与 `SKIP LOCKED`（随 `T-6` 先红，§7.1 / §7.3） |
+| `tests/unit/test_config_hygiene.py` | `新增` | 配置口径（`AC-27`）：除 `config.py` 外没有模块直接读环境变量、没有第二处读 `.env`；`git ls-files` 含 `.env.example` 且不含 `.env`（随 `T-32` 先红） |
+| `tests/unit/test_review_placeholder.py` | `新增` | 空实现标注（`AC-25`）：`providers/review/{base,always_pass}.py` 开头注释含「空实现」「永远通过」，`docs/security.md` 安全边界一节关键词可检索（随 `T-17` 先红） |
+| `tests/unit/test_schemas.py` | `新增` | 响应模型：字段集合与契约一致、时间序列化为 UTC RFC 3339 六位小数 + `Z`（`NFR-7` / `AC-17`）（随 `T-27` 先红） |
+| `tests/integration/conftest.py` | `新增` | 集成夹具：真实 PostgreSQL（测试库 `vs_email_forwarding_test`）、假 SMTP / 假 IMAP、可替换的假审查实现、测试库清表（`T-33`，§7.2） |
+| `tests/integration/test_review_outbound_flow.py` | `新增` | 流① 集成用例（`T-34`，§7.3） |
+| `tests/integration/test_send_flow.py` | `新增` | 流② 集成用例，含 `AC-4` / `AC-5` / `AC-7` / `AC-8` / `AC-9` / `AC-19` / `AC-21` / `AC-24` / `AC-29` / `AC-30` / `AC-34` / `AC-37` / `AC-40`（`T-35`） |
+| `tests/integration/test_fetch_inbound_flow.py` | `新增` | 流③ 集成用例，含 `AC-10` ~ `AC-14` / `AC-28` / `AC-38` / `AC-39`（`T-36`） |
+| `tests/integration/test_review_inbound_flow.py` | `新增` | 流④ 集成用例（`T-34`） |
+| `tests/integration/test_cleanup_flow.py` | `新增` | 流⑤ 集成用例（`AC-22`）（`T-37`） |
+| `tests/integration/test_api_contract.py` | `新增` | 三个端点的 HTTP 契约，含 `AC-1` ~ `AC-5` / `AC-15` ~ `AC-18` / `AC-31` / `AC-33` / `AC-35` / `AC-36`（`T-38`） |
+| `tests/integration/test_repositories.py` | `新增` | 仓储层并发与幂等：`FOR UPDATE SKIP LOCKED`、条件 UPDATE、收割支、清理的 `NOT EXISTS`、keyset 翻页（`AC-26` / `AC-29` / `AC-41`）（`T-37`） |
+| `tests/integration/test_startup_validation.py` | `新增` | 三条启动校验各自制造一次违规，断言进程非零退出且不监听端口（`AC-32`）（`T-38`） |
 | `tests/fixtures/` | `新增` | 静态邮件样本：DSN、MDN、带 `In-Reply-To` / `References` 的回复、原邮件、无法关联的样本；**只用 `example.com` 占位地址**。放数据不放可执行测试代码（§7.2） |
 | `tests/integration/README.md` | `修改` | 「覆盖重点」第 1 条仍是旧词「待审 → 已排队 → 已发送 → 已收到 / 拒审 / 终态失败」，按六态取值就地改写；补上夹具落点（`tests/integration/conftest.py`）与测试库准备命令 |
 | `tests/fixtures/README.md` | `修改` | 从「当前阶段为空」改为实际内容清单（样本落点与命名），保留「不出现真实地址与凭据」的约定 |
@@ -173,7 +175,7 @@
 `rowcount = 0` 与撞唯一键 / 主键的处理都据此表达，不依赖异常文本匹配。
 
 - **Alembic 迁移文件是唯一例外**：那里只能用 `op.create_table()` / `op.create_index()` 这类命令式 DDL 接口（本身就是 DDL 构造器，不是运行时查询语句），与仓储层写法不冲突。
-- **兜底纪律**：若某条语句的 PostgreSQL 方言特性确实无法用构造器表达，**停下来提出来**，不得改用 `text()` 裸串绕过——那会让 `AC-26` 的静态检查失去意义，也会引入拼接注入面。
+- **兜底纪律**：若某条语句的 PostgreSQL 方言特性确实无法用构造器表达，**当场停下来问所有者**——不得改用 `text()` 裸串绕过，那会让 `AC-26` 的静态检查失去意义，也会引入拼接注入面。**裁决的落点固定**：若裁决改变了仓储层的写法口径，先按 `AGENTS.md` §6 改写 `design.md` §5 与本节，再继续实现；裁决未落定之前，该任务不算完成。
 
 ### 2.10 包职责说明中已过时的占位文字（文档性修改）
 
@@ -286,6 +288,7 @@
 
 - **认领谓词**：`attempt_count <= 4` **且** `next_attempt_at <= now()`（`messages` 侧再加 `status = sending`、`direction = outbound`）。上限放宽到 `<= 4` 正是为收割支留出命中面。
 - **退避表**（认领第 n 次时推 `next_attempt_at = now + backoff[n]`）：n=1 → **15s**、n=2 → **30s**、n=3 → **60s**；**n=4 不推**，因为这一行只剩终态一条路。这套数字由 `docs/research/02-runtime-and-scheduling.md` 定，**不得在实现时硬编码进业务流程**，由 `core/retry.py` 集中提供（`AC-9` 断言这三个差值）。
+- **取时一律用应用侧的系统时间**：`datetime.now(UTC)` 由流程层取出后**作为参数绑定**写进 SQL（`next_attempt_at = t0 + backoff[n]` 里的 `t0` 就是认领事务取到的那个时刻），既不用 `func.now()`、也不引入可注入时钟。理由不是「对齐两个时钟」——同一宿主机上应用与数据库读的是同一个内核时钟——而是**让取时点只有一处**：认领是短事务，一个 `t0` 同时用于谓词比较与退避写入，没有第二个时间源可漂移。因此 `core/retry.py` 的 `next_attempt_at(now, attempt)` 把 `now` 作为入参——时间是进入纯逻辑的唯一入口，纯逻辑不自行取时。集成用例的口径见 §7.2（直接改列值造态，不依赖时钟注入）。
 - **`attempt_count` 与 `next_attempt_at` 只在两处写**：认领事务（阶段①）与**目标行建行时**（跨表搬运到 `messages` 必须重置为 `0` 与 `now()`）。结果事务**一律不碰这两列**。
 - **状态写入一律带谓词的条件 UPDATE**，只允许 `design.md` §2.3 声明的起点（出站行 `sending → sent`、`sending → failed`、`sent → failed`；入站行只有 `received` 不迁移）；`rowcount = 0` 与撞唯一键 / 主键**按幂等忽略**（视为「这一封已经处理过」），不报错、不重复写。构造器写法与编译产物见 §2.9。
 - **`5xx` 是例外**：直接置终态 `failed`，不等上限、不再消耗剩余重试（`AC-34` 的 `attempt_count` 为 1 由此成立）。
@@ -408,57 +411,61 @@
 
 ### 7.3 逐条 `AC-n` 的测试落点
 
-下表覆盖 `AC-1` … `AC-41`，**41 条一条不少**；每条给出可判定真假的方式（命令 / 测试名 / 步骤）。命令一律指 `uv run pytest <路径>::<测试名>`，全量门禁是 `bash scripts/check.sh`。
+下表覆盖 `AC-1` … `AC-41`，**41 条一条不少**；每条给出可判定真假的方式（命令 / 测试名 / 步骤）与**期望值来源**——`docs/testing.md` 的 `R2` 要求期望值不得来自被测代码，所以每行都必须能说出它的 oracle 在哪。命令一律指 `uv run pytest <路径>::<测试名>`，全量门禁是 `bash scripts/check.sh`。
 
-| AC | 覆盖 | 测试与文件 | 用例名与断言要点 |
-|---|---|---|---|
-| `AC-1` | `FR-1` | `tests/integration/test_api_contract.py` | `test_submit_then_query`：`POST /v1/messages`（单收件人 + 主题 + `text` 正文）返回 2xx 且含 `id`；`GET /v1/messages/{id}` 立刻返回 `found: true`、`status == "submitted"` |
-| `AC-2` | `FR-1` | `tests/integration/test_api_contract.py` | `test_missing_recipient_422`：缺收件人 → 422，响应体出现收件人字段名；断言提交前后 `pending_messages` 行数不变 |
-| `AC-3` | `FR-1` | `tests/integration/test_api_contract.py` | `test_two_recipients_422`：两个收件人（列表与逗号分隔两种形态）→ 422 且不落库 |
-| `AC-4` | `FR-2` | `tests/integration/test_send_flow.py` | `test_from_fixed_from_config`：请求体多带一个发件人字段（未知字段）→ 仍能发出，`smtp_capture` 捕获到的 `From` 等于 `MAIL_FROM_ADDRESS`，且不等于请求里给的地址 |
-| `AC-5` | `FR-2` | `tests/integration/test_send_flow.py` | `test_reply_to_written`：捕获到的报文含 `Reply-To`，其值等于 `REPLY_TO_ADDRESS` |
-| `AC-6` | `FR-3` | `tests/integration/test_review_outbound_flow.py` | `test_reject_no_smtp`：`fake_review` 恒 `reject` → `await` 一次流① tick 与一次流② tick，`smtp_capture` 投递次数为 `0`；状态为 `rejected` |
-| `AC-7` | `FR-4` | `tests/integration/test_send_flow.py` | `test_outbound_end_to_end`：真实 PostgreSQL + 假 SMTP 捕获，跑完流① 与流② 各一次 tick → 捕获端收到该邮件，`messages.status == "sent"` |
-| `AC-8` | `FR-5` | `tests/integration/test_send_flow.py` | `test_transient_exhausts_attempts`：假 SMTP 连续 `4xx` → 第 4 次尝试失败后置 `failed`，`attempt_count == 4`，`last_error_class == "transient"`，`last_smtp_code` 为该 `4xx` 码 |
-| `AC-9` | `FR-5` | `tests/unit/test_retry_policy.py` + `tests/integration/test_send_flow.py` | 单测 `test_backoff_table`：`now + backoff[n]` 的差值为 15 / 30 / 60 秒；集成 `test_backoff_written_on_claim`：每轮认领后读回的 `next_attempt_at` 与认领时刻的差值分别约为 15 / 30 / 60 秒 |
-| `AC-10` | `FR-6` | `tests/integration/test_fetch_inbound_flow.py` | `test_dsn_sets_failed`：注入 DSN 样本（`multipart/report` + `message/delivery-status` + 内嵌原邮件）→ 跑一次流③ tick → 对应出站行 `status == "failed"` |
-| `AC-11` | `FR-7` | `tests/integration/test_fetch_inbound_flow.py` | `test_inbound_dedup_by_uid`：同一 `mailbox + uidvalidity + uid` 连续跑两次流③ tick → 库中只有一条记录，第二次计入 `duplicate` |
-| `AC-12` | `FR-8` | `tests/integration/test_fetch_inbound_flow.py` + `test_review_inbound_flow.py` | `test_rejected_reply_not_queryable`：`fake_review` 恒 `reject` → 回复进 `rejected_messages`，`GET .../replies` 不返回它（`found: true` + 空集合） |
-| `AC-13` | `FR-9` | `tests/integration/test_fetch_inbound_flow.py` | `test_unmatched_inbound_discarded`：注入关联不上的入站邮件 → 三张邮件表行数均不增；`caplog` 抓到一条 `inbound_discarded`，事件里只有计数（`no_match == 1` 等） |
-| `AC-14` | `FR-9` | `tests/integration/test_fetch_inbound_flow.py` | `test_mdn_dropped_reply_kept`：同时注入 MDN 样本（含 `message/disposition-notification`）与一封 `In-Reply-To` 指向出站行的普通回复 → 回执不入库（`mdn` 计数为 1），`GET .../replies` 只返回那 1 条 |
-| `AC-15` | `FR-10` | `tests/integration/test_api_contract.py` | `test_replies_stable`：连续调用 `GET .../replies` 两次 → 两次的回复 ID 序列完全一致（顺序也一致） |
-| `AC-16` | `FR-10` | `tests/integration/test_api_contract.py` | `test_replies_sorted_asc`：写入 3 封回复（`received_at` 递增）→ 返回 3 条且按 `received_at ASC, id ASC` 排列 |
-| `AC-17` | `FR-11`、`NFR-7` | `tests/integration/test_api_contract.py` + `tests/unit/test_schemas.py` | `test_three_phase_states`：提交后立即查得 `submitted` → 跑一次流② tick 后得 `sent` → 注入退信并跑一次流③ tick 后得 `failed`，三次取值互不相同；单测 `test_timestamp_format`：所有时间字段形如 `%Y-%m-%dT%H:%M:%S.%fZ`，且与库中 UTC 值一致 |
-| `AC-18` | `FR-12` | `tests/integration/test_api_contract.py` | `test_rejected_state_queryable`：恒 `reject` 的假审查下，`GET /v1/messages/{id}` 返回 `rejected`，且该 ID 不出现在任何 `sent` 结果里 |
-| `AC-19` | `FR-13`、`NFR-9` | `tests/integration/test_send_flow.py` | `test_restart_resumes`：留一行 `sending` 未处理，**在同一个测试里重新构造应用与引擎**（不真杀进程，口径见 §7.4）→ 跑流② tick 后该行推进到 `sent`，期间无需人工干预 |
-| `AC-20` | `FR-14`、`NFR-3` | **交付阶段验证，不入门禁** | 在与公网隔离、可达内网镜像源的服务器上 `bash deploy/run.sh` → 60 秒内 `GET /healthz` 返回 200。本地不可复现（本地开发机不满足隔离前提），登记为交付检查项，见 §9.1 的 S-8 |
-| `AC-21` | `FR-15` | `tests/integration/test_send_flow.py` | `test_within_three_minutes`：提交后不干预，按配置的间隔推进若干轮 tick，断言累计耗时与推进轮次满足 3 分钟上界（用假时钟或直接跑真实 tick，见 §7.2 的时间推进口径） |
-| `AC-22` | `NFR-8` | `tests/integration/test_cleanup_flow.py` | `test_cleanup_scope_and_not_exists`：写入 31 天前的一对邮件 + 一条 31 天前的拒审行 + 一条 29 天前的记录 → 跑一次清理 tick，前三条查不到、29 天前那条仍在；**另写一条 31 天前但仍有入站待审行指向它的出站行，断言清理后该行仍在** |
-| `AC-23` | `NFR-2` | `tests/integration/test_send_flow.py` | `test_interval_from_config`：把投递间隔配置改成非 10 秒的值（不重新构建镜像，改配置即可）→ 断言实际读取并用于调度的间隔随之改变。断言对象是「配置值被读进调度器」，不是墙钟等待 |
-| `AC-24` | `NFR-5` | `tests/integration/test_send_flow.py` | `test_logs_no_content`：投递一封正文含可识别片段、收件人可识别的邮件 → `caplog` 全量文本既不含该正文片段，也不含收件人地址 |
-| `AC-25` | `NFR-6` | `tests/unit/test_review_placeholder.py` | `test_empty_implementation_annotated`：读 `providers/review/base.py` 与 `always_pass.py` 开头注释，断言同时出现「空实现」与「永远通过」；再读 `docs/security.md` 的安全边界一节，关键词可检索到该标注 |
-| `AC-26` | `NFR-1` | `tests/unit/test_repository_statements.py` | `test_no_two_step_claim`：① 用静态 AST 扫描 `db/repositories/` 的认领函数，断言不存在「同一次认领里先 `select` 出候选、再单独 `update` 写状态」的写法；② 断言认领语句编译出的 SQL 同时含 `FOR UPDATE` 与 `SKIP LOCKED`。配套的静态检查见 §7.1 第三条 |
-| `AC-27` | `NFR-4` | `tests/unit/test_config_hygiene.py` | `test_no_direct_env_access`：遍历 `src/` 的 AST，断言除 `config.py` 外没有任何模块 import `os` 后访问 `environ`、也没有第二处读 `.env`；`git ls-files` 含 `.env.example` 且不含 `.env`。连接参数与地址只经 `config.get_settings()` |
-| `AC-28` | `NFR-10` | `tests/integration/test_fetch_inbound_flow.py` | `test_discard_log_only_counts`：连续丢 3 封关联不上的入站邮件 → `caplog` 中存在合计 3 的条数记录，且日志文本不含任何发件人地址、主题或 UID |
-| `AC-29` | `NFR-1`、`FR-4` | `tests/integration/test_repositories.py` + `test_send_flow.py` | `test_concurrent_claim_single_delivery`：两个并发执行体同时抢占同一批待发行（两个 `asyncio` 任务各开自己的会话）→ 捕获端只收到一封，库里 `status == "sent"` |
-| `AC-30` | `FR-5` | `tests/integration/test_send_flow.py` | `test_error_has_no_free_text`：假 SMTP 返回一段含收件人地址的原始回复文本 → 进终态失败后，库中 `last_smtp_code` 与 `last_error_class` 有值，且**全表任何列都不出现那段文本或该地址** |
-| `AC-31` | `FR-10` | `tests/integration/test_api_contract.py` | `test_existing_without_replies`：对存在但无回复的邮件调用 `GET .../replies` → HTTP 成功、`found: true`、`replies` 为空集合 |
-| `AC-32` | `FR-2`、`NFR-4` | `tests/unit/test_validation.py` + `tests/integration/test_startup_validation.py` | 单测三条判据各自单独制造一次违规；集成测试用子进程启动应用（`subprocess` 跑 uvicorn / 直接调用 `validate_startup()` + 断言进程非零退出），断言**非零退出且不监听端口** |
-| `AC-33` | `FR-1` | `tests/integration/test_api_contract.py` | `test_over_limit_422`：主题超 `MAX_SUBJECT_CHARS`、正文超 `MAX_BODY_BYTES` 各一例 → 422 且不落库；断言上限取自配置项（改配置后上限随之变） |
-| `AC-34` | `FR-5` | `tests/integration/test_send_flow.py` | `test_permanent_fails_immediately`：假 SMTP 持续 `5xx` → 第一次尝试后即 `failed`，`attempt_count == 1`，`last_error_class == "permanent"`，`next_attempt_at` 未被推后 |
-| `AC-35` | `FR-10`、`NFR-8` | `tests/integration/test_api_contract.py` | `test_not_found_vs_no_replies`：不存在的 ID 调两个查询端点 → 都是成功状态码，响应体 `found: false`；与 `AC-31` 的 `found: true` + 空集合**可区分** |
-| `AC-36` | `FR-11` | `tests/integration/test_api_contract.py` | `test_state_monotonic`：提交后高频轮询直到 `sent`，记录取值序列 → 不出现向后步骤，且至少观测到 `reviewing` 与 `sending` 两个取值（靠让审查流与发信流分两次 tick 推进） |
-| `AC-37` | `FR-5`、`NFR-1` | `tests/integration/test_send_flow.py` | `test_reaper_after_fourth_attempt`：**确定性造态**——假 SMTP 持续 `4xx`，跑到第 4 次尝试被认领后，直接构造遗留行（`attempt_count == 4`、`status == "sending"`、`sent_at` 为空），`await` 一次流② tick → 该行进终态 `failed`，且 `smtp_capture` 投递次数**没有**增加。完整口径见 §7.4 |
-| `AC-38` | `FR-6` | `tests/integration/test_fetch_inbound_flow.py` | `test_dsn_target_not_sent`：对仍在重试等待的行（`sending`、`sent_at` 为空）注入关联它的 DSN 并跑一次流③ tick → 该行**不变成** `failed`，`next_attempt_at` / `status` 不变（重试照常），本次计入一条 `dsn_target_not_sent` |
-| `AC-39` | `FR-7`、`NFR-1` | `tests/integration/test_fetch_inbound_flow.py` + `test_repositories.py` | `test_cursor_rollback_advances`：把游标回退到已处理过的 UID 再跑一次流③ tick → 库中不产生第二条记录，`imap_cursors.last_uid` **仍然推进**，本次计入一条 `duplicate`。完整口径见 §7.4 |
-| `AC-40` | `FR-15` | `tests/integration/test_send_flow.py` | `test_timeout_bounded`：假 SMTP 接受连接后挂住不返回 → 单次尝试在 `SMTP_TIMEOUT_SECONDS` 内结束（断言耗时上界），执行体不被无限期占用，该邮件仍能在 3 分钟内进入 `sent` / `failed`。完整口径见 §7.4 |
-| `AC-41` | `FR-10` | `tests/integration/test_repositories.py` + `test_api_contract.py` | `test_keyset_250_replies`：写入 250 条回复、每页 100 条 → 用 `next_cursor` 逐页取完得 250 条且顺序与全集一致；**翻页中途插入一条新回复**，已取过的页不重不漏，继续翻页最终仍取到全集（`found: true`）。完整口径见 §7.4 |
+| AC | 覆盖 | 测试与文件 | 期望值来源 | 用例名与断言要点 |
+|---|---|---|---|---|
+| `AC-1` | `FR-1` | `tests/integration/test_api_contract.py` | `spec.md` 的 `FR-1` + `docs/api-contract.yaml` 的请求 / 响应字段定义 | `test_submit_then_query`：`POST /v1/messages`（单收件人 + 主题 + `text` 正文）返回 2xx 且含 `id`；`GET /v1/messages/{id}` 立刻返回 `found: true`、`status == "submitted"` |
+| `AC-2` | `FR-1` | `tests/integration/test_api_contract.py` | `docs/api-contract.yaml` 的必填字段清单（缺 `to` 即 422） | `test_missing_recipient_422`：缺收件人 → 422，响应体出现收件人字段名；断言提交前后 `pending_messages` 行数不变 |
+| `AC-3` | `FR-1` | `tests/integration/test_api_contract.py` | `docs/api-contract.yaml` 的单收件人约束（`to` 是单值、不是数组） | `test_two_recipients_422`：两个收件人（列表与逗号分隔两种形态）→ 422 且不落库 |
+| `AC-4` | `FR-2` | `tests/integration/test_send_flow.py` | `AGENTS.md` §8.3 + `MAIL_FROM_ADDRESS` 配置值（期望值是配置里那个地址，不是请求里给的） | `test_from_fixed_from_config`：请求体多带一个发件人字段（未知字段）→ 仍能发出，`smtp_capture` 捕获到的 `From` 等于 `MAIL_FROM_ADDRESS`，且不等于请求里给的地址 |
+| `AC-5` | `FR-2` | `tests/integration/test_send_flow.py` | `AGENTS.md` §8.3 + `REPLY_TO_ADDRESS` 配置值 | `test_reply_to_written`：捕获到的报文含 `Reply-To`，其值等于 `REPLY_TO_ADDRESS` |
+| `AC-6` | `FR-3` | `tests/integration/test_review_outbound_flow.py` | `design.md` §3.2 的状态落点表：拒审 → `rejected_messages`，**不产生任何投递** | `test_reject_no_smtp`：`fake_review` 恒 `reject` → `await` 一次流① tick 与一次流② tick，`smtp_capture` 投递次数为 `0`；状态为 `rejected` |
+| `AC-7` | `FR-4` | `tests/integration/test_send_flow.py` | `spec.md` 的 `FR-4` + `design.md` §2.3 的合法迁移（`sending → sent`） | `test_outbound_end_to_end`：真实 PostgreSQL + 假 SMTP 捕获，跑完流① 与流② 各一次 tick → 捕获端收到该邮件，`messages.status == "sent"` |
+| `AC-8` | `FR-5` | `tests/integration/test_send_flow.py` | `AGENTS.md` §8.7 与 `docs/research/02-runtime-and-scheduling.md` 的重试语义（合计 4 次尝试后终态） | `test_transient_exhausts_attempts`：假 SMTP 连续 `4xx` → 第 4 次尝试失败后置 `failed`，`attempt_count == 4`，`last_error_class == "transient"`，`last_smtp_code` 为该 `4xx` 码 |
+| `AC-9` | `FR-5` | `tests/unit/test_retry_policy.py` + `tests/integration/test_send_flow.py` | `constants.RETRY_BACKOFF_SECONDS` 的 15 / 30 / 60 | 单测 `test_backoff_table`：`now + backoff[n]` 的差值为 15 / 30 / 60 秒；集成 `test_backoff_written_on_claim`：每轮认领后读回的 `next_attempt_at` 与认领时刻的差值分别约为 15 / 30 / 60 秒 |
+| `AC-10` | `FR-6` | `tests/integration/test_fetch_inbound_flow.py` | `design.md` §3.4 的退信判定（`multipart/report` + `message/delivery-status`） | `test_dsn_sets_failed`：注入 DSN 样本（`multipart/report` + `message/delivery-status` + 内嵌原邮件）→ 跑一次流③ tick → 对应出站行 `status == "failed"` |
+| `AC-11` | `FR-7` | `tests/integration/test_fetch_inbound_flow.py` | `design.md` §2.2 的入站唯一键 + §3.4 的 `duplicate` 计数口径 | `test_inbound_dedup_by_uid`：同一 `mailbox + uidvalidity + uid` 连续跑两次流③ tick → 库中只有一条记录，第二次计入 `duplicate` |
+| `AC-12` | `FR-8` | `tests/integration/test_fetch_inbound_flow.py` + `test_review_inbound_flow.py` | `design.md` §3.5 的拒审落点（`rejected_messages`） | `test_rejected_reply_not_queryable`：`fake_review` 恒 `reject` → 回复进 `rejected_messages`，`GET .../replies` 不返回它（`found: true` + 空集合） |
+| `AC-13` | `FR-9` | `tests/integration/test_fetch_inbound_flow.py` | `design.md` §3.4 的十一类丢弃原因与「只记条数」口径 | `test_unmatched_inbound_discarded`：注入关联不上的入站邮件 → 三张邮件表行数均不增；`caplog` 抓到一条 `inbound_discarded`，事件里只有计数（`no_match == 1` 等） |
+| `AC-14` | `FR-9` | `tests/integration/test_fetch_inbound_flow.py` | `design.md` §3.4 的 MDN 剔除规则 | `test_mdn_dropped_reply_kept`：同时注入 MDN 样本（含 `message/disposition-notification`）与一封 `In-Reply-To` 指向出站行的普通回复 → 回执不入库（`mdn` 计数为 1），`GET .../replies` 只返回那 1 条 |
+| `AC-15` | `FR-10` | `tests/integration/test_api_contract.py` | `design.md` §2.5 的排序键（`received_at ASC, id ASC`） | `test_replies_stable`：连续调用 `GET .../replies` 两次 → 两次的回复 ID 序列完全一致（顺序也一致） |
+| `AC-16` | `FR-10` | `tests/integration/test_api_contract.py` | 同上 + 测试自己构造的 3 条递增 `received_at` | `test_replies_sorted_asc`：写入 3 封回复（`received_at` 递增）→ 返回 3 条且按 `received_at ASC, id ASC` 排列 |
+| `AC-17` | `FR-11`、`NFR-7` | `tests/integration/test_api_contract.py` + `tests/unit/test_schemas.py` | `design.md` §2.3 的六态与 §4.1 的时间格式（UTC RFC 3339 六位小数 + `Z`） | `test_three_phase_states`：提交后立即查得 `submitted` → 跑一次流② tick 后得 `sent` → 注入退信并跑一次流③ tick 后得 `failed`，三次取值互不相同；单测 `test_timestamp_format`：所有时间字段形如 `%Y-%m-%dT%H:%M:%S.%fZ`，且与库中 UTC 值一致 |
+| `AC-18` | `FR-12` | `tests/integration/test_api_contract.py` | `design.md` §2.3 / §3.2 的拒审终态 | `test_rejected_state_queryable`：恒 `reject` 的假审查下，`GET /v1/messages/{id}` 返回 `rejected`，且该 ID 不出现在任何 `sent` 结果里 |
+| `AC-19` | `FR-13`、`NFR-9` | `tests/integration/test_send_flow.py` | `design.md` §3.7 的恢复口径（状态字段 + `next_attempt_at`） | `test_restart_resumes`：留一行 `sending` 未处理，**在同一个测试里重新构造应用与引擎**（不真杀进程，口径见 §7.4）→ 跑流② tick 后该行推进到 `sent`，期间无需人工干预 |
+| `AC-20` | `FR-14`、`NFR-3` | **交付阶段验证，不入门禁** | `spec.md` 的 `FR-14` / `NFR-3`（60 秒上界）；交付阶段验证，不入门禁 | 在与公网隔离、可达内网镜像源的服务器上 `bash deploy/run.sh` → 60 秒内 `GET /healthz` 返回 200。本地不可复现（本地开发机不满足隔离前提），登记为交付检查项，见 §9.1 的 S-8 |
+| `AC-21` | `FR-15` | `tests/unit/test_retry_policy.py` + `tests/integration/test_send_flow.py` | `spec.md` 的 `FR-15`（180 秒上界）+ 退避表与超时上界（`constants` 与配置默认值）的纯算术 | 单测 `test_worst_case_within_180s`：最坏路径 = 4 × 超时上界 + 15 + 30 + 60 ≤ 180 秒（算术）；集成 `test_within_three_minutes`：提交后不干预、假 SMTP 成功，真实等待约 2× 配置间隔后断言 `sent` 出现的时刻早于「提交 + 180 秒」（手法见 §7.4） |
+| `AC-22` | `NFR-8` | `tests/integration/test_cleanup_flow.py` | `NFR-8` 的 30 天 + `design.md` §3.6 的 `NOT EXISTS` 口径 | `test_cleanup_scope_and_not_exists`：写入 31 天前的一对邮件 + 一条 31 天前的拒审行 + 一条 29 天前的记录 → 跑一次清理 tick，前三条查不到、29 天前那条仍在；**另写一条 31 天前但仍有入站待审行指向它的出站行，断言清理后该行仍在** |
+| `AC-23` | `NFR-2` | `tests/unit/test_scheduler_intervals.py` | 配置项 `POLL_SEND_SECONDS` 自身的值（改配置后重建即为新值） | `test_interval_comes_from_config`：调度器构造时读到的间隔 == 配置值，改配置后重建即为新值；同文件 `test_no_interval_literals`：AST 扫描断言间隔与批量不以字面量出现在源码中（口径与 `spec.md` 的 `AC-23` 一致，不测墙钟） |
+| `AC-24` | `NFR-5` | `tests/integration/test_send_flow.py` | 测试自己注入的正文片段与收件人地址（期望是「不出现」的否定断言） | `test_logs_no_content`：投递一封正文含可识别片段、收件人可识别的邮件 → `caplog` 全量文本既不含该正文片段，也不含收件人地址（否定断言，`docs/testing.md` §4.5 明确允许） |
+| `AC-25` | `NFR-6` | `tests/unit/test_review_placeholder.py` | `NFR-6` 明列的两个关键词（「空实现」「永远通过」） | `test_empty_implementation_annotated`：读 `providers/review/base.py` 与 `always_pass.py` 开头注释，断言同时出现「空实现」与「永远通过」；再读 `docs/security.md` 的安全边界一节，关键词可检索到该标注 |
+| `AC-26` | `NFR-1` | `tests/unit/test_repository_statements.py` | `AGENTS.md` §8.1 的抢占硬约束（`FOR UPDATE` 与 `SKIP LOCKED` 必须同时出现） | `test_no_two_step_claim`：① 用静态 AST 扫描 `db/repositories/` 的认领函数，断言不存在「同一次认领里先 `select` 出候选、再单独 `update` 写状态」的写法；② 断言认领语句编译出的 SQL 同时含 `FOR UPDATE` 与 `SKIP LOCKED`。配套的静态检查见 §7.1 第三条 |
+| `AC-27` | `NFR-4` | `tests/unit/test_config_hygiene.py` | `AGENTS.md` §7 的配置读法 + `AC-27` 自己给定的 `git ls-files` 清单 | `test_no_direct_env_access`：遍历 `src/` 的 AST，断言除 `config.py` 外没有任何模块 import `os` 后访问 `environ`、也没有第二处读 `.env`；`git ls-files` 含 `.env.example` 且不含 `.env`。连接参数与地址只经 `config.get_settings()` |
+| `AC-28` | `NFR-10` | `tests/integration/test_fetch_inbound_flow.py` | 测试本次注入的 3 封（计数 3 由测试自己定）+ 否定断言 | `test_discard_log_only_counts`：连续丢 3 封关联不上的入站邮件 → `caplog` 中存在合计 3 的条数记录（断言的是**事件名与受控计数字段**，`docs/testing.md` §4.5），且日志文本不含任何发件人地址、主题或 UID |
+| `AC-29` | `NFR-1`、`FR-4` | `tests/integration/test_repositories.py` + `test_send_flow.py` | `NFR-1` 的「恰好一次」+ 捕获端的投递记录 | `test_concurrent_claim_single_delivery`：两个并发执行体同时抢占同一批待发行（两个 `asyncio` 任务各开自己的会话）→ 捕获端只收到一封，库里 `status == "sent"` |
+| `AC-30` | `FR-5` | `tests/integration/test_send_flow.py` | 假 SMTP 自己返回的那段文本与其中的地址（期望是「不出现」） | `test_error_has_no_free_text`：假 SMTP 返回一段含收件人地址的原始回复文本 → 进终态失败后，库中 `last_smtp_code` 与 `last_error_class` 有值，且**全表任何列都不出现那段文本或该地址** |
+| `AC-31` | `FR-10` | `tests/integration/test_api_contract.py` | `design.md` §4.1 的 `found` 语义（存在但无回复 = 成功 + 空集合） | `test_existing_without_replies`：对存在但无回复的邮件调用 `GET .../replies` → HTTP 成功、`found: true`、`replies` 为空集合 |
+| `AC-32` | `FR-2`、`NFR-4` | `tests/unit/test_settings_validation.py` + `tests/integration/test_startup_validation.py` | `design.md` §4.4 的三条判据（校验信息只出现配置项名） | 单测三条判据各自单独制造一次违规；集成测试用子进程启动应用（`subprocess` 跑 uvicorn / 直接调用 `validate_startup()` + 断言进程非零退出），断言**非零退出且不监听端口** |
+| `AC-33` | `FR-1` | `tests/integration/test_api_contract.py` | `MAX_SUBJECT_CHARS` / `MAX_BODY_BYTES` 配置值（改配置后上限随之变） | `test_over_limit_422`：主题超 `MAX_SUBJECT_CHARS`、正文超 `MAX_BODY_BYTES` 各一例 → 422 且不落库；断言上限取自配置项（改配置后上限随之变） |
+| `AC-34` | `FR-5` | `tests/integration/test_send_flow.py` | `design.md` §3.3 的 `5xx` 例外（直接终态、`attempt_count == 1`） | `test_permanent_fails_immediately`：假 SMTP 持续 `5xx` → 第一次尝试后即 `failed`，`attempt_count == 1`，`last_error_class == "permanent"`，`next_attempt_at` 未被推后 |
+| `AC-35` | `FR-10`、`NFR-8` | `tests/integration/test_api_contract.py` | `design.md` §4.1 的 `found: false`，与 `AC-31` 的 `found: true` + 空集合可区分 | `test_not_found_vs_no_replies`：不存在的 ID 调两个查询端点 → 都是成功状态码，响应体 `found: false`；与 `AC-31` 的 `found: true` + 空集合**可区分** |
+| `AC-36` | `FR-11` | `tests/integration/test_api_contract.py` | `design.md` §2.3 的合法迁移图（不得出现向后步骤） | `test_state_monotonic`：**由测试显式推进**——`await` 一次流① tick 后查询、再 `await` 一次流② tick 后查询，记录取值序列 → 不出现向后步骤，且至少观测到 `reviewing` 与 `sending`（不依赖后台高频轮询，`docs/testing.md` R12 要求确定性） |
+| `AC-37` | `FR-5`、`NFR-1` | `tests/integration/test_send_flow.py` | `design.md` §3 的收割支定义（`attempt_count == 4` 且 `sending`）+「不产生第 5 次调用」 | `test_reaper_after_fourth_attempt`：**确定性造态**——假 SMTP 持续 `4xx`，跑到第 4 次尝试被认领后，直接构造遗留行（`attempt_count == 4`、`status == "sending"`、`sent_at` 为空），`await` 一次流② tick → 该行进终态 `failed`，且 `smtp_capture` 投递次数**没有**增加。完整口径见 §7.4；`spec.md` 的 `AC-37` 已就地改写为同一口径 |
+| `AC-38` | `FR-6` | `tests/integration/test_fetch_inbound_flow.py` | `design.md` §3.4 的 `dsn_target_not_sent`（不置状态、不打断重试） | `test_dsn_target_not_sent`：对仍在重试等待的行（`sending`、`sent_at` 为空）注入关联它的 DSN 并跑一次流③ tick → 该行**不变成** `failed`，`next_attempt_at` / `status` 不变（重试照常），本次计入一条 `dsn_target_not_sent` |
+| `AC-39` | `FR-7`、`NFR-1` | `tests/integration/test_fetch_inbound_flow.py` + `test_repositories.py` | `design.md` §3.4 的游标推进规则（冲突不得把推进一起回滚） | `test_cursor_rollback_advances`：把游标回退到已处理过的 UID 再跑一次流③ tick → 库中不产生第二条记录，`imap_cursors.last_uid` **仍然推进**，本次计入一条 `duplicate`。完整口径见 §7.4 |
+| `AC-40` | `FR-15` | `tests/integration/test_send_flow.py` | `SMTP_TIMEOUT_SECONDS` / `REVIEW_TIMEOUT_SECONDS` 配置值 | `test_timeout_bounded`：假 SMTP 接受连接后挂住不返回 → 单次尝试在 `SMTP_TIMEOUT_SECONDS` 内结束（断言耗时上界），执行体不被无限期占用，该邮件仍能在 3 分钟内进入 `sent` / `failed`。完整口径见 §7.4 |
+| `AC-41` | `FR-10` | `tests/integration/test_repositories.py` + `test_api_contract.py` | 测试自己写入的 250 条 + `REPLIES_PAGE_SIZE`（100） | `test_keyset_250_replies`：写入 250 条回复、每页 100 条 → 用 `next_cursor` 逐页取完得 250 条且顺序与全集一致；**翻页中途插入一条新回复**，已取过的页不重不漏，继续翻页最终仍取到全集（`found: true`）。完整口径见 §7.4 |
 
 **不入门禁的交付阶段条目**：`AC-20`（隔离环境 + 容器启动）不在本地自动化门禁里——本地开发机不满足「与公网隔离」这一前提，把它硬塞进 `pytest` 只会得到一条永远跳过或永远假的用例。它按 §9.1 的 S-8 在真实服务器上按步骤验证，验收结果同样回填 `spec.md` §9。
 
-### 7.4 需要特别写清手法的用例（`AC-37` / `AC-39` / `AC-40` / `AC-41`）
+### 7.4 需要特别写清手法的用例（`AC-21` / `AC-23` / `AC-37` / `AC-39` / `AC-40` / `AC-41`）
 
-这四条容易被写成「看起来过了、其实没测到」的用例，手法逐条钉死：
+这六条容易被写成「看起来过了、其实没测到」的用例，手法逐条钉死：
+
+**`AC-21` 真实等待与纯算术分开写。** 集成那条只走成功路径：提交后不干预、假 SMTP 成功，真实等待约 2× `POLL_*_SECONDS`（默认 10 秒）后断言 `sent` 出现，且出现时刻早于「提交时刻 + 180 秒」——这是**唯一允许真实等待**的用例，断言的是「不干预也能在 3 分钟内走完」，不是为了跑满 4 次重试。退避路径**不真等**：最坏路径由 `test_retry_policy.py` 的纯算术覆盖（4 × 超时上界 + 15 + 30 + 60 ≤ 180 秒），期望值全部来自 `constants` 与配置默认值。
+
+**`AC-23` 不测墙钟。** `spec.md` 的 `AC-23` 已就地改写为「间隔取自配置、代码中无间隔字面量」：单测断言「调度器构造时读到的间隔 == 配置值」，改配置后重新构造即为新值；同文件的 AST 扫描断言 `POLL_*` / `BATCH_SIZE` 不以字面量出现在源码里。原先的「实际两次处理之间的间隔随之改变」在确定性口径下不可观测（会引入时间相关用例，违 `docs/testing.md` R12），因此不再作为判定对象。
 
 **`AC-37` 确定性造态，不是真杀进程。** 测试里**不**做「fork 子进程 + kill + 重启」。手法是确定性构造崩溃窗口的**遗留状态**：
 
@@ -536,6 +543,8 @@
 
 阶段划分只有一条依据：**每一步都能被一条命令独立判定通过**。阶段名与 `tasks.md` 的五个阶段一一对应，编号 `S-n` 只是本节的引用把手，**任务编号用 `tasks.md` 的 `T-n`**。
 
+**任务粒度：一条任务 = 一个垂直片。** 能在实现之前先红的单测（`core/` 四个模块、`schemas/`、仓储语句编译、请求校验、启动校验、配置口径、空实现标注、调度间隔）**与其对应的实现合并为同一条任务**，不另立“测试任务”——这样 `T-1` ~ `T-45` 的总数与下面的阶段区间保持不变，且每个任务天然自带它的验证方式（依据见 `docs/testing.md` §5「优先 TDD」）。集成测试与跨层静态检查留在阶段 5，因为它们要等迁移、夹具、真实库与五条流全部到位才写得出。
+
 | 阶段（= `tasks.md` 的阶段） | 步骤 | 内容 | 对应任务 |
 |---|---|---|---|
 | **阶段 1 数据模型与迁移** | `S-1` | 四张表的 ORM 模型、引擎与会话、迁移文件（四张表 + 六项索引 + 全部 `CHECK` + 一处自引用外键），`upgrade()` / `downgrade()` 都实现 | `T-1` ~ `T-5` |
@@ -545,7 +554,7 @@
 | | `S-5` | `providers/{review,smtp,imap}/` 的 `base.py` 与两个实现 + 工厂 | `T-17` ~ `T-21` |
 | **阶段 4 五条流与同步路径** | `S-6` | 五条流与调度器（`flows/`） | `T-22` ~ `T-26` |
 | | `S-7` | `schemas/`、`service/`、`api/v1/`、`validate_startup()` 与 `main.py` 的 lifespan 装配 | `T-27` ~ `T-32` |
-| **阶段 5 测试、文档与交付** | `S-8` | 六类集成测试与静态检查（`AC-1`…`AC-41` 全覆盖，口径见 §7.3 / §7.4） | `T-33` ~ `T-38` |
+| **阶段 5 集成测试、文档与交付** | `S-8` | 集成测试与跨层静态检查（`AC-1`…`AC-41` 全覆盖，口径见 §7.3 / §7.4）；**随实现先红的单测不在这里重复** | `T-33` ~ `T-38` |
 | | `S-9` | 文档同步与包占位 docstring（§6.2 的清单） | `T-39`、`T-40` |
 | | `S-10` | 跑门禁、按 `AC-n` 回填 `spec.md` §9 的验收结果 | `T-41`、`T-42` |
 | | `S-11` | 交付三件脚本与 `deploy/` / 研究册 / 未定项的同步 | `T-43`、`T-44` |
@@ -564,8 +573,8 @@
 | `S-3` | `uv run pytest tests/integration/test_repositories.py`：两个并发任务抢同一批只成功一次（`AC-29`）、唯一键挡住重复插入（`AC-11`）、条件 UPDATE 的 `rowcount = 0` 不报错、清理的 `NOT EXISTS` 不留下孤儿（`AC-22`）、250 条 keyset 翻页全集一致（`AC-41`）；纯语句层用 `tests/unit/test_repository_statements.py` 断言编译产物含 `FOR UPDATE SKIP LOCKED`（`AC-26`） |
 | `S-4` | `uv run pytest tests/unit/test_message_id.py tests/unit/test_retry_policy.py tests/unit/test_states.py tests/unit/test_inbound_sorting.py`：四份纯逻辑单测全绿即通过。**这一步不碰数据库**，因此可以完全脱离 §7.2 的前置独立跑 |
 | `S-5` | `uv run pytest tests/unit/test_review_placeholder.py`（`AC-25` 的关键词断言）+ `uv run mypy src`：三个 `base.py` 只依赖各自接口、不 import `db/`；`providers/review/` 的两个文件开头注释含「空实现」「永远通过」 |
-| `S-6` | 单条流各自可验：`uv run pytest tests/integration/test_review_outbound_flow.py`、`test_send_flow.py`、`test_fetch_inbound_flow.py`、`test_review_inbound_flow.py`、`test_cleanup_flow.py`。每条流都是「构造行 → `await` 一次 tick → 断言状态与列值」，不依赖别的流先跑（跨流用例把需要的 tick 都显式调用一次） |
-| `S-7` | `uv run pytest tests/integration/test_api_contract.py tests/integration/test_startup_validation.py tests/unit/test_validation.py tests/unit/test_schemas.py tests/unit/test_api_contract.py`：三个端点、422 清单、`found` 区分、时间格式、三条启动校验各自独立可判定（`AC-1` ~ `AC-5`、`AC-15` ~ `AC-18`、`AC-31`、`AC-33`、`AC-35`、`AC-36`） |
+| `S-6` | 单条流各自可验：`uv run pytest tests/integration/test_review_outbound_flow.py`、`test_send_flow.py`、`test_fetch_inbound_flow.py`、`test_review_inbound_flow.py`、`test_cleanup_flow.py`。每条流都是「构造行 → `await` 一次 tick → 断言状态与列值」，不依赖别的流先跑（跨流用例把需要的 tick 都显式调用一次）。调度器那一条随实现先红：`uv run pytest tests/unit/test_scheduler_intervals.py`（`AC-23`） |
+| `S-7` | `uv run pytest tests/integration/test_api_contract.py tests/integration/test_startup_validation.py tests/unit/test_request_validation.py tests/unit/test_settings_validation.py tests/unit/test_config_hygiene.py tests/unit/test_schemas.py tests/unit/test_api_contract.py`：三个端点、422 清单、`found` 区分、时间格式、三条启动校验与配置口径各自独立可判定（`AC-1` ~ `AC-5`、`AC-15` ~ `AC-18`、`AC-27`、`AC-31`、`AC-32`、`AC-33`、`AC-35`、`AC-36`） |
 | `S-8` | 每个测试文件单独可跑（上表逐个给了路径）；`AC-20` 除外，它在 `S-12` 按步骤验。**未跑真实数据库的用例不得计入通过**——`pytest` 的退出码就是判据 |
 | `S-9` | 只读检查：`git grep -n "尚未定案" src/` 只剩 `providers/review/__init__.py` 里那半句「真实审查能力何时补上仍未定」；`docs/README.md` §3 的清单里已无 `configuration.md`；`tests/integration/README.md` 不再出现旧状态词「已排队」 |
 | `S-10` | `bash scripts/check.sh` 五步全绿（`ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut`）；随后把每条 `AC-n` 的结果回填 `spec.md` §9 |

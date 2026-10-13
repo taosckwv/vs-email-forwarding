@@ -73,7 +73,7 @@ chore: 升级 ruff 到 v0.16.x
 
 任何**非平凡改动**都必须先写规格、后写代码：
 
-1. **写规格**：在 `specs/<NNNN-英文短横线-slug>/` 下创建 `spec.md`，状态写 `草稿`（编号四位递增，如 `specs/0001-outbound-review-pipeline/`）。模板在 `specs/_template/`，**直接复制，不要新造格式**。
+1. **写规格**：在 `specs/<NNNN-英文短横线-slug>/` 下创建 `spec.md`，状态写 `草稿`（编号四位递增，如 `specs/0001-outbound-review-pipeline/`）。模板在 `specs/_template/`，**直接复制**；实例只按模板填写、不新造结构，模板本身的演进须经所有者裁决（见 `AGENTS.md` §5 与 `specs/README.md` §2）。
 2. **等确认**：把 spec 交给所有者确认。写完后自己改成 `待确认`；**`待确认` → `已确认` 只能由所有者推动**。未确认前**不要写 `design.md` / `plan.md` / `tasks.md`**，更不要写实现代码。
 3. **写设计、计划与任务**：**spec 确认后**，在同一目录下写 `design.md`（该特性的设计真源）、`plan.md` 与 `tasks.md`。
 4. **实现**：按 `tasks.md` 顺序推进，每完成一项就勾选，并标注对应的需求编号（`FR-n`）与验收标准编号（`AC-n`）。
