@@ -127,7 +127,7 @@
 | `docs/README.md` | `修改` | ① §2 导航表加两行「改配置项 → `configuration.md`」「查接口契约 → `api-contract.yaml`」；② §3 的「尚未创建的文档」清单移除 `configuration.md` |
 | `docs/research/01-delivery-and-deploy.md` | `修改` | 按本轮裁决记两件事：**D2-甲** 三件脚本的落地位置与判据、**D2-乙 随 D13 推迟**；「落地位置」段的「待实现」列表相应收窄 |
 | `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那侧脚本（构建 / tar 导出 / load / 构建输入传输），随 D13 推迟」；已定的 D2-甲 从该条移除 |
-| `deploy/migrate.sh` | `新增` | 迁移入口（**唯一入口**）：容器内 `docker compose run --rm app uv run alembic upgrade head`，不加 `--no-deps`、不用 `exec`，并打印「无版本时的失败属预期」这条判别法。**LF、无 BOM**（`AGENTS.md` §7） |
+| `deploy/migrate.sh` | `新增` | 迁移入口（**唯一入口**）：容器内 `docker compose run --rm app uv run alembic -c migrations/alembic.ini upgrade head`，不加 `--no-deps`、不用 `exec`，并打印「无版本时的失败属预期」这条判别法。**LF、无 BOM**（`AGENTS.md` §7） |
 | `deploy/run.sh` | `新增` | 起服务 + 冒烟：`docker compose up -d` 后轮询 `/healthz`（默认 30 次 × 2s，可用环境变量覆盖）；从 `.env` 解析端口要容忍 CR、引号与行尾注释；宿主无 `curl` 时降级为容器内 Python 标准库探测。**`compose.yaml` 的注释已经引用了这个名字** |
 | `deploy/check_archive.py` | `新增` | 交付前单平台归档自检：**不依赖 Docker、只用 Python 标准库**；支持 OCI（`index.json`）与 legacy docker-archive（`manifest.json`）两种布局；显式指定期望基础镜像个数（新链路 = 3）；退出码固定 `0` / `1` / `2`；**必须在生成 `.sha256` 旁路文件之前执行** |
 | `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：三件脚本各自的用途、入口、判据出处，并写明 D2-乙 那侧脚本**本期不在范围**、随 D13 推迟 |
@@ -399,7 +399,7 @@
 |---|---|---|
 | `settings_override` | fixture | 把配置指向测试库与假服务；必要时覆盖 `POLL_*` / `BATCH_SIZE` / `REPLIES_PAGE_SIZE` 这类与用例规模有关的项 |
 | `engine` / `session_factory` | fixture | 每个用例一套异步引擎与会话工厂，用例结束 `dispose()`；引擎与会话的生命周期按 `docs/architecture.md` §5（进程级单例、按阶段开短会话） |
-| `schema` | fixture（session 级） | 对测试库执行 `alembic upgrade head`；每条用例前后清表。**清表用真实 DDL 级操作，不用 mock** |
+| `schema` | fixture（session 级） | 对测试库执行 `alembic -c migrations/alembic.ini upgrade head`；每条用例前后清表。**清表用真实 DDL 级操作，不用 mock** |
 | `fake_review` | 可替换实现 | 三种模式：恒 `pass`（默认，等价空实现）、恒 `reject`、抛异常；通过 `providers/review/factory.py` 的依赖覆盖 / monkeypatch 注入，用于 `AC-6` / `AC-12` |
 | `smtp_capture` | 进程内假 SMTP + 捕获端 | 记录每次投递的**次数**、`From` / `Reply-To` / 收件人与原始报文；可脚本化为「连续 `4xx`」「持续 `5xx`」「接受连接后挂起不返回」 |
 | `imap_fake` | 进程内假 IMAP | 支持注入任意邮件样本、按 `UIDVALIDITY` / `UIDNEXT` 给出增量、支持把游标回退（`AC-39`） |
@@ -568,8 +568,8 @@
 
 | 步骤 | 独立验证方式 |
 |---|---|
-| `S-1` | `uv run alembic upgrade head` → 对着**空库**跑通；`uv run alembic downgrade base` → 四张表干净删除、无残留类型或索引；`uv run alembic upgrade head` 再跑一次仍成功。另：`tests/unit/test_constants_consistency.py` 断言迁移里的 `CHECK` 取值集合与 `constants.py`、契约三方一致 |
-| `S-2` | 同上一条命令即可验证 `env.py` 的异步外壳（`alembic upgrade head` 走异步引擎而不需要额外配置）；`migrations/README.md` 的三处改写用只读检查确认：文件里不再出现「保留 Alembic 自动生成的 revision 哈希前缀」，且迁移入口写的是 `deploy/migrate.sh` |
+| `S-1` | `uv run alembic -c migrations/alembic.ini upgrade head` → 对着**空库**跑通；`uv run alembic -c migrations/alembic.ini downgrade base` → 四张表干净删除、无残留类型或索引；`uv run alembic -c migrations/alembic.ini upgrade head` 再跑一次仍成功。另：`tests/unit/test_constants_consistency.py` 断言迁移里的 `CHECK` 取值集合与 `constants.py`、契约三方一致 |
+| `S-2` | 同上一条命令即可验证 `env.py` 的异步外壳（`alembic -c migrations/alembic.ini upgrade head` 走异步引擎而不需要额外配置）；`migrations/README.md` 的三处改写用只读检查确认：文件里不再出现「保留 Alembic 自动生成的 revision 哈希前缀」，且迁移入口写的是 `deploy/migrate.sh` |
 | `S-3` | `uv run pytest tests/integration/test_repositories.py`：两个并发任务抢同一批只成功一次（`AC-29`）、唯一键挡住重复插入（`AC-11`）、条件 UPDATE 的 `rowcount = 0` 不报错、清理的 `NOT EXISTS` 不留下孤儿（`AC-22`）、250 条 keyset 翻页全集一致（`AC-41`）；纯语句层用 `tests/unit/test_repository_statements.py` 断言编译产物含 `FOR UPDATE SKIP LOCKED`（`AC-26`） |
 | `S-4` | `uv run pytest tests/unit/test_message_id.py tests/unit/test_retry_policy.py tests/unit/test_states.py tests/unit/test_inbound_sorting.py`：四份纯逻辑单测全绿即通过。**这一步不碰数据库**，因此可以完全脱离 §7.2 的前置独立跑 |
 | `S-5` | `uv run pytest tests/unit/test_review_placeholder.py`（`AC-25` 的关键词断言）+ `uv run mypy src`：三个 `base.py` 只依赖各自接口、不 import `db/`；`providers/review/` 的两个文件开头注释含「空实现」「永远通过」 |
@@ -591,12 +591,12 @@
 
 | 项 | 口径 |
 |---|---|
-| 回滚入口 | 容器内 `docker compose run --rm app uv run alembic downgrade base`；迁移入口是 `deploy/migrate.sh`，回滚沿用同一条命令形状。**不在宿主机手工跑 Alembic**（`migrations/README.md` §约定 6） |
+| 回滚入口 | 容器内 `docker compose run --rm app uv run alembic -c migrations/alembic.ini downgrade base`；迁移入口是 `deploy/migrate.sh`，回滚沿用同一条命令形状。**不在宿主机手工跑 Alembic**（`migrations/README.md` §约定 6） |
 | 本特性的回滚面 | 首版迁移 `0001_create_mail_tables.py` 的 `downgrade()` 按依赖倒序删四张表：先删 `messages`（它带自引用外键），再 `pending_messages`、`rejected_messages`、`imap_cursors`。**必须实现**，且要连着索引与 `CHECK` 一起干净移除 |
 | 是否有不可逆步骤 | **没有**。首版迁移只做建表，不删列、不改列类型、不做数据搬运，因此 `downgrade()` 不需要保留任何数据——**没有写不出 `downgrade()` 的迁移**（`migrations/README.md` §约定 2 的例外在本特性不触发） |
 | 回滚会丢什么 | 回滚就是**丢掉四张表里的全部数据**（邮件、回复、拒审记录、IMAP 游标）。一期尚未投产，这条没有实际代价；**投产之后**回滚等于丢弃 30 天内的邮件与回复，属破坏性动作，要先按 `docs/research/01-delivery-and-deploy.md` 的「维护与回滚」走备份（停机打包数据目录，热备用 `pg_dump`） |
 | 回滚后的行为 | 表不存在时应用会连不上库并在查询时报错——**这不是静默降级**。回滚镜像 tag（`VS_EMAIL_FORWARDING_IMAGE` 改成旧 tag 再 `up -d`）与回滚迁移**必须成对做**：如果新版本才引入这四张表，只回滚镜像、不回滚迁移会把新表留给旧版本（旧版本不认识它们，但也不会报错），反之只回滚迁移会让新版本在运行中直接报错。`docs/research/01-delivery-and-deploy.md` 已定「若新版本含破坏性迁移，需单独执行 `alembic downgrade`，不能只回滚镜像」 |
-| 验证方式 | `uv run alembic upgrade head` → `uv run alembic downgrade base` → `uv run alembic upgrade head` 三步连续跑通，且第二次 upgrade 后库里仍是四张表、六项索引与全部 `CHECK`（§9.2 的 `S-1`） |
+| 验证方式 | `uv run alembic -c migrations/alembic.ini upgrade head` → `uv run alembic -c migrations/alembic.ini downgrade base` → `uv run alembic -c migrations/alembic.ini upgrade head` 三步连续跑通，且第二次 upgrade 后库里仍是四张表、六项索引与全部 `CHECK`（§9.2 的 `S-1`） |
 
 ### 10.2 数据与旧版本兼容
 
@@ -605,5 +605,5 @@
 - **没有历史数据需要迁移**：库里此前不存在任何业务表——`src/vs_email_forwarding/db/` 在此之前只有包占位文件，`migrations/` 在此之前只有一份职责 README（§3.3）。因此本次是**纯新增表结构**：没有字段改名、没有默认值回填、没有数据搬运。
 - **没有旧版本读写过这些表**：本服务尚未发布过任何读写邮件数据的版本，「旧版本读新数据」与「新版本读旧数据」两个方向都无对象。
 - **兼容性的唯一实际风险是「代码与迁移不同步」**：镜像里带新代码、库里还是旧迁移（或反过来）会让应用在运行时报错。缓解是部署顺序固定为「先 `deploy/migrate.sh` 迁移、再 `docker compose up -d`」，且迁移是幂等的（`upgrade head` 重复执行无副作用）。
-- **首次迁移在无版本时失败是预期行为**：`migrations/` 里还没有版本时执行 `alembic upgrade head` **必然失败**，`deploy/migrate.sh` 必须把这条判别法打印出来（`migrations/README.md` §约定 6 与 `docs/research/01-delivery-and-deploy.md` 的方法性结论），避免运维把它当成故障。
+- **首次迁移在无版本时失败是预期行为**：`migrations/` 里还没有版本时执行 `alembic -c migrations/alembic.ini upgrade head` **必然失败**，`deploy/migrate.sh` 必须把这条判别法打印出来（`migrations/README.md` §约定 6 与 `docs/research/01-delivery-and-deploy.md` 的方法性结论），避免运维把它当成故障。
 - **前向兼容的边界留给后续特性**：新端点一旦被调用方按固定契约实现，后续任何字段增删或六态语义变更都是破坏性变更，而一期没有版本协商机制（§4.3）。真要做，属新的决策，按 `AGENTS.md` §6 先改写 `design.md` §4.1 与 `docs/api-contract.yaml`。
