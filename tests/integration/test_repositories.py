@@ -528,3 +528,159 @@ class TestConditionalUpdates:
     async def test_error_class_values_are_controlled(self, db_engine: AsyncEngine) -> None:
         # 期望值来自规格：错误分类只有 permanent / transient / internal（constants）。
         assert ERROR_CLASSES == ("permanent", "transient", "internal")
+
+
+# ---------------------------------------------------------------------------
+# T-8：rejected_messages 写入与存在性查询（design §2.1 / §3 流①④ 落库口径）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.constants import REJECT_SOURCES  # noqa: E402
+from vs_email_forwarding.db.repositories.rejected import (  # noqa: E402
+    insert_rejected_message,
+    rejected_message_exists,
+)
+
+
+class TestRejectedInsertAndExists:
+    """写入幂等 + 入站才保留主题与正文 + 按 ID 查存在性。"""
+
+    async def test_outbound_reject_keeps_no_content(self, db_engine: AsyncEngine) -> None:
+        rejected_id = uuid.uuid4()
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            inserted = await insert_rejected_message(
+                session,
+                rejected_id=rejected_id,
+                direction="outbound",
+                source="review_rejected",
+                created_at=_NOW - timedelta(hours=1),
+                reviewed_at=_NOW,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert inserted is True
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    sa.select(
+                        RejectedMessage.direction,
+                        RejectedMessage.source,
+                        RejectedMessage.subject,
+                        RejectedMessage.body,
+                        RejectedMessage.last_error_class,
+                    ).where(RejectedMessage.id == rejected_id)
+                )
+            ).one()
+        # 出站拒审不保留原文：主题与正文必须为 NULL（design §2.1）。
+        assert row[0] == "outbound"
+        assert row[1] == "review_rejected"
+        assert row[2] is None
+        assert row[3] is None
+        assert row[4] is None
+
+    async def test_inbound_reject_keeps_subject_and_body(self, db_engine: AsyncEngine) -> None:
+        rejected_id = uuid.uuid4()
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            inserted = await insert_rejected_message(
+                session,
+                rejected_id=rejected_id,
+                direction="inbound",
+                source="review_error",
+                subject="入站拒审主题",
+                body="入站拒审正文（复核用）",
+                last_error_class="internal",
+                created_at=_NOW - timedelta(hours=1),
+                reviewed_at=_NOW,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert inserted is True
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    sa.select(
+                        RejectedMessage.subject,
+                        RejectedMessage.body,
+                        RejectedMessage.last_error_class,
+                    ).where(RejectedMessage.id == rejected_id)
+                )
+            ).one()
+        # 入站拒审保留主题与正文供复核（design §2.1）。
+        assert row[0] == "入站拒审主题"
+        assert row[1] == "入站拒审正文（复核用）"
+        assert row[2] == "internal"
+
+    async def test_duplicate_insert_is_idempotent(self, db_engine: AsyncEngine) -> None:
+        rejected_id = uuid.uuid4()
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            first = await insert_rejected_message(
+                session,
+                rejected_id=rejected_id,
+                direction="outbound",
+                source=REJECT_SOURCES[0],
+                created_at=_NOW - timedelta(hours=1),
+                reviewed_at=_NOW,
+            )
+            await session.commit()
+            # 重跑同一条拒审：撞主键按幂等忽略，不报错、不产生第二行。
+            second = await insert_rejected_message(
+                session,
+                rejected_id=rejected_id,
+                direction="outbound",
+                source=REJECT_SOURCES[0],
+                created_at=_NOW - timedelta(hours=1),
+                reviewed_at=_NOW,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert first is True
+        assert second is False
+        async with db_engine.connect() as conn:
+            count = len((await conn.execute(sa.select(RejectedMessage.id))).all())
+        assert count == 1
+
+    async def test_exists_queries_by_id(self, db_engine: AsyncEngine) -> None:
+        rejected_id = uuid.uuid4()
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            assert await rejected_message_exists(session, rejected_id) is False
+            await insert_rejected_message(
+                session,
+                rejected_id=rejected_id,
+                direction="outbound",
+                source=REJECT_SOURCES[0],
+                created_at=_NOW - timedelta(hours=1),
+                reviewed_at=_NOW,
+            )
+            await session.commit()
+            assert await rejected_message_exists(session, rejected_id) is True
+            assert await rejected_message_exists(session, uuid.uuid4()) is False
+        finally:
+            await session.close()
+
+    async def test_source_must_be_controlled_value(self, db_engine: AsyncEngine) -> None:
+        # source 只接受三个受控取值（constants 为唯一出处），越界在写入前被拒。
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            import pytest as _pytest
+
+            with _pytest.raises(ValueError):
+                await insert_rejected_message(
+                    session,
+                    rejected_id=uuid.uuid4(),
+                    direction="outbound",
+                    source="not_a_source",
+                    created_at=_NOW - timedelta(hours=1),
+                    reviewed_at=_NOW,
+                )
+        finally:
+            await session.rollback()
+            await session.close()
