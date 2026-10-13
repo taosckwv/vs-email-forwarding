@@ -60,6 +60,9 @@ def configure_logging(level: str, fmt: str) -> None:
     else:
         final_processors = [
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            # 两种格式口径一致：异常都由 format_exc_info 渲染进 `exception` 字段，
+            # 渲染器只负责排版，不再各自渲染一遍（design.md §4.6）。
+            structlog.processors.format_exc_info,
             structlog.dev.ConsoleRenderer(colors=True),
         ]
 
@@ -74,7 +77,10 @@ def configure_logging(level: str, fmt: str) -> None:
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared_processors,
         processors=final_processors,
-        keep_exc_info=True,
+        # 异常已由各分支的 format_exc_info 渲染进结构化字段；保留在 LogRecord 上会让
+        # 标准库 Formatter 再追加一份纯文本 traceback——json 模式因此不再是 JSON-lines
+        # （design.md §4.6）。
+        keep_exc_info=False,
     )
     handler = logging.StreamHandler(stream=sys.stderr)
     handler.setFormatter(formatter)

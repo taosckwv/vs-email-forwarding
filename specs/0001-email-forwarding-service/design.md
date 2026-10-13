@@ -414,6 +414,26 @@
 ### 4.5 SMTP / IMAP 参数来源
 SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取信箱地址与信箱文件夹等参数全部来自 `.env`，只经 `config.py`（pydantic-settings）这唯一入口读取，仓库只提交 `.env.example` 占位（见 `AGENTS.md` §7 与 `NFR-4`）；各字段的落点与命名见 §7 落地位置。
 
+### 4.6 日志输出格式
+`LOG_FORMAT` 的两条渲染分支都以同一种方式产出异常：**异常由 processor 渲染进结构化字段 `exception` 一次，渲染器只负责排版**。落点是 `logging.py`：`ProcessorFormatter(keep_exc_info=False)`，且 console 分支的 `final_processors` 在 `ConsoleRenderer` 之前也过一遍 `format_exc_info`——两模式口径一致，不允许任何一条分支把同一个 traceback 输出两份。
+
+两种格式各自的对外承诺：
+
+- **`json` 保证 JSON-lines**：每条日志记录恰好一行合法 JSON；异常信息只出现在该行的 `exception` 字段里（含完整 traceback），字段内部换行按 JSON 字符串转义。**流里不得出现裸文本行**——按行 `json.loads` 采集的采集器一遇到非 JSON 行就报错，所以「每条记录一行合法 JSON」是契约，不是实现细节。
+- **`console` 是人类可读文本**：事件一行，异常一份（紧随其后的 plain traceback），不带重复框，也不带第二份纯文本。
+
+**实测证据**（同一探针：`INFO` 级别、记一次 `ValueError` 异常，采集 `sys.stderr`）：
+
+| 格式 | 修复前（`keep_exc_info=True`） | 修复后 |
+|---|---|---|
+| `json` | 5 个非空行 = 1 行合法 JSON + 4 行裸文本；逐行 `json.loads` 在 4 行上报错，输出流不是 JSON-lines | 1 个非空行 = 恰好 1 行合法 JSON，`exception` 字段含完整 traceback，逐行 `json.loads` 全部通过 |
+| `console` | 22 个非空行，同一 traceback 渲染两份（`raise ValueError(...)` 出现 2 次：rich 框一份 + 标准库追加一份） | 5 个非空行 = 1 行事件 + 1 份 traceback（`raise ValueError(...)` 出现 1 次） |
+
+**已否决方向**：
+
+- **保留 `keep_exc_info=True`** —— 它把 `exc_info` 留在 `logging.LogRecord` 上，标准库 `logging.Formatter` 于是再追加一份纯文本 traceback：`json` 流被掺进 4 行非 JSON 文本，直接破坏上文的 JSON-lines 契约（按行采集立即报错）；`console` 同一 traceback 出现两份（4 行涨到 22 行）。它并不产生「保住 traceback」的收益——异常已在 `format_exc_info` 那步渲染进 `exception` 字段，这个 `True` 只制造第二份；它本是对 structlog `keep_exc_info` 默认值（默认即 `False`）的显式覆盖，由来是照抄官方「用 structlog 渲染标准库日志」配方时留下的安全默认，本意「别把 traceback 丢了」已由「异常落在结构化字段里」覆盖。
+- **两条分支各自渲染异常**（`json` 走 `format_exc_info`、`console` 只靠 `ConsoleRenderer`）—— 同样能做到「不重复」，但两模式口径不同：一边把异常渲染进字段，另一边由渲染器自行渲染，§4.6 的「任何分支都只渲染一次」就得靠两套写法各自维持。统一到 processor 链上，口径写在配置里而不是写在纪律里。代价如实登记：`console` 的 traceback 由 rich 框（带颜色、带边框、含 locals）退化为 plain traceback，换来的是与 `json` 同源、异常渲染口径只在 processor 链这一处定义。
+
 ## 5. 依赖选型
 | 库 | 许可 | 用途 | 换来的好处 | 代价 |
 |---|---|---|---|---|
