@@ -104,7 +104,7 @@
 - **`uvloop` 在 Windows 上确实不装**：`uv.lock` 中该依赖带 `sys_platform != 'win32'` 标记；开发机（Linux）实测已装 `uvloop 0.22.1`，生产同为 Linux，同样可获得。
 - **解释器与依赖一律交给 uv 管理**：虚拟环境中的解释器实测为 **Python 3.13.16**，与 `.python-version` 的 `3.13` 一致；「一律用 `uv run`」是为了让解释器与依赖只由一处决定，而不是因为存在版本不一致。
 - **`.github/` 下没有 `workflows/`**：实测只有 `ISSUE_TEMPLATE/`（`bug_report.md`、`feature_request.md`）与 `PULL_REQUEST_TEMPLATE.md`。
-- **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0、`sqlalchemy` 2.1.4、`greenlet` 3.5.6（`sqlalchemy[asyncio]` 的 extra 依赖，见下一条）、`alembic` 1.20.0、`asyncpg` 0.32.0、`IMAPClient` 4.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
+- **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0、`sqlalchemy` 2.1.4、`greenlet` 3.5.6（`sqlalchemy[asyncio]` 的 extra 依赖，见本节「`sqlalchemy[asyncio]` 的实测证据」条）、`alembic` 1.20.0、`asyncpg` 0.32.0、`IMAPClient` 4.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
 - **门禁全绿的适用范围**：业务逻辑尚未实现，`src/` 下只有包占位与一个能返回 `/healthz` 的最小入口。因此上述绿只证明**工程配置与工具链可用**，不证明任何业务正确性。
 - **依赖许可与类型标注的实测结果**见 `specs/0001-email-forwarding-service/design.md` 的「实测证据」一节（本册不复述）。
 - **两个无类型存根库的实测结论**：`asyncpg` 与 `imapclient` 的包目录下都不存在 `py.typed`，在 `src/` 下 import 它们后跑 `mypy src` 各报一条 `Skipping analyzing "…": module is installed, but missing library stubs or py.typed marker [import-untyped]`；`sqlalchemy` 与 `alembic` 都有 `py.typed`，因此不放行——这正是放行范围只覆盖前两个的依据。**这两条放行还没有落进 `pyproject.toml`**（该文件 mypy 段记有这条处置）：没有对应 import 的 `[[tool.mypy.overrides]]` 会被 mypy 报成 `unused section(s)`，所以放行与第一个真正 import 该库的模块同一次改动落地。
