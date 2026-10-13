@@ -17,7 +17,9 @@ uvicorn logger 的接管。
 * 时间戳是 UTC 的 ISO8601：本层对外契约（「两条链路共用的 processor：时间戳统一为 UTC
   ISO8601」），`Z` 结尾是 UTC 的书写方式；
 * uvicorn 三个 logger 名、以及它们「自带 handler + 不 propagate」的默认形态：uvicorn 日志配置
-  的事实，本层把它们交给根 logger 以免重复输出（`logging.py` 模块 docstring）。
+  的事实，本层把它们交给根 logger 以免重复输出（`logging.py` 模块 docstring）；
+* 异常只渲染一份、`json` 保证 JSON-lines（每条记录恰好一行合法 JSON，traceback 落在
+  `exception` 字段里）、`console` 事件一行 + traceback 一份：`design.md` §4.6。
 """
 
 from __future__ import annotations
@@ -46,6 +48,20 @@ _ANSI_COLOR: Final = re.compile(r"\x1b\[[0-9;]*m")
 
 #: 取时点与断言时点的容许偏差（秒）：只用来排除「时间戳写死或走了别的时区」，不测时钟精度。
 _CLOCK_TOLERANCE_SECONDS: Final = 60
+
+#: traceback 的头部文本：两种格式下都拿它当「渲染了一份异常」的可观察判据。
+_TRACEBACK_HEADER: Final = "Traceback (most recent call last):"
+
+#: 记一次异常的两条真实路径：structlog 的 `.exception()` 与标准库的 `error(exc_info=True)`。
+#: 前者走 structlog 自己的调用链，后者走 `foreign_pre_chain`，覆盖两处入口。
+_EXCEPTION_PATHS: Final[tuple[tuple[str, str, str], ...]] = (
+    ("structlog", "probe_failed", "boom-structlog"),
+    ("stdlib", "third_party_failed", "boom-stdlib"),
+)
+
+#: rich 面板的框线字符：`console` 的模式是 plain traceback（`design.md` §4.6），出现框线即
+#: 说明 `ConsoleRenderer` 自己渲染了异常（链上那步 `format_exc_info` 不在发挥作用）。
+_RICH_PANEL_CHARS: Final[tuple[str, ...]] = ("╭", "╰")
 
 
 @pytest.fixture(autouse=True)
@@ -195,3 +211,54 @@ def test_existing_root_handlers_are_replaced(capsys: pytest.CaptureFixture[str])
 
     assert existing_output.getvalue() == ""
     assert [record["event"] for record in _json_records(capsys.readouterr().err)] == ["probe_event"]
+
+
+def _log_exception(path_name: str, event: str, marker: str) -> None:
+    """按一条真实路径记一次异常：`structlog` 用 `.exception()`，`stdlib` 用 `error(exc_info=True)`。"""
+    try:
+        raise ValueError(marker)
+    except ValueError:
+        if path_name == "structlog":
+            structlog.get_logger("probe").exception(event)
+        else:
+            logging.getLogger("third.party").error(event, exc_info=True)
+
+
+@pytest.mark.parametrize("fmt", ["json", "console"])
+@pytest.mark.parametrize(
+    ("path_name", "event", "marker"),
+    _EXCEPTION_PATHS,
+    ids=[path_name for path_name, _, _ in _EXCEPTION_PATHS],
+)
+def test_exception_is_rendered_exactly_once(
+    fmt: str, path_name: str, event: str, marker: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """异常只渲染一份（`design.md` §4.6）：`json` 保持 JSON-lines，`console` 只有一份 traceback。
+
+    期望值来自 `design.md` §4.6 的两条对外承诺——`json` 每条记录恰好一行合法 JSON、异常只在该行的
+    `exception` 字段里；`console` 事件一行 + 异常一份（plain traceback，不带框、不带第二份纯文本）。
+    两个断言都落在**实际采集到的输出**上：`keep_exc_info=True` 时 `json` 会多出 4 行裸文本（逐行
+    `json.loads` 就在这里失败），`console` 的 traceback 会渲染两份（计数变 2）；若把 console 链上的
+    `format_exc_info` 删掉，`ConsoleRenderer` 会自己渲染成 rich 框（计数变 0、出现框线）。
+    """
+    configure_logging("INFO", fmt)
+    _log_exception(path_name, event, marker)
+
+    output = capsys.readouterr().err
+
+    if fmt == "json":
+        records = _json_records(output)  # 流里出现任何裸文本行都会在这里失败
+        assert len(records) == 1, output
+        assert records[0]["event"] == event
+        assert records[0]["level"] == "error"
+        assert f"ValueError: {marker}" in str(records[0]["exception"])
+        assert str(records[0]["exception"]).startswith(_TRACEBACK_HEADER)
+    else:
+        plain = _ANSI_COLOR.sub("", output)
+        assert plain.count(_TRACEBACK_HEADER) == 1, plain
+        assert f"ValueError: {marker}" in plain
+        assert event in plain
+        # §4.6 第 2 条硬要求（console 链必须在 `ConsoleRenderer` 之前包含 `format_exc_info`）：
+        # 漏掉那一步，异常就改由 `ConsoleRenderer` 自己渲染成 rich 框（带框线、带 locals），
+        # 「渲染器只负责排版、两模式同源」当即不成立。
+        assert not any(box in plain for box in _RICH_PANEL_CHARS), plain
