@@ -169,10 +169,12 @@ class TestClaimStatementCompilesWithSkipLocked:
         for direction in DIRECTIONS:
             now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
             statement = pending.claim_due_statement(direction=direction, now=now, batch_size=10)
+            whereclause = statement.whereclause
+            assert whereclause is not None, "认领语句必须带 WHERE（AC-26）"
 
             equalities = [
                 node
-                for node in _iter_clause_elements(statement.whereclause)
+                for node in _iter_clause_elements(whereclause)
                 if isinstance(node, BinaryExpression)
                 and node.operator is operators.eq
                 and getattr(node.left, "name", None) == "direction"

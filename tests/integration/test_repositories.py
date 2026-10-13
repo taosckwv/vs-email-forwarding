@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
@@ -55,13 +55,13 @@ async def db_engine() -> AsyncIterator[AsyncEngine]:
     # 只清测试库的表（集成测试只准清 vs_email_forwarding_test）。
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        for table in (
-            RejectedMessage.__table__,
-            Message.__table__,
-            PendingMessage.__table__,
-            ImapCursor.__table__,
+        for model in (
+            RejectedMessage,
+            Message,
+            PendingMessage,
+            ImapCursor,
         ):
-            await conn.execute(table.delete())
+            await conn.execute(sa.delete(model))
     yield engine
     await engine.dispose()
 
@@ -881,7 +881,7 @@ class TestCursorAdvance:
         assert advanced is True
         assert await read_cursor(session, "reply@example.com") == (111, 101)
         async with db_engine.connect() as conn:
-            pending_for_uid = (
+            pending_for_uid: Sequence[uuid.UUID] = (
                 (
                     await conn.execute(
                         sa.select(PendingMessage.id).where(
