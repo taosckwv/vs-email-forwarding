@@ -415,7 +415,12 @@
 SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取信箱地址与信箱文件夹等参数全部来自 `.env`，只经 `config.py`（pydantic-settings）这唯一入口读取，仓库只提交 `.env.example` 占位（见 `AGENTS.md` §7 与 `NFR-4`）；各字段的落点与命名见 §7 落地位置。
 
 ### 4.6 日志输出格式
-`LOG_FORMAT` 的两条渲染分支都以同一种方式产出异常：**异常由 processor 渲染进结构化字段 `exception` 一次，渲染器只负责排版**。落点是 `logging.py`：`ProcessorFormatter(keep_exc_info=False)`，且 console 分支的 `final_processors` 在 `ConsoleRenderer` 之前也过一遍 `format_exc_info`——两模式口径一致，不允许任何一条分支把同一个 traceback 输出两份。
+`LOG_FORMAT` 的两条渲染分支都必须遵守同一个口径：**异常由 processor 渲染进结构化字段 `exception` 一次，渲染器只负责排版**。落点是 `logging.py`，下面两条配置必须同时成立，删改其中任一条即破坏本节承诺：
+
+1. `ProcessorFormatter(keep_exc_info=False)`。
+2. **console 分支的 `final_processors` 必须在 `ConsoleRenderer` 之前包含 `format_exc_info`**——漏掉它，异常就改由 `ConsoleRenderer` 自行渲染，两种格式不再同源，「渲染器只负责排版」当即不成立。
+
+两种格式都不允许把同一个 traceback 输出两份。
 
 两种格式各自的对外承诺：
 
