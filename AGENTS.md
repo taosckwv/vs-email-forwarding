@@ -20,6 +20,7 @@
 | 开发机、Docker 与构建环境 | `docs/research/05-dev-and-build-environment.md` |
 | 命名、许可与仓库治理 | `docs/research/06-naming-licensing-and-governance.md` |
 | 代码分层与依赖方向（哪一层能调哪一层、两条触发路径怎么走） | `docs/architecture.md` |
+| 代码风格（函数结构、异常、异步、接口层写法的自查与评审清单） | `docs/code-style.md` |
 | 写测试要守什么规则（该写什么、期望值从哪来、怎么评审、pytest 标记约定） | `docs/testing.md` |
 | 某特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `specs/<特性>/design.md` |
 
@@ -82,7 +83,7 @@ bash scripts/dev-up.sh
 | `docs/research/` | **跨特性底座的结论真源**：一册一主题，只写当前结论、实测证据、已否决方向、落地位置、未定项指针 | 决策过程、时间线、被取代的旧结论、派生快照 |
 | `docs/open-questions.md` | **未定项的唯一清单** | 已决定的结论（决定后移入对应主题册或该特性的 `design.md`） |
 | `docs/testing.md` | **测试规范与测试说明的唯一出处**：单测 / 集成测试规则、AI 写测试的作业流程、评审检查表、pytest 标记约定 | 需求与验收标准（属 `specs/`）、逐条 `AC-n` 的测试落点（属该特性的 `plan.md`） |
-| `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署说明 | 需求与验收标准（那属于 `specs/`） |
+| `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`code-style.md`（**代码风格与自查/评审清单的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署说明 | 需求与验收标准（那属于 `specs/`） |
 | `specs/` | **每个特性一个目录**的需求、设计、计划、任务（`spec.md` / `design.md` / `plan.md` / `tasks.md`，见 §5） | 实现代码 |
 | `skills/` | 可复用的固定流程（见 `skills/README.md`） | 一次性任务说明 |
 | `deploy/` | 部署脚本与交付链的落点（**当前为空，待实现**，见 `docs/open-questions.md` D2） | 应用代码 |
@@ -145,6 +146,7 @@ Git **不能跟踪空目录**——只建文件夹的话，`git add` 之后它�
 
 ## 7. 编码约定
 
+- **代码风格的唯一出处是 `docs/code-style.md`**：写代码的 AI 在跑门禁前逐条自查，评审（含 code-review）以它为 Standards 依据逐条判定。它只收录机器查不出的风格约束；格式与静态检查见下一条，测试规则见 `docs/testing.md`，本节不复述它们。
 - **类型标注必须完整**：`mypy src` 是门禁的一部分，不允许用 `# type: ignore` 兜底。
 - **格式与静态检查**：ruff 负责格式化与 lint，不要手工和它对抗；提交前必须跑过 `scripts/check.*`。
 - **测试必须绑定业务行为，期望值独立于被测实现**：每条测试要能说出它在验证哪条业务规则、`AC-n` 或不变量；**禁止用被测代码（含其内部函数）生成期望值**——`assert f(x) == f(x)` 这类同义反复断言恒绿，比没有测试更危险。
