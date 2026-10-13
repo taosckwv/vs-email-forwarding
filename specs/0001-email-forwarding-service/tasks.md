@@ -37,7 +37,7 @@
 
 ## 阶段 3：纯逻辑与外部能力接口
 
-- [ ] `T-13` （前置 `T-1`）`core/message_id.py` + `tests/unit/test_message_id.py` — `FR-2` / `AC-4`
+- [x] `T-13` （前置 `T-1`）`core/message_id.py` + `tests/unit/test_message_id.py` — `FR-2` / `AC-4`
 - [ ] `T-14` （前置 `T-1`）`core/retry.py`（`next_attempt_at(now, attempt)` + 返回码分类）+ `tests/unit/test_retry_policy.py`（含 `AC-21` 的最坏路径算术）— `FR-5` / `AC-9` / `AC-21`
 - [ ] `T-15` （前置 `T-1`）`core/states.py` 的六态判定 + `tests/unit/test_states.py` — `FR-11` / `AC-36`
 - [ ] `T-16` （前置 `T-1`）`core/inbound.py` 的 DSN / MDN 结构判定与关联匹配 + `tests/unit/test_inbound_sorting.py` — `FR-9` / `AC-13`
