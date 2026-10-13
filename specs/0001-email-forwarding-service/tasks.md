@@ -27,7 +27,7 @@
 
 ## 阶段 2：仓储层（所有 SQL 只在这层）
 
-- [ ] `T-6` （前置 `T-5`）`pending_messages` 的三阶段认领与条件写入，并附 `tests/unit/test_repository_statements.py`（AST 静态检查 + 编译产物含 `FOR UPDATE SKIP LOCKED`）— `NFR-1` / `AC-26`
+- [x] `T-6` （前置 `T-5`）`pending_messages` 的三阶段认领与条件写入，并附 `tests/unit/test_repository_statements.py`（AST 静态检查 + 编译产物含 `FOR UPDATE SKIP LOCKED`）— `NFR-1` / `AC-26`
 - [ ] `T-7` （前置 `T-5`）`messages` 的发信认领与条件 UPDATE（含收割支谓词）— `FR-4` / `AC-29`
 - [ ] `T-8` （前置 `T-5`）`rejected_messages` 的写入与存在性查询 — `FR-8` / `AC-12`
 - [ ] `T-9` （前置 `T-5`）`imap_cursors` 的读取、初始化（`UIDNEXT - 1`）、`UIDVALIDITY` 变化时重置、与分拣落库在**同一事务**内推进 — `FR-7` / `AC-39`

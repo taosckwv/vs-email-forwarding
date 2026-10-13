@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""仓储层语句的静态检查（`AC-26`）：认领写法唯一、无裸 SQL。
+
+验证的业务规则 / 不变量（真源：`specs/0001-email-forwarding-service/plan.md` §2.9、
+`AGENTS.md` §8.1）：
+
+* **抢占硬约束**：认领语句必须同时编译出 ``FOR UPDATE`` 与 ``SKIP LOCKED``，
+  且认领谓词同时含 ``attempt_count <= 4`` 与 ``next_attempt_at <= <绑定的 now 参数>``；
+* **禁止两步写法**：仓储模块里不得出现 ``text()`` 裸串或裸 SQL 字符串
+  （那是绕过构造器口径的注入面），认领必须以 ``with_for_update(skip_locked=True)`` 锁行；
+* **条件写入 / 幂等插入**：过审落库语句带 ``ON CONFLICT DO NOTHING``（撞键按幂等忽略）。
+
+期望值（子串、谓词、上界 4）全部来自规格文本，不来自被测代码。
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Final
+
+from sqlalchemy.dialects import postgresql
+
+from vs_email_forwarding.constants import MAX_CLAIMABLE_ATTEMPT_COUNT
+from vs_email_forwarding.db.repositories import pending
+
+_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+_REPOSITORIES_DIR: Final = _REPO_ROOT / "src" / "vs_email_forwarding" / "db" / "repositories"
+
+#: 规格规定的认领谓词上界（attempt_count <= 4）。与 constants 断言一致，防漂移。
+_EXPECTED_CLAIM_ATTEMPT_BOUND: Final = 4
+
+
+def _repository_sources() -> dict[str, str]:
+    """读出仓储层全部源码，供 AST 扫描。"""
+    return {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(_REPOSITORIES_DIR.rglob("*.py"))
+    }
+
+
+def _repository_trees() -> dict[str, ast.Module]:
+    return {
+        name: ast.parse(source, filename=name) for name, source in _repository_sources().items()
+    }
+
+
+class TestClaimStatementCompilesWithSkipLocked:
+    """认领语句的编译产物必须同时含 FOR UPDATE 与 SKIP LOCKED（AC-26）。"""
+
+    def test_claim_select_compiles_with_for_update_skip_locked(self) -> None:
+        now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+        statement = pending.claim_due_statement(direction="outbound", now=now, batch_size=10)
+
+        sql = str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        # 期望值来自规格文本：认领 = FOR UPDATE + SKIP LOCKED（AGENTS.md §8.1 / plan §2.9）。
+        assert "FOR UPDATE" in sql
+        assert "SKIP LOCKED" in sql
+
+    def test_claim_predicate_contains_attempt_bound_and_bound_now(self) -> None:
+        now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+        statement = pending.claim_due_statement(direction="outbound", now=now, batch_size=10)
+
+        sql = str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        # 认领谓词（plan §5.2）：attempt_count <= 4 且 next_attempt_at <= 绑定的 now。
+        assert f"attempt_count <= {_EXPECTED_CLAIM_ATTEMPT_BOUND}" in sql
+        assert "next_attempt_at <=" in sql
+        assert "2025-01-01 12:00:00" in sql  # now 是绑定参数，不是 func.now()
+
+    def test_claim_attempt_bound_matches_constants(self) -> None:
+        # 上界只有一个出处（constants），仓储不得另写数字。
+        assert _EXPECTED_CLAIM_ATTEMPT_BOUND == MAX_CLAIMABLE_ATTEMPT_COUNT
+
+
+class TestApprovalStatementIdempotent:
+    """过审落库语句：INSERT INTO messages + ON CONFLICT (id) DO NOTHING（撞键按幂等忽略）。"""
+
+    def test_approval_insert_compiles_with_on_conflict_do_nothing(self) -> None:
+        statement = pending.approval_insert_statement()
+
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+
+        assert "INSERT INTO messages" in sql
+        # plan §2.9 的已验证写法：冲突目标显式为主键 id。
+        assert "ON CONFLICT (id) DO NOTHING" in sql
+
+    def test_approval_insert_resets_attempt_columns(self) -> None:
+        # 跨表搬运建行即重置：attempt_count、next_attempt_at 必须在写入列里（design §2.4）。
+        statement = pending.approval_insert_statement()
+
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+
+        assert "attempt_count" in sql
+        assert "next_attempt_at" in sql
+
+
+class TestNoBareSqlOrTwoStepClaim:
+    """AST 扫描：仓储层无 text() 裸串；认领写法唯一（AC-26）。"""
+
+    def test_no_text_calls_in_repositories(self) -> None:
+        for name, tree in _repository_trees().items():
+            for node in ast.walk(tree):
+                assert not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, (ast.Name, ast.Attribute))
+                    and getattr(node.func, "id", getattr(node.func, "attr", None)) == "text"
+                ), f"{name}: 仓储层禁止 text() 裸串"
+
+    def test_no_raw_sql_string_literals_in_repositories(self) -> None:
+        forbidden = ("SELECT ", "INSERT INTO", "UPDATE ", "DELETE FROM")
+        for name, source in _repository_sources().items():
+            for node in ast.walk(ast.parse(source, filename=name)):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    for fragment in forbidden:
+                        assert not node.value.upper().startswith(fragment), (
+                            f"{name}: 出现疑似裸 SQL 字符串 {node.value!r}"
+                        )
+
+    def test_claim_builder_uses_with_for_update_skip_locked(self) -> None:
+        # 「两步写法」的防线：认领必须以 with_for_update(skip_locked=True) 锁行取数，
+        # 而不是先取数判断再更新。
+        tree = ast.parse(_repository_sources()["pending.py"], filename="pending.py")
+        found = False
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "with_for_update"
+            ):
+                keywords = {kw.arg: kw.value for kw in node.keywords}
+                skip_locked = keywords.get("skip_locked")
+                assert isinstance(skip_locked, ast.Constant) and skip_locked.value is True, (
+                    "认领必须 skip_locked=True"
+                )
+                found = True
+        assert found, "认领语句构造缺少 with_for_update 调用"
+
+    def test_claim_batch_size_is_bound_parameter_not_magic_number(self) -> None:
+        # 每批条数必须是入参（AGENTS.md §8.2：批次大小不得写死在代码里）。
+        signature = inspect.signature(pending.claim_due_statement)
+        assert "batch_size" in signature.parameters
+
+    def test_backoff_table_is_referenced_not_duplicated(self) -> None:
+        # 退避算术的真源是 constants 的退避表（15s / 30s / 60s，AC-9 的输入）；
+        # 这里只断言仓储引用它，不自行携带第二份数字。
+        assert "RETRY_BACKOFF_SECONDS" in _repository_sources()["pending.py"]
