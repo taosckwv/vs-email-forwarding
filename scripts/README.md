@@ -13,7 +13,7 @@
 
 | 脚本 | 用途 | 参数 | 前置条件 |
 |---|---|---|---|
-| `check.sh` | **一键门禁**：依次跑 `ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut run` | 无（刻意不接受参数，保证所有人跑的是同一套门禁） | 已安装 **uv**（`uv --version` 可用）。**不需要 Docker**（单测与变异测试都不依赖容器）。首次跑第 5 步较慢（全量变异），之后走 `mutants/` 缓存约几秒 |
+| `check.sh` | **一键门禁**：依次跑 `ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut run` **+ 逐条复验存活变异体** | 无（刻意不接受参数，保证所有人跑的是同一套门禁） | 已安装 **uv**（`uv --version` 可用）。**不需要 Docker**（单测、变异测试与存活复验都不依赖容器）。首次跑第 5 步较慢（全量变异），之后走 `mutants/` 缓存；第 5 步实测总耗时约 25~30 秒 |
 | `dev-up.sh` | 起开发依赖：PostgreSQL 17 + Mailpit（`compose.dev.yaml`），并打印连接信息 | 无 | 已安装并启动 **Docker**（Linux 上的 Docker 不需要硬件虚拟化） |
 
 ---
@@ -33,7 +33,7 @@
 2. `uv run ruff check .` —— 静态检查（lint）
 3. `uv run mypy src` —— 类型检查
 4. `uv run pytest --cov --cov-report=term-missing` —— 单元与集成测试 + 覆盖率输出
-5. `uv run mutmut run` —— 变异测试（证明断言真的能失败）
+5. `uv run mutmut run` —— 变异测试（证明断言真的能失败），随后**逐条用全套 `tests/unit` 复验存活变异体**
 
 任何一步失败立即以**非零退出码**结束，后续步骤不再执行；输出中有中文步骤提示
 （`[1/5] 代码格式检查` 这类），失败时明确指出是哪一步。
@@ -43,25 +43,50 @@
 **覆盖率只作诊断**：第 4 步输出 `term-missing` 表，用来暴露「没有任何测试执行到」的行；**不设
 `--cov-fail-under`**，覆盖率不作为验收门槛（理由见 `docs/research/03-dependencies-and-toolchain.md`）。
 
-**变异测试只卡三条结构性红线，不设百分比阈值**：
+**变异测试卡结构性红线，不设百分比阈值**：
 
 1. `mutmut` 本身运行失败；
 2. 变异体总数为 0（配置失效，这一步等于没跑）；
 3. 被杀数为 0 且存在存活变异（断言与实现完全同义反复——把实现改错，测试也不会红）。
 
-其余情况一律通过，并打印 `killed / survived / total` 与存活清单，**由人逐条评审**：
+**存活清单不采信 `mutmut` 自己的判定，必须逐条复验**：`mutmut` 不是对每个变异体跑全套测试，
+它只按 `tests_by_mangled_function_name` 给每个变异体挑 1~2 条「相关」用例；它还把 pytest 的
+退出码 2（收集/导入错误）映射成 `check was interrupted by user`，于是导入期就崩的变异体被
+静默放过。所以第 5 步在 `mutmut run` 之后对**每个被判为存活的变异体**再跑一次全套
+`tests/unit`（带 `--continue-on-collection-errors`），按复验退出码重新认定：**`0` ＝真存活，
+非 `0` ＝杀死**。因此第 5 步还有两条红线：
+
+4. `mutants/**/*.meta` 里出现既不是杀死也不是存活的退出码（尤其 2）—— 一律判失败并列出清单；
+5. 复验出现无法解释的退出码、或复验的两条自检不成立（不设变异体时全套单测必须通过；
+   `MUTANT_UNDER_TEST=fail` 必须非 0）—— 一律判失败。
+
+其余情况一律通过，并打印 **mutmut 原始判定**与**复验后真实判定**的 `killed / survived / total`、
+复验中被改判为杀死的变异体清单、以及复验后真实存活的清单，**由人逐条评审**：
 
 ```bash
-uv run mutmut results   # 存活清单
+uv run mutmut results   # mutmut 视角的存活清单（未经复验，仅供参考）
 uv run mutmut browse    # 逐条明细（可把变异体写回磁盘查看）
 ```
 
-**存活的变异不是「必须清零」的指标**：要逐条判断它是**真漏测**还是**等价变异**，结论写进 PR。
-测试侧该写什么、怎么写见 `docs/testing.md`。
+复验用的命令与 `check.sh` 里的一致（`mutants/` 里是变异源码副本，**必须让它先于仓库 `src/` 被 import**）：
+
+```bash
+env MUTANT_UNDER_TEST=<变异体名> PYTHONPATH="$PWD/mutants:$PWD/mutants/src" \
+  uv run python -m pytest mutants/tests/unit -q -p no:randomly \
+  --continue-on-collection-errors --rootdir=mutants
+```
+
+⚠️ 直接跑 `env MUTANT_UNDER_TEST=… uv run python -m pytest tests/unit` 会 import 仓库里**未被变异**的
+`src/`，于是每条变异体都「通过」——这是最容易被骗的一步。`check.sh` 的复验因此自带两条对照：
+不设变异体时全套必须通过（命令与环境没坏）、`MUTANT_UNDER_TEST=fail` 必须非 0（变异源码确实被加载）。
+
+**存活的变异不是「必须清零」的指标**：要逐条判断它是**真漏测**、**等价变异**还是**已接受缺口**，
+结论写进 PR。测试侧该写什么、怎么写见 `docs/testing.md`，三类归因的口径见
+`docs/research/03-dependencies-and-toolchain.md`。
 
 ### 关于 docker 与门禁的关系
 
-- 上面 5 步本身**不需要 Docker**：`tests/unit/` 是纯逻辑测试，第 5 步的变异测试也只跑 `tests/unit`（范围写在 `pyproject.toml` 的 `[tool.mutmut]`）。
+- 上面 5 步本身**不需要 Docker**：`tests/unit/` 是纯逻辑测试，第 5 步的变异测试与存活复验也只跑 `tests/unit`（范围写在 `pyproject.toml` 的 `[tool.mutmut]`）。
 - `tests/integration/` 需要真实 PostgreSQL 与邮件服务，由 `scripts/dev-up.sh` 在本机起容器提供——**开发机已装 Docker，本机跑得了**（见 `docs/research/05-dev-and-build-environment.md`）；未起容器时按 pytest 的 `integration` 标记跳过（标记约定见 `docs/testing.md` §8）。
 - 门禁脚本刻意不加"先起容器"的逻辑：让门禁的依赖尽量少，才能做到"随手就能跑"。**因此容器未起时集成用例会被跳过，而跳过不等于通过**——涉及数据库语义的验收要先 `bash scripts/dev-up.sh`。
 
@@ -102,7 +127,10 @@ docker compose -f compose.dev.yaml down -v       # 连命名卷一起删（测�
 |---|---|
 | `check.sh` 报「找不到 uv 命令」 | 先安装 uv（安装方式见 uv 官方文档），确认新开的终端里 `uv --version` 可用 |
 | 第 5 步报「变异体全部存活」 | 断言与实现完全同义反复：按 `docs/testing.md` §1、§3.3 补**能失败**的断言；**不要**用 `# pragma: no mutate` 把存活抹掉 |
-| 第 5 步跑得很慢 | 只在 `mutants/` 被删除或源码大改时才全量重跑；**不要**把 `mutants/` 写进清理脚本，它是有意保留的缓存 |
+| 第 5 步报「复验后真实存活」比 `mutmut results` 少很多 | 正常现象：`mutmut` 只给每个变异体挑 1~2 条用例，会把其实会被全套单测杀死的变异体记成存活；复验后的数字才是真实判定。被改判的清单会一并打印出来 |
+| 第 5 步报「mutmut 记录的退出码里有既不是杀死也不是存活的」 | 多半是 pytest 的收集/导入错误被 `mutmut` 当成了「用户中断」。先 `rm -rf mutants/` 重新全量跑；仍出现就按缺陷排查（导入期就崩的变异体必须人工处置，不得当成存活放过） |
+| 第 5 步报「复验出现无法解释的退出码」或「复验环境自检未通过」 | 是复验环境本身有问题（不是变异体的问题）：按上一节的复验命令手工跑一次，确认它在容器未起时能跑通，再看 `mutants/src/` 是否是最新副本 |
+| 第 5 步跑得很慢 | 第 5 步现在含逐条复验，实测约 25~30 秒；只在 `mutants/` 被删除或源码大改时才全量重跑变异生成。**不要**把 `mutants/` 写进清理脚本，它是有意保留的缓存 |
 | 集成用例全部跳过、`pytest` 仍报绿 | 这是标记机制的正常行为，**不是通过**：先 `bash scripts/dev-up.sh` 再跑（`docs/testing.md` §6 第 7 条） |
 | `dev-up.sh` 报「找不到 docker」 | 本机没装 Docker；按 `docs/research/05-dev-and-build-environment.md` 装（Linux 上的 Docker 不需要硬件虚拟化） |
 | `dev-up.*` 报「连不上 Docker 守护进程」 | 两种原因：守护进程没启动（`systemctl start docker`），或**当前用户不在 `docker` 组**——socket 是 `root:docker 660`，且重新登录后组权限才生效 |
