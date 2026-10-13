@@ -1089,3 +1089,163 @@ class TestCleanupProtection:
                 )
             ).first()
         assert remaining is None
+
+
+# ---------------------------------------------------------------------------
+# T-11：messages 出站查询（六态判定输入）与回复 keyset 分页
+# （design §4.1：排序固定 received_at ASC, id ASC；不用 limit/offset）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.db.repositories.messages import (  # noqa: E402
+    message_status,
+    pending_attempt_count,
+    replies_page,
+)
+
+
+class TestMessageStateQueries:
+    """六态判定的库内输入：messages.status、待审行 attempt_count。"""
+
+    async def test_message_status_read(self, db_engine: AsyncEngine) -> None:
+        message_id = await _insert_message_full(db_engine, created_at=_NEW)
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            status = await message_status(session, message_id)
+            missing = await message_status(session, uuid.uuid4())
+        finally:
+            await session.close()
+        assert status == "failed"
+        assert missing is None
+
+    async def test_pending_attempt_count_read(self, db_engine: AsyncEngine) -> None:
+        # 已提交（attempt_count = 0）与审查中（attempt_count > 0）由待审行表达
+        # （design §2.3），这里只提供库内输入，判定属 core（T-15）。
+        row_zero = _pending_row(attempt_count=0)
+        await _insert_pending(db_engine, row_zero)
+        row_two = _pending_row(attempt_count=2)
+        await _insert_pending(db_engine, row_two)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            zero = await pending_attempt_count(session, row_zero["id"])  # type: ignore[arg-type]
+            two = await pending_attempt_count(session, row_two["id"])  # type: ignore[arg-type]
+            missing = await pending_attempt_count(session, uuid.uuid4())
+        finally:
+            await session.close()
+
+        assert zero == 0
+        assert two == 2
+        assert missing is None
+
+
+class TestRepliesKeysetPagination:
+    """回复 keyset 分页：received_at ASC, id ASC，翻页不重不漏（AC-15 / AC-16 / AC-41）。"""
+
+    async def _seed_replies(
+        self,
+        db_engine: AsyncEngine,
+        count: int,
+        parent: uuid.UUID | None = None,
+        *,
+        uidvalidity: int = 777,
+        uid_base: int = 7000,
+        start_offset_min: int = 0,
+    ) -> tuple[uuid.UUID, list[uuid.UUID]]:
+        parent_id = parent or await _insert_message_full(db_engine, created_at=_NEW)
+        ids: list[uuid.UUID] = []
+        # 到达时间有并列（同一秒两封），排序必须落到 id 决胜。
+        base = datetime(2025, 6, 1, 13, 0, 0, tzinfo=UTC) + timedelta(minutes=start_offset_min)
+        for i in range(count):
+            reply_id = uuid.uuid4()
+            received = base + timedelta(minutes=i // 2)
+            async with db_engine.begin() as conn:
+                await conn.execute(
+                    sa.insert(Message).values(
+                        id=reply_id,
+                        direction="inbound",
+                        status="received",
+                        parent_id=parent_id,
+                        recipient="reply@example.com",
+                        subject=f"回复 {i}",
+                        body="回复正文",
+                        mailbox="reply@example.com",
+                        uidvalidity=uidvalidity,
+                        uid=uid_base + i,
+                        created_at=received,
+                        received_at=received,
+                    )
+                )
+            ids.append(reply_id)
+        return parent_id, ids
+
+    async def test_pages_cover_all_in_order_without_overlap(self, db_engine: AsyncEngine) -> None:
+        parent_id, ids = await self._seed_replies(db_engine, 5)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            page1 = await replies_page(
+                session,
+                parent_id,
+                after=(None, None),
+                limit=2,
+            )
+            page2 = await replies_page(
+                session, parent_id, after=(page1[-1].received_at, page1[-1].id), limit=2
+            )
+            page3 = await replies_page(
+                session, parent_id, after=(page2[-1].received_at, page2[-1].id), limit=2
+            )
+        finally:
+            await session.close()
+
+        collected = [row.id for row in page1 + page2 + page3]
+        # 期望值来自规格的排序键（received_at ASC, id ASC），按独立参考排序得出：
+        # 并列 received_at 由 id 决胜，故不能假设插入顺序。
+        assert set(collected) == set(ids)
+        assert len(collected) == len(ids)
+        received_order = [row.received_at for row in page1 + page2 + page3]
+        assert received_order == sorted(received_order)
+        # 同一 received_at 组内的 id 也必须升序（排序键的第二分量）。
+        for i in range(1, len(page1 + page2 + page3)):
+            prev = (page1 + page2 + page3)[i - 1]
+            curr = (page1 + page2 + page3)[i]
+            assert (prev.received_at, prev.id) < (curr.received_at, curr.id)
+
+    async def test_unknown_parent_returns_empty_page(self, db_engine: AsyncEngine) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            page = await replies_page(session, uuid.uuid4(), after=(None, None), limit=10)
+        finally:
+            await session.close()
+        assert page == []
+
+    async def test_new_reply_during_pagination_does_not_shift_window(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        parent_id, ids = await self._seed_replies(db_engine, 4)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            page1 = await replies_page(session, parent_id, after=(None, None), limit=2)
+            # 翻页中途新回复到达（到达时刻晚于已取页；UIDVALIDITY 不同避免幂等键相撞）。
+            new_ids = (
+                await self._seed_replies(
+                    db_engine,
+                    1,
+                    parent=parent_id,
+                    uidvalidity=888,
+                    uid_base=9000,
+                    start_offset_min=10,
+                )
+            )[1]
+            page2 = await replies_page(
+                session, parent_id, after=(page1[-1].received_at, page1[-1].id), limit=10
+            )
+        finally:
+            await session.close()
+
+        # keyset 的偏移不漂移：已取过的页不重，新回复按到达时刻落在后续页。
+        collected = {row.id for row in page1 + page2}
+        assert collected == set(ids) | set(new_ids)
+        assert new_ids[0] in {row.id for row in page2}
+        assert len(page2) == 3  # 剩余 2 条旧回复 + 1 条新回复

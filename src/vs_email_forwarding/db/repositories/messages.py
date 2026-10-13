@@ -36,7 +36,7 @@ from vs_email_forwarding.constants import (
     MESSAGE_STATES,
     RETRY_BACKOFF_SECONDS,
 )
-from vs_email_forwarding.db.models import Message
+from vs_email_forwarding.db.models import Message, PendingMessage
 
 # 受控取值一律从 constants 引用，不在本模块重复字面量：
 # 方向取集合首项（DIRECTIONS 即 (outbound, inbound)）；
@@ -52,6 +52,9 @@ __all__ = [
     "mark_failed_from_sent",
     "mark_send_failed",
     "mark_sent",
+    "message_status",
+    "pending_attempt_count",
+    "replies_page",
 ]
 
 
@@ -165,3 +168,58 @@ async def mark_failed_from_sent(
         ),
     )
     return result.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# 查询侧（spec 0001 / T-11）：六态判定的库内输入与回复 keyset 分页
+# （design §4.1：排序固定 received_at ASC, id ASC；不用 limit/offset）
+# ---------------------------------------------------------------------------
+
+
+async def message_status(session: AsyncSession, message_id: uuid.UUID) -> str | None:
+    """读 ``messages.status`` 列值；行不存在返回 ``None``。
+
+    六态中的 ``sending`` / ``sent`` / ``failed`` 由该列值直接表达；
+    ``submitted`` / ``reviewing`` / ``rejected`` 的判定输入分别由
+    :func:`pending_attempt_count` 与 ``rejected_messages`` 的存在性查询提供，
+    优先级判定属 ``core``（``design.md`` §2.3），不在本层。
+    """
+    row = (await session.execute(sa.select(Message.status).where(Message.id == message_id))).first()
+    return None if row is None else row[0]
+
+
+async def pending_attempt_count(session: AsyncSession, pending_id: uuid.UUID) -> int | None:
+    """读待审行的 ``attempt_count``；行不存在返回 ``None``。
+
+    ``0`` 与 ``> 0`` 分别是「已提交」与「审查中」的库内输入（``design.md`` §2.3）。
+    """
+    row = (
+        await session.execute(
+            sa.select(PendingMessage.attempt_count).where(PendingMessage.id == pending_id)
+        )
+    ).first()
+    return None if row is None else row[0]
+
+
+async def replies_page(
+    session: AsyncSession,
+    parent_id: uuid.UUID,
+    *,
+    after: tuple[datetime | None, uuid.UUID | None],
+    limit: int,
+) -> list[sa.Row]:
+    """取某出站邮件的一页回复：keyset 游标 ``received_at ASC, id ASC``。
+
+    ``after`` 是上一页最后一行的 ``(received_at, id)``（首页传 ``(None, None)``）；
+    排序键与 ``(parent_id, received_at)`` 索引对齐，翻页用行值比较而非
+    ``limit`` / ``offset``——新回复到达不会让偏移窗口漂移（``AC-41``）。
+    返回 ``(id, received_at)`` 行序列，正好够客户端拼下一页游标。
+    """
+    after_received_at, after_id = after
+    stmt = sa.select(Message.id, Message.received_at).where(Message.parent_id == parent_id)
+    if after_received_at is not None and after_id is not None:
+        stmt = stmt.where(
+            sa.tuple_(Message.received_at, Message.id) > sa.tuple_(after_received_at, after_id)
+        )
+    stmt = stmt.order_by(Message.received_at, Message.id).limit(limit)
+    return list((await session.execute(stmt)).all())
