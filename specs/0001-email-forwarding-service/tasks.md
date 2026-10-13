@@ -43,7 +43,7 @@
 - [x] `T-16` （前置 `T-1`）`core/inbound.py` 的 DSN / MDN 结构判定与关联匹配 + `tests/unit/test_inbound_sorting.py` — `FR-9` / `AC-13`
 - [x] `T-17` （前置 `T-1`）`providers/review/base.py` 与 `always_pass.py`（显式标注空实现）+ `tests/unit/test_review_placeholder.py` — `NFR-6` / `AC-25`
 - [x] `T-18` （前置 `T-17`）`providers/review/factory.py`（依赖覆盖的注入点）— `FR-3` / `AC-6`
-- [ ] `T-19` （前置 `T-1`）`providers/smtp/base.py` 与 `smtplib_sender.py`：显式写 `From` 与 `Reply-To`、超时上界、只回传返回码与分类 — `FR-2` / `AC-5`
+- [x] `T-19` （前置 `T-1`）`providers/smtp/base.py` 与 `smtplib_sender.py`：显式写 `From` 与 `Reply-To`、超时上界、只回传返回码与分类 — `FR-2` / `AC-5`
 - [ ] `T-20` （前置 `T-1`）`providers/imap/base.py`：把邮件解析成中性结构（头字段、MIME 部件、UID 三要素），不做任何判定 — `FR-7` / `AC-39`
 - [ ] `T-21` （前置 `T-20`）`providers/imap/imapclient_fetcher.py`：`UIDVALIDITY` / `UIDNEXT` 增量、逐封取回、超时 — `FR-7` / `AC-11`
 
