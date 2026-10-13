@@ -38,18 +38,18 @@
   1. **mutmut 不是对每个变异体跑全套测试**，它按 `mutants/mutmut-stats.json` 的 `tests_by_mangled_function_name` 给每个变异体只挑 1~2 条它认为相关的用例。实测：`db.models` 的 `x__enum_check`、`x__nullable_enum_check` 名下各只有 1 条用例（`tests/unit/test_db_session.py::test_importing_the_module_does_not_create_an_engine`）——`CHECK` 约束在**模块导入期**构造，被归因给了第一条跑起来的用例。于是这些变异体在 mutmut 眼里「存活」，而全套单测跑起来立刻红：复验把 17 条 `db/models` 变异体从「存活」改判为「杀死」。
   2. **退出码 2 被当成「用户中断」**：`mutmut/stats.py` 的 `status_by_exit_code` 把 pytest 的退出码 2（收集/导入错误）映射成 `check was interrupted by user`，既不算杀死也不算存活，`mutmut-cicd-stats.json` 里也看不到它——导入期就崩的变异体因此被静默放过。复验命令带 `--continue-on-collection-errors`（收集错误按测试失败计、退出码 1），并且门禁另立红线：`.meta` 里出现既非杀死也非存活的退出码（尤其 2）一律判失败并列出清单，交人工处置。
 - **存活变异按三类归因登记，不笼统写「等价变异」**（当前 22 条 = 真等价 6 + 已接受缺口 16 + 真漏测 0）。分档判据只有两条、都可测：**实际输出逐字节相同**（对比时掩掉 `timestamp`），且**把取值喂给库实际使用它的地方后语义相同**（省略的 kwarg 落到与实现相同的默认值、`None` 在库的布尔判定里与 `False` 同效、`fmt` 大小写不敏感）。两条都满足 ⇒ 真等价；输出相同但有效语义确实变成另一个值 ⇒ 已接受缺口（无可观察输出，但配置状态真的不同）。
-  1. **真等价 6 条**（全在 `logging.configure_logging`），逐条的**正确**依据是（`utc` 那条本册此前写错了，已就地更正）：
+  1. **真等价 6 条**（全在 `logging.configure_logging`），逐条依据是：
      - `TimeStamper` 省略 `utc=True`：structlog 26.1 的签名默认就是 `utc=True`，删掉这个 kwarg 与显式写它落在**同一分支**——**不是**「默认 `False`、只有环境时区为 UTC 时才成立」；实测连 `get_config()` 里那个 `TimeStamper` 的取值（`("iso", True, "timestamp")`）都完全一致；
      - `fmt="ISO"`：`_make_stamper` 用 `fmt.upper() == "ISO"` 比较，大小写不敏感（字段本身仍是字面 `"ISO"`，但实测输出逐字节相同）；
      - `StreamHandler(stream=None)`：标准库默认就是当时的 `sys.stderr`（实测取值与输出都与显式写法一致）；
      - `ProcessorFormatter` 的 `keep_exc_info` 取 `None` 或删除：签名默认就是 `False`，`None` 与 `False` 在 `if self.keep_exc_info:` 里同效；
      - `JSONRenderer(ensure_ascii=None)`：`json.dumps` 把假值都当「不转义」，与显式 `False` 同效（实测中文事件不被转义、输出逐字节相同）。
-     这一组的共同性质是**等价性建立在上游的默认值与判定方式上**：上游改默认值、改 `fmt` 的大小写处理、或改「假值即不转义」的判定，等价就会失真——属**脆弱等价**，所以必须留在册里，不能只靠「删掉 kwarg 也一样」口口相传。`keep_exc_info=True` 那条**不再是等价变异**，它由 `tests/unit/test_logging_output.py` 的断言杀死（此前记在本册的「真漏测」名下）。
+     这一组的共同性质是**等价性建立在上游的默认值与判定方式上**：上游改默认值、改 `fmt` 的大小写处理、或改「假值即不转义」的判定，等价就会失真——属**脆弱等价**，所以必须留在册里，不能只靠「删掉 kwarg 也一样」口口相传。`keep_exc_info=True` 那条由 `tests/unit/test_logging_output.py` 的断言杀死。
   2. **已接受缺口 16 条**（所有者裁决：不补）：11 条在 `main.create_app`（FastAPI 的 `title` / `description` / `version` / `lifespan` 元数据，以及 `configure_logging` 的入参透传），5 条在 `logging.configure_logging`——
      - `wrapper_class` 取 `None` 或删除：默认 wrapper 是 `structlog._native.BoundLoggerFilteringAtNotset`（26.1.0 实测：这个类只从 `structlog._native` 暴露，包上取不到 `structlog.BoundLoggerFilteringAtNotset` 这个名字），实现显式传的是 `structlog.stdlib.BoundLogger`，**两者不是同一个类**，只在项目所有可观察输出上一致——**行为等价、配置状态不同**（`get_config()['wrapper_class']` 从前者变成后者）；
      - `cache_logger_on_first_use` 取 `None` / 删除 / `False` 三种写法：实测三者都把 `structlog.get_config()['cache_logger_on_first_use']` 从 `True` 变成 `False`，输出与对照逐字节相同——**真实差异，只是只影响 logger 缓存、无可观察输出**。
      这些改动只能靠**把实现抄进断言**来「发现」，不构成值得测的业务行为。
-  3. **真漏测 0 条**：上一份基线这一格挂着 3 条 `keep_exc_info` 相关变异，现在已全部落定——`True` 那条被断言杀死，`None` 与删除 kwarg 那两条按第 1 条归入**真等价**，**没有需要补断言的缺口了**。
+  3. **真漏测 0 条**：`keep_exc_info=True` 那条被断言杀死，`None` 与删除 kwarg 那两条按第 1 条归入**真等价**——**没有需要补断言的缺口**。
   具体清单以 `scripts/check.sh` 第 5 步当次输出与 `uv run mutmut results` 为准——本册只定口径与归因分类，不复述逐条清单（断言一增补，编号与条数就会变）。
 - **变异范围固定为 `tests/unit`**：门禁结论必须与环境无关——容器起没起不能改变门禁是否通过，因此不把需要 Docker 的集成测试纳入变异运行；集成路径由集成测试自身覆盖并由人工核对。
 - **`mutate_only_covered_lines = true`**：只变异被测试执行到的行，于是「存活变异」＝**执行过但没有被断言验证**的缺口；「完全没被执行」的行交给第 4 步的 `term-missing` 暴露。两个工具的分工因此不重叠，而不是各说一遍。

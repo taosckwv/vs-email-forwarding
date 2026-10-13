@@ -437,9 +437,9 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 | 两条都满足（当前实现） | 1 行 = 恰好 1 行合法 JSON，`exception` 字段含完整 traceback，逐行 `json.loads` 全部通过 | 5 行 = 1 行事件 + 1 份 traceback（`raise ValueError(...)` 出现 1 次、行首命中 1 次、无面板框线） |
 | **只违反第 1 条**（`keep_exc_info=True`，console 链正常） | 5 行 = 1 行合法 JSON + 4 行裸文本；逐行 `json.loads` 在 4 行上报错，输出流不是 JSON-lines | 9 行 = 事件 1 行 + **2 份** plain traceback（多出的是标准库 `logging.Formatter` 追加的那份；行首命中 2 次） |
 | **只违反第 2 条**（console 链缺 `format_exc_info`，`keep_exc_info=False`） | 1 行 = 合法 JSON，**不受影响** | 32 行：异常改由 `ConsoleRenderer` 渲染成 rich 面板（行首命中 **0** 次、面板框线 4 个） |
-| **两条都不满足**（本节修正之前的实现） | 5 行 = 1 行合法 JSON + 4 行裸文本 | 36 行 = rich 面板一份 + 标准库追加的 plain traceback 一份（行首命中 1 次、面板框线 4 个） |
+| **两条都不满足** | 5 行 = 1 行合法 JSON + 4 行裸文本 | 36 行 = rich 面板一份 + 标准库追加的 plain traceback 一份（行首命中 1 次、面板框线 4 个） |
 
-**两条成因必须分开记，不要合并挂到某一条配置名下**：`json` 侧的 4 行裸文本只由第 1 条被违反造成（第 2 条只影响 `console`）；`console` 侧的「第二份 traceback」与「rich 面板」是两件不同的事——前者来自 `keep_exc_info=True`（标准库追加 plain 文本），后者来自第 2 条被违反（`ConsoleRenderer` 自己渲染）。因此「修复前」只有在**两条都不满足**时才是一个确定的状态。绝对行数随探针的**栈深度**变化，只有同一探针内的数字可比（本册早先那张表里的「22 行 / 两份 plain traceback」来自一次未记录探针的测量，且把上面两个成因合并挂在 `keep_exc_info=True` 名下，已就地更正为上表；`console` 的 5 行在两种探针下一致）。
+**两条成因必须分开记，不要合并挂到某一条配置名下**：`json` 侧的 4 行裸文本只由第 1 条被违反造成（第 2 条只影响 `console`）；`console` 侧的「第二份 traceback」与「rich 面板」是两件不同的事——前者来自 `keep_exc_info=True`（标准库追加 plain 文本），后者来自第 2 条被违反（`ConsoleRenderer` 自己渲染）。因此「修复前」只有在**两条都不满足**时才是一个确定的状态。绝对行数随探针的**栈深度**变化，只有同一探针内的数字可比；`console` 的 5 行在两种探针下一致。
 
 **已否决方向**：
 
