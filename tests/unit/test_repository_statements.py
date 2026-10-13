@@ -6,6 +6,9 @@
 
 * **抢占硬约束**：认领语句必须同时编译出 ``FOR UPDATE`` 与 ``SKIP LOCKED``，
   且认领谓词同时含 ``attempt_count <= 4`` 与 ``next_attempt_at <= <绑定的 now 参数>``；
+  认领的另外四个面同样要有断言：取的是待审行实体、方向谓词是
+  ``pending_messages.direction`` **等于**绑定的入参、按 ``next_attempt_at`` 排序、
+  ``LIMIT`` 等于入参 ``batch_size``；
 * **禁止两步写法**：仓储模块里不得出现 ``text()`` 裸串或裸 SQL 字符串
   （那是绕过构造器口径的注入面），认领必须以 ``with_for_update(skip_locked=True)`` 锁行；
 * **条件写入 / 幂等插入**：过审落库语句带 ``ON CONFLICT DO NOTHING``（撞键按幂等忽略）。
@@ -17,13 +20,17 @@ from __future__ import annotations
 
 import ast
 import inspect
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.sql import operators
+from sqlalchemy.sql.elements import BinaryExpression, BindParameter, ClauseElement
 
-from vs_email_forwarding.constants import MAX_CLAIMABLE_ATTEMPT_COUNT
+from vs_email_forwarding.constants import DIRECTIONS, MAX_CLAIMABLE_ATTEMPT_COUNT
+from vs_email_forwarding.db.models import PendingMessage
 from vs_email_forwarding.db.repositories import inbound, pending
 
 
@@ -98,8 +105,33 @@ def _repository_trees() -> dict[str, ast.Module]:
     }
 
 
+#: 排序用列在编译产物里的写法，由模型对象推出（不手抄列名与表名）。
+_NEXT_ATTEMPT_AT_COLUMN_SQL: Final = str(PendingMessage.next_attempt_at.__clause_element__())
+
+
+def _iter_clause_elements(clause: ClauseElement) -> Iterator[ClauseElement]:
+    """递归遍历子句树（只用公开的 ``get_children()``，不读私有属性）。"""
+    yield clause
+    for child in clause.get_children():
+        if child is not None:
+            yield from _iter_clause_elements(child)
+
+
+def _segment_between(sql: str, start_marker: str, end_marker: str) -> str:
+    """截出编译产物里两个标记之间的片段（``ORDER BY`` 区 / ``LIMIT`` 区）。
+
+    只按标记定位，**不与整段 SQL 比相等**；片段内的期望值仍由模型对象或入参推出。
+    标记缺失（即该子句整个没进编译产物）直接断言失败，而不是静默返回空片段。
+    """
+    assert start_marker in sql, f"编译产物缺少 {start_marker}：{sql}"
+    after_start = sql.index(start_marker) + len(start_marker)
+    assert end_marker in sql[after_start:], f"编译产物缺少 {end_marker}：{sql}"
+    return sql[after_start : sql.index(end_marker, after_start)]
+
+
 class TestClaimStatementCompilesWithSkipLocked:
-    """认领语句的编译产物必须同时含 FOR UPDATE 与 SKIP LOCKED（AC-26）。"""
+    """认领语句的编译产物（`AC-26`）：FOR UPDATE + SKIP LOCKED、取待审行实体、
+    方向谓词等于绑定的入参、按 ``next_attempt_at`` 排序、``LIMIT`` 等于入参。"""
 
     def test_claim_select_compiles_with_for_update_skip_locked(self) -> None:
         now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -115,6 +147,80 @@ class TestClaimStatementCompilesWithSkipLocked:
         # 期望值来自规格文本：认领 = FOR UPDATE + SKIP LOCKED（AGENTS.md §8.1 / plan §2.9）。
         assert "FOR UPDATE" in sql
         assert "SKIP LOCKED" in sql
+
+    def test_claim_select_targets_pending_message_entity(self) -> None:
+        # 认领取的是待审行**实体**本身，不是别的列、更不是 NULL（AC-26）。
+        # 判据取自语句对象的结构：列描述里的 entity 是 ORM 类，且选中列就是
+        # pending_messages 的全部列——不比对 SQL 文本。
+        now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+        statement = pending.claim_due_statement(direction="outbound", now=now, batch_size=10)
+
+        descriptions = statement.column_descriptions
+        assert len(descriptions) == 1, f"认领 SELECT 的目标不唯一：{descriptions}"
+        assert descriptions[0]["entity"] is PendingMessage
+        assert set(statement.selected_columns.keys()) == {
+            column.key for column in PendingMessage.__table__.columns
+        }
+
+    def test_claim_where_equals_direction_column_to_bound_argument(self) -> None:
+        # 方向谓词必须是「pending_messages.direction 列 **等于** 绑定参数」，
+        # 且绑定值随调用方入参走（两个受控方向各验一次）：结构上只认 eq 比较，
+        # 不认「!=」、不认被换成 NULL 或被整条删掉的写法（AC-26 / plan §5.2）。
+        for direction in DIRECTIONS:
+            now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+            statement = pending.claim_due_statement(direction=direction, now=now, batch_size=10)
+
+            equalities = [
+                node
+                for node in _iter_clause_elements(statement.whereclause)
+                if isinstance(node, BinaryExpression)
+                and node.operator is operators.eq
+                and getattr(node.left, "name", None) == "direction"
+                and getattr(getattr(node.left, "table", None), "name", None)
+                == PendingMessage.__tablename__
+            ]
+
+            assert len(equalities) == 1, (
+                f"方向谓词不是单条 direction = ?：{statement.whereclause!r}"
+            )
+            bound_direction = equalities[0].right
+            assert isinstance(bound_direction, BindParameter), "方向谓词右侧必须是绑定参数"
+            assert bound_direction.value == direction
+
+    def test_claim_orders_by_next_attempt_at(self) -> None:
+        # 到点排序的列必须是 next_attempt_at（AC-26 / plan §5.2）：断言的是
+        # ORDER BY 区（到 FOR UPDATE 为止）里出现该列的编译形式，而不是整段 SQL。
+        now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+        statement = pending.claim_due_statement(direction="outbound", now=now, batch_size=10)
+
+        sql = str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+        order_by_segment = _segment_between(sql, "ORDER BY", "FOR UPDATE")
+        assert _NEXT_ATTEMPT_AT_COLUMN_SQL in order_by_segment
+
+    def test_claim_limit_equals_batch_size_argument(self) -> None:
+        # 每批条数由入参决定（AGENTS.md §8.2：批次大小不得写死在代码里）：
+        # 两个不同 batch_size 各验一次，LIMIT 区必须等于该次入参。
+        for batch_size in (3, 9):
+            now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+            statement = pending.claim_due_statement(
+                direction="outbound", now=now, batch_size=batch_size
+            )
+
+            sql = str(
+                statement.compile(
+                    dialect=postgresql.dialect(),
+                    compile_kwargs={"literal_binds": True},
+                )
+            )
+
+            limit_segment = _segment_between(sql, "LIMIT", "FOR UPDATE").strip()
+            assert limit_segment == str(batch_size)
 
     def test_claim_predicate_contains_attempt_bound_and_bound_now(self) -> None:
         now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
