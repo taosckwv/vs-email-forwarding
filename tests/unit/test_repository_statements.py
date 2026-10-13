@@ -50,7 +50,7 @@ _REPOSITORIES_DIR: Final = (
 #: 规格规定的认领谓词上界（attempt_count <= 4）。与 constants 断言一致，防漂移。
 _EXPECTED_CLAIM_ATTEMPT_BOUND: Final = 4
 
-#: 仓储层应有的模块清单（plan.md §2.4 的六个仓储模块 + 包 ``__init__``）。
+#: 仓储层应有的模块清单（plan.md §2.2 的六个仓储模块 + 包 ``__init__``）。
 #: 扫描面守卫的期望值来自规格，不来自被测目录的运行时内容。
 _EXPECTED_REPOSITORY_MODULES: Final = frozenset(
     {

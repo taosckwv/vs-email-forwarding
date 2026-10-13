@@ -61,6 +61,7 @@
 | `src/vs_email_forwarding/db/repositories/rejected.py` | `新增` | 拒审表的 SQL：写入与按 ID 查询存在性 |
 | `src/vs_email_forwarding/db/repositories/cursors.py` | `新增` | 游标表的 SQL：读取 / 初始化（`UIDNEXT - 1`）/ `UIDVALIDITY` 变化时的重置、游标与单封落库的同事务推进 |
 | `src/vs_email_forwarding/db/repositories/cleanup.py` | `新增` | 保留期清理的 SQL：按 `created_at` 分批 `FOR UPDATE SKIP LOCKED` 删除，出站行用 `NOT EXISTS` 排除仍有入站待审行的行 |
+| `src/vs_email_forwarding/db/repositories/inbound.py` | `新增` | 两处入站唯一键（`(mailbox, uidvalidity, uid)` 部分唯一索引，`WHERE direction = 'inbound'`）的幂等 SQL：流③ `insert_inbound_pending` 写待审行、流④ `approve_inbound_pending` 同事务写 `received` 行并删待审行（`created_at` 原样搬运），两处均以 `ON CONFLICT DO NOTHING` 携带同一谓词忽略重复（`AC-11`；`design.md` §2.2 / §3.4 / §3.5） |
 | `src/vs_email_forwarding/db/repositories/__init__.py` | `新增` | 仓储包的占位职责文件（包目录约定，`AGENTS.md` §4） |
 | `src/vs_email_forwarding/db/__init__.py` | `修改` | 现文档说「表结构尚未定案、暂无实现」——表结构已在 `design.md` §2 定案，改为指向该节与新模块（**文档性修改**，无 I/O 行为） |
 
