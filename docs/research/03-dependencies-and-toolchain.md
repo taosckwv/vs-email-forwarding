@@ -11,7 +11,8 @@
 - **Python 3.13 是目标版本**：`.python-version` 锁定 `3.13`，`pyproject.toml` 的 `requires-python` 为 `>=3.13,<3.14`，`uv.lock` 记录的解析约束是 `==3.13.*`——三处一致，`.python-version` 不得改动。
 - **依赖与解释器管理一律用 `uv`**：由 uv 安装独立的官方 CPython 解释器（不依赖系统 Python）、创建虚拟环境、解析依赖并维护锁文件 `uv.lock`、管理依赖分组。一条 `uv sync` 就对齐解释器与全部依赖，队友克隆后不需要手工建 venv。`uv.lock` 是解析与锁定结果的唯一真源，随依赖变更一起提交。
 - **Web 框架 FastAPI + uvicorn**；**配置用 pydantic-settings**（唯一配置入口，读 `.env`）；**日志用 structlog**；**测试用 pytest**（配 `pytest-asyncio`，`asyncio_mode = "auto"`）。
-- **运行时依赖保持最小集**：`fastapi`、`uvicorn[standard]`、`pydantic-settings`、`structlog` 四项，加上数据与邮件访问四项——`sqlalchemy`、`alembic`、`asyncpg`、`IMAPClient`（**选型理由、代价与许可见 `specs/0001-email-forwarding-service/design.md` 的「依赖选型」与「实测证据」**）。开发依赖另在 `[dependency-groups] dev` 里：`ruff`、`mypy`、`pytest`、`pytest-asyncio`、`httpx`、`pre-commit`、`commitizen`、`pytest-cov`、`mutmut`。`httpx` 是 FastAPI `TestClient` 的必需依赖，**不是运行时依赖**；`pytest-cov` 与 `mutmut` 是**测试质量的度量工具**，同样不是运行时依赖。
+- **运行时依赖保持最小集**：`fastapi`、`uvicorn[standard]`、`pydantic-settings`、`structlog` 四项，加上数据与邮件访问四项——`sqlalchemy[asyncio]`、`alembic`、`asyncpg`、`IMAPClient`（**选型理由、代价与许可见 `specs/0001-email-forwarding-service/design.md` 的「依赖选型」与「实测证据」**）。开发依赖另在 `[dependency-groups] dev` 里：`ruff`、`mypy`、`pytest`、`pytest-asyncio`、`httpx`、`pre-commit`、`commitizen`、`pytest-cov`、`mutmut`。`httpx` 是 FastAPI `TestClient` 的必需依赖，**不是运行时依赖**；`pytest-cov` 与 `mutmut` 是**测试质量的度量工具**，同样不是运行时依赖。
+- **`sqlalchemy` 启用 `[asyncio]` extra**（`pyproject.toml` 里写 `sqlalchemy[asyncio]`）：异步引擎与 `AsyncSession` 需要 `greenlet`，而 `greenlet` 是 **SQLAlchemy 自己为 `asyncio` extra 声明的依赖**（`Requires-Dist: greenlet>=1; extra == "asyncio"`）——**不是新上游**，版本约束也留在上游一处。**不手工往 `pyproject.toml` 里加 `greenlet`**（理由见「已否决方向」），**也不靠「缺了再装」兜底**：缺它时 `import sqlalchemy.ext.asyncio` 直接报错，异步引擎根本建不起来。实测证据见「实测证据」。
 - **新增运行时依赖前先在本册留下结论再动手**，不允许「先装上再补记录」。
 
 **为什么是 3.13**
@@ -103,10 +104,11 @@
 - **`uvloop` 在 Windows 上确实不装**：`uv.lock` 中该依赖带 `sys_platform != 'win32'` 标记；开发机（Linux）实测已装 `uvloop 0.22.1`，生产同为 Linux，同样可获得。
 - **解释器与依赖一律交给 uv 管理**：虚拟环境中的解释器实测为 **Python 3.13.16**，与 `.python-version` 的 `3.13` 一致；「一律用 `uv run`」是为了让解释器与依赖只由一处决定，而不是因为存在版本不一致。
 - **`.github/` 下没有 `workflows/`**：实测只有 `ISSUE_TEMPLATE/`（`bug_report.md`、`feature_request.md`）与 `PULL_REQUEST_TEMPLATE.md`。
-- **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0、`sqlalchemy` 2.1.4、`alembic` 1.20.0、`asyncpg` 0.32.0、`IMAPClient` 4.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
+- **工具链与依赖的实测版本**（取自当前虚拟环境）：ruff 0.16.9、mypy 2.3.1、pytest 9.1.1、commitizen 4.19.0、pre-commit 4.6.2；运行时 fastapi 0.141.1、uvicorn 0.54.0、pydantic-settings 2.15.0、structlog 26.1.0、`sqlalchemy` 2.1.4、`greenlet` 3.5.6（`sqlalchemy[asyncio]` 的 extra 依赖，见下一条）、`alembic` 1.20.0、`asyncpg` 0.32.0、`IMAPClient` 4.1.0；测试依赖 httpx 0.28.1、starlette 1.7.0。
 - **门禁全绿的适用范围**：业务逻辑尚未实现，`src/` 下只有包占位与一个能返回 `/healthz` 的最小入口。因此上述绿只证明**工程配置与工具链可用**，不证明任何业务正确性。
 - **依赖许可与类型标注的实测结果**见 `specs/0001-email-forwarding-service/design.md` 的「实测证据」一节（本册不复述）。
 - **两个无类型存根库的实测结论**：`asyncpg` 与 `imapclient` 的包目录下都不存在 `py.typed`，在 `src/` 下 import 它们后跑 `mypy src` 各报一条 `Skipping analyzing "…": module is installed, but missing library stubs or py.typed marker [import-untyped]`；`sqlalchemy` 与 `alembic` 都有 `py.typed`，因此不放行——这正是放行范围只覆盖前两个的依据。**这两条放行还没有落进 `pyproject.toml`**（该文件 mypy 段记有这条处置）：没有对应 import 的 `[[tool.mypy.overrides]]` 会被 mypy 报成 `unused section(s)`，所以放行与第一个真正 import 该库的模块同一次改动落地。
+- **`sqlalchemy[asyncio]` 的实测证据**（随第一个异步引擎模块落地）：启用 extra 前虚拟环境里没有任何 `greenlet`（`grep -c 'name = "greenlet"' uv.lock` → **0**；`import greenlet` → `ModuleNotFoundError: No module named 'greenlet'`），`import sqlalchemy.ext.asyncio` 实测失败：`ImportError: The SQLAlchemy asyncio module requires that the Python 'greenlet' library is installed.  In order to ensure this dependency is available, use the 'sqlalchemy[asyncio]' install target:  'pip install sqlalchemy[asyncio]'`，该异常的 `__cause__` 为 `ModuleNotFoundError: No module named 'greenlet'`。`sqlalchemy-2.1.4.dist-info/METADATA` 实测含 `Provides-Extra: asyncio` 与 `Requires-Dist: greenlet>=1; extra == "asyncio"`——即 `greenlet` 由 SQLAlchemy 自身声明、**不引入新上游**；同一份 METADATA 里 `[postgresql-asyncpg]`、`[aiomysql]`、`[aioodbc]`、`[asyncmy]`、`[aiosqlite]` 五个 extra 也都以 `sqlalchemy[asyncio]` 为前置。启用 extra 后 `uv sync` 只新增 `greenlet==3.5.6`（`Requires-Python: >=3.10`，本机 Python 3.13 装到 cp313 wheel），`uv.lock` 在 sqlalchemy 包的 `[package.optional-dependencies]` 下记录 `asyncio = [{ name = "greenlet" }]`——它确实来自该 extra，而不是新增的顶层依赖。许可实测：`greenlet-3.5.6.dist-info/METADATA` 的 `License-Expression: MIT AND PSF-2.0`，随包 `License-File: LICENSE` 与 `LICENSE.PSF`；两段都是宽松许可，与本仓库 MIT 兼容，未引入 copyleft。启用后再测 `import sqlalchemy.ext.asyncio` 正常导入（sqlalchemy 2.1.4）。
 
 ## 已否决方向
 
@@ -129,10 +131,11 @@
 - **不在门禁里跑变异、只留一条文档命令** —— 原因：本项目不跑 CI，没有任何自动兜底；不进门禁就等于不存在，只会退化成口头约定。
 - 使用 mutmut 2 —— 原因：mutmut 3+ 的执行模型支持函数级缓存与增量重跑（实测重跑约 3 秒），2 的模型做不到，会让门禁慢到没人愿意跑。
 - 把放行写成**没有对应 import 的** `[[tool.mypy.overrides]]` —— 原因：mypy 会把它报成 `unused section(s)` 并打进 `scripts/check.sh` 的输出，制造一条需要被忽略的噪音，也等于留一条无代码支撑的例外；放行只随真正 import 该库的模块落地。
+- **手工把 `greenlet` 写成 `pyproject.toml` 的顶层依赖**（而不是用 `sqlalchemy[asyncio]`）—— 原因：`greenlet>=1` 是 SQLAlchemy 为 `asyncio` extra 声明的兼容性前提，手工再钉一份等于把上游约束复制到本仓库，上游一改就漂移；走 extra 让「谁需要它、需要哪个版本」只留在 SQLAlchemy 的元数据一处。同理**不把 `greenlet` 登记成第五项「数据访问依赖」**——它不是本项目选中的能力，只是异步驱动的实现细节。
 
 ## 落地位置
 
-- `pyproject.toml` —— 运行时依赖清单（四项基础依赖 + 四项数据与邮件访问依赖 `sqlalchemy` / `alembic` / `asyncpg` / `IMAPClient`）与 `[dependency-groups] dev` 分组、`requires-python`、`[project] version`，以及 ruff / mypy / pytest / commitizen 的全部配置；`RUF001` / `RUF002` / `RUF003` 的 `ignore` 与理由注释就在此处。**针对无类型库的 `[[tool.mypy.overrides]]` 按 module 精确放行**（连同理由，只覆盖实测报 `import-untyped` 的 `asyncpg` 与 `imapclient`，随第一个 import 它们的模块一起加）也落在本文件；**这些依赖的选型理由与代价**见 `specs/0001-email-forwarding-service/design.md`。
+- `pyproject.toml` —— 运行时依赖清单（四项基础依赖 + 四项数据与邮件访问依赖 `sqlalchemy[asyncio]` / `alembic` / `asyncpg` / `IMAPClient`）与 `[dependency-groups] dev` 分组、`requires-python`、`[project] version`，以及 ruff / mypy / pytest / commitizen 的全部配置；`RUF001` / `RUF002` / `RUF003` 的 `ignore` 与理由注释就在此处。**针对无类型库的 `[[tool.mypy.overrides]]` 按 module 精确放行**（连同理由，只覆盖实测报 `import-untyped` 的 `asyncpg` 与 `imapclient`，随第一个 import 它们的模块一起加）也落在本文件；**这些依赖的选型理由与代价**见 `specs/0001-email-forwarding-service/design.md`。
 - `.python-version` —— 锁定 3.13（不得改动）。
 - `uv.lock` —— 依赖解析与锁定的唯一真源，随依赖变更一起提交。
 - `.pre-commit-config.yaml` —— pre-commit 挂钩清单与 `commit-msg` 阶段；启用命令为 `uv run pre-commit install --install-hooks` 与 `uv run pre-commit install --hook-type commit-msg`。

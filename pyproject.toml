@@ -37,7 +37,10 @@ dependencies = [
     "fastapi",
     "imapclient",
     "pydantic-settings",
-    "sqlalchemy",
+    # [asyncio] extra：异步引擎与 AsyncSession 需要 greenlet，而 greenlet 由 SQLAlchemy
+    # 自身的 extra 声明（不引入新上游）。实测证据见
+    # docs/research/03-dependencies-and-toolchain.md。
+    "sqlalchemy[asyncio]",
     "structlog",
     "uvicorn[standard]",
 ]
