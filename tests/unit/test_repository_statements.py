@@ -109,8 +109,14 @@ def _repository_trees() -> dict[str, ast.Module]:
 _NEXT_ATTEMPT_AT_COLUMN_SQL: Final = str(PendingMessage.next_attempt_at.__clause_element__())
 
 
-def _iter_clause_elements(clause: ClauseElement) -> Iterator[ClauseElement]:
-    """递归遍历子句树（只用公开的 ``get_children()``，不读私有属性）。"""
+def _iter_clause_elements(clause: ClauseElement | None) -> Iterator[ClauseElement]:
+    """递归遍历子句树（只用公开的 ``get_children()``，不读私有属性）。
+
+    ``None``（语句根本没有 ``WHERE``）时产不出元素，由调用方的判据断言兜底：
+    谓词缺失必须让那条断言红，不在这里另加「非空」守卫。
+    """
+    if clause is None:
+        return
     yield clause
     for child in clause.get_children():
         if child is not None:
@@ -169,12 +175,10 @@ class TestClaimStatementCompilesWithSkipLocked:
         for direction in DIRECTIONS:
             now = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
             statement = pending.claim_due_statement(direction=direction, now=now, batch_size=10)
-            whereclause = statement.whereclause
-            assert whereclause is not None, "认领语句必须带 WHERE（AC-26）"
 
             equalities = [
                 node
-                for node in _iter_clause_elements(whereclause)
+                for node in _iter_clause_elements(statement.whereclause)
                 if isinstance(node, BinaryExpression)
                 and node.operator is operators.eq
                 and getattr(node.left, "name", None) == "direction"
