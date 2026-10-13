@@ -418,7 +418,10 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 `LOG_FORMAT` 的两条渲染分支都必须遵守同一个口径：**异常由 processor 渲染进结构化字段 `exception` 一次，渲染器只负责排版**。落点是 `logging.py`，下面两条配置必须同时成立，删改其中任一条即破坏本节承诺：
 
 1. `ProcessorFormatter(keep_exc_info=False)`。
-2. **console 分支的 `final_processors` 必须在 `ConsoleRenderer` 之前包含 `format_exc_info`**——漏掉它，异常就改由 `ConsoleRenderer` 自行渲染，两种格式不再同源，「渲染器只负责排版」当即不成立。
+2. **console 分支的 `final_processors` 必须在 `ConsoleRenderer` 之前包含 `format_exc_info`**——漏掉它，异常就改由 `ConsoleRenderer` 自行渲染，两种格式不再同源，「渲染器只负责排版」当即不成立。这条配置的可观察判据有两条，回归断言（`tests/unit/test_logging_output.py`）用它们各自钉一件事：
+   - **判据①：行首形态。** 去 ANSI 后必须**恰有一行**的行首是 `Traceback (most recent call last):`——这是 plain traceback 的形态；异常改由 `ConsoleRenderer` 渲染时，它被画进带 `│ ` 前缀与面板标题的 rich 框里，没有任何一行的行首是它。这条判据**不依赖任何字形**。
+   - **判据②：不得出现面板框线**（`╭` / `╰`）。它直接对应下面的「不带重复框」。
+   - 两条是**独立通道**：① 管「异常是不是 processor 渲染出来的 plain traceback」，② 管「有没有退化成面板」。② 的取值依赖 rich 的字形（换版本就可能失真），① 不依赖字形，是更稳的那条——改动 rich 相关依赖时据这两条分别判断。
 
 两种格式都不允许把同一个 traceback 输出两份。
 
@@ -427,16 +430,20 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 - **`json` 保证 JSON-lines**：每条日志记录恰好一行合法 JSON；异常信息只出现在该行的 `exception` 字段里（含完整 traceback），字段内部换行按 JSON 字符串转义。**流里不得出现裸文本行**——按行 `json.loads` 采集的采集器一遇到非 JSON 行就报错，所以「每条记录一行合法 JSON」是契约，不是实现细节。
 - **`console` 是人类可读文本**：事件一行，异常一份（紧随其后的 plain traceback），不带重复框，也不带第二份纯文本。
 
-**实测证据**（同一探针：`INFO` 级别、记一次 `ValueError` 异常，采集 `sys.stderr`）：
+**实测证据**（同一探针：`INFO` 级别，标准库 `logging.getLogger("third.party").error(<事件>, exc_info=True)` 记一次 `ValueError`，采集 `sys.stderr`；「行」指非空行）：
 
-| 格式 | 修复前（`keep_exc_info=True`） | 修复后 |
+| 配置 | `json` | `console` |
 |---|---|---|
-| `json` | 5 个非空行 = 1 行合法 JSON + 4 行裸文本；逐行 `json.loads` 在 4 行上报错，输出流不是 JSON-lines | 1 个非空行 = 恰好 1 行合法 JSON，`exception` 字段含完整 traceback，逐行 `json.loads` 全部通过 |
-| `console` | 22 个非空行，同一 traceback 渲染两份（`raise ValueError(...)` 出现 2 次：rich 框一份 + 标准库追加一份） | 5 个非空行 = 1 行事件 + 1 份 traceback（`raise ValueError(...)` 出现 1 次） |
+| 两条都满足（当前实现） | 1 行 = 恰好 1 行合法 JSON，`exception` 字段含完整 traceback，逐行 `json.loads` 全部通过 | 5 行 = 1 行事件 + 1 份 traceback（`raise ValueError(...)` 出现 1 次、行首命中 1 次、无面板框线） |
+| **只违反第 1 条**（`keep_exc_info=True`，console 链正常） | 5 行 = 1 行合法 JSON + 4 行裸文本；逐行 `json.loads` 在 4 行上报错，输出流不是 JSON-lines | 9 行 = 事件 1 行 + **2 份** plain traceback（多出的是标准库 `logging.Formatter` 追加的那份；行首命中 2 次） |
+| **只违反第 2 条**（console 链缺 `format_exc_info`，`keep_exc_info=False`） | 1 行 = 合法 JSON，**不受影响** | 32 行：异常改由 `ConsoleRenderer` 渲染成 rich 面板（行首命中 **0** 次、面板框线 4 个） |
+| **两条都不满足**（本节修正之前的实现） | 5 行 = 1 行合法 JSON + 4 行裸文本 | 36 行 = rich 面板一份 + 标准库追加的 plain traceback 一份（行首命中 1 次、面板框线 4 个） |
+
+**两条成因必须分开记，不要合并挂到某一条配置名下**：`json` 侧的 4 行裸文本只由第 1 条被违反造成（第 2 条只影响 `console`）；`console` 侧的「第二份 traceback」与「rich 面板」是两件不同的事——前者来自 `keep_exc_info=True`（标准库追加 plain 文本），后者来自第 2 条被违反（`ConsoleRenderer` 自己渲染）。因此「修复前」只有在**两条都不满足**时才是一个确定的状态。绝对行数随探针的**栈深度**变化，只有同一探针内的数字可比（本册早先那张表里的「22 行 / 两份 plain traceback」来自一次未记录探针的测量，且把上面两个成因合并挂在 `keep_exc_info=True` 名下，已就地更正为上表；`console` 的 5 行在两种探针下一致）。
 
 **已否决方向**：
 
-- **保留 `keep_exc_info=True`** —— 它把 `exc_info` 留在 `logging.LogRecord` 上，标准库 `logging.Formatter` 于是再追加一份纯文本 traceback：`json` 流被掺进 4 行非 JSON 文本，直接破坏上文的 JSON-lines 契约（按行采集立即报错）；`console` 同一 traceback 出现两份（4 行涨到 22 行）。它并不产生「保住 traceback」的收益——异常已在 `format_exc_info` 那步渲染进 `exception` 字段，这个 `True` 只制造第二份；它本是对 structlog `keep_exc_info` 默认值（默认即 `False`）的显式覆盖，由来是照抄官方「用 structlog 渲染标准库日志」配方时留下的安全默认，本意「别把 traceback 丢了」已由「异常落在结构化字段里」覆盖。
+- **保留 `keep_exc_info=True`** —— 它把 `exc_info` 留在 `logging.LogRecord` 上，标准库 `logging.Formatter` 于是再追加一份纯文本 traceback：`json` 流被掺进 4 行非 JSON 文本，直接破坏上文的 JSON-lines 契约（按行采集立即报错）；`console` 同一 traceback 出现两份（同一探针下 5 行涨到 9 行；另一份由标准库 `logging.Formatter` 追加，plain 文本）。它并不产生「保住 traceback」的收益——异常已在 `format_exc_info` 那步渲染进 `exception` 字段，这个 `True` 只制造第二份；它本是对 structlog `keep_exc_info` 默认值（默认即 `False`）的显式覆盖，由来是照抄官方「用 structlog 渲染标准库日志」配方时留下的安全默认，本意「别把 traceback 丢了」已由「异常落在结构化字段里」覆盖。
 - **两条分支各自渲染异常**（`json` 走 `format_exc_info`、`console` 只靠 `ConsoleRenderer`）—— 同样能做到「不重复」，但两模式口径不同：一边把异常渲染进字段，另一边由渲染器自行渲染，§4.6 的「任何分支都只渲染一次」就得靠两套写法各自维持。统一到 processor 链上，口径写在配置里而不是写在纪律里。代价如实登记：`console` 的 traceback 由 rich 框（带颜色、带边框、含 locals）退化为 plain traceback，换来的是与 `json` 同源、异常渲染口径只在 processor 链这一处定义。
 
 ## 5. 依赖选型
