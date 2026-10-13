@@ -9,6 +9,7 @@
 #   3) uv run mypy src                类型检查
 #   4) uv run pytest --cov ...        单元与集成测试 + 覆盖率（覆盖率只作诊断，不作门槛）
 #   5) uv run mutmut run              变异测试（证明断言真的能失败）+ 存活逐条复验
+#                                     （先清 mutants/ 做全量变异，保证数字可复现）
 #
 # 第 4、5 步的判据见 docs/research/03-dependencies-and-toolchain.md 的「测试质量的度量口径」；
 # 测试侧规则（哪些该写、怎么写、评审检查表）见 docs/testing.md。
@@ -75,8 +76,22 @@ run_step "[4/5] 单元与集成测试 + 覆盖率（pytest --cov）" pytest --co
 #      by user"，等于静默放过）；
 #   ⑤ 复验出现无法解释的退出码，或复验环境自检不通过。
 # 其余情况一律通过，只把**复验后**的真实存活清单打出来供人工评审。
+#
+# 每次固定删掉 mutants/ 做**全量**变异：mutmut 的增量重跑只重新生成它认为变过的
+# 文件，同一份代码能给出不同的变异体条数（实测见过 83 与 128 两种），门禁数字就不
+# 可复现了；而数字不可复现的基线等于没有基线。全量重跑的代价实测只比增量多约 1 秒
+# （瓶颈在逐条复验，不在变异生成），所以这里不留缓存。mutants/ 只是本次运行的中间
+# 产物，不要指望它跨次复用。
 echo
 echo "==> [5/5] 变异测试（mutmut：证明断言真的能失败）"
+echo "    清空 mutants/ 做全量变异（保证门禁数字可复现）"
+if ! rm -rf "${REPO_ROOT:?}/mutants"; then
+    echo
+    echo "[失败] [5/5] 无法清空 mutants/（做全量变异需要写权限）" >&2
+    echo "门禁未通过：本项目没有 CI 兜底，修完请重跑 scripts/check.sh。" >&2
+    exit 1
+fi
+
 if ! uv run mutmut run; then
     echo
     echo "[失败] [5/5] 变异测试（mutmut 运行失败）" >&2

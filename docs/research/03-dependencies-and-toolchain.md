@@ -37,14 +37,22 @@
 - **存活清单必须经复验才可采信**：`mutmut` 写的存活判定有两处不能直接信，因此门禁对每个判为「存活」的变异体**用全套 `tests/unit` 再跑一次**（`--continue-on-collection-errors`，与变异运行同样只跑单测），按复验退出码重新认定——`0` ＝真存活，非 `0` ＝杀死；复验自带两条对照（不设变异体时全套必须通过、`MUTANT_UNDER_TEST=fail` 必须非 0），挡住「复验其实没加载变异源码」的假象。两处坑：
   1. **mutmut 不是对每个变异体跑全套测试**，它按 `mutants/mutmut-stats.json` 的 `tests_by_mangled_function_name` 给每个变异体只挑 1~2 条它认为相关的用例。实测：`db.models` 的 `x__enum_check`、`x__nullable_enum_check` 名下各只有 1 条用例（`tests/unit/test_db_session.py::test_importing_the_module_does_not_create_an_engine`）——`CHECK` 约束在**模块导入期**构造，被归因给了第一条跑起来的用例。于是这些变异体在 mutmut 眼里「存活」，而全套单测跑起来立刻红：复验把 17 条 `db/models` 变异体从「存活」改判为「杀死」。
   2. **退出码 2 被当成「用户中断」**：`mutmut/stats.py` 的 `status_by_exit_code` 把 pytest 的退出码 2（收集/导入错误）映射成 `check was interrupted by user`，既不算杀死也不算存活，`mutmut-cicd-stats.json` 里也看不到它——导入期就崩的变异体因此被静默放过。复验命令带 `--continue-on-collection-errors`（收集错误按测试失败计、退出码 1），并且门禁另立红线：`.meta` 里出现既非杀死也非存活的退出码（尤其 2）一律判失败并列出清单，交人工处置。
-- **存活变异按三类归因登记，不笼统写「等价变异」**（当前 23 条 = 真等价 8 + 已接受缺口 12 + 真漏测 3）：
-  1. **真等价 8 条**（`logging.configure_logging`）：`TimeStamper` 省略 `utc=True`（默认 False，仅当环境时区为 UTC 时才与实现等价——脆弱等价）、`fmt="ISO"`（大小写不敏感）、`JSONRenderer(ensure_ascii=None)`、`StreamHandler(stream=None)`（默认就是 `sys.stderr`）、`wrapper_class` 取 `None` 或删除（默认就是 `BoundLogger`）、`cache_logger_on_first_use` 取 `None` 或删除（默认就是 `True`）——后两组依赖库的编译默认值，属**脆弱等价**。
+- **存活变异按三类归因登记，不笼统写「等价变异」**（当前 22 条 = 真等价 10 + 已接受缺口 12 + 真漏测 0）：
+  1. **真等价 10 条**（全在 `logging.configure_logging`），逐条的**正确**依据是（`utc` 那条本册此前写错了，已就地更正）：
+     - `TimeStamper` 省略 `utc=True`：structlog 26.1 的签名默认就是 `utc=True`，删掉这个 kwarg 与显式写它落在**同一分支**——**不是**「默认 `False`、只有环境时区为 UTC 时才成立」；
+     - `fmt="ISO"`：`_make_stamper` 用 `fmt.upper() == "ISO"` 比较，大小写不敏感；
+     - `StreamHandler(stream=None)`：标准库默认就是 `sys.stderr`；
+     - `ProcessorFormatter` 的 `keep_exc_info` 取 `None` 或删除：签名默认就是 `False`；
+     - `wrapper_class` 取 `None` 或删除：默认 wrapper 是 `structlog.BoundLogger`，而实现显式传的是 `structlog.stdlib.BoundLogger`，**两者不是同一个类**，只在项目所有可观察输出上一致（这条是行为等价，不是恒等）；
+     - `cache_logger_on_first_use` 取 `None` 或删除（落到库的默认值）、`JSONRenderer(ensure_ascii=None)`（`None` 是假值，与 `False` 同效）。
+     这一组的共同性质是**等价性建立在上游的默认值与判定方式上**：上游改默认值或改 `fmt` 的大小写处理，等价就会失真——属**脆弱等价**，所以必须留在册里，不能只靠「删掉 kwarg 也一样」口口相传。`keep_exc_info=True` 那条**不再是等价变异**，它由 `tests/unit/test_logging_output.py` 的断言杀死（此前记在本册的「真漏测」名下）。
   2. **已接受缺口 12 条**（所有者裁决：不补）：11 条在 `main.create_app`（FastAPI 的 `title` / `description` / `version` / `lifespan` 元数据，以及 `configure_logging` 的入参透传），1 条在 `logging`（`cache_logger_on_first_use=True→False`，真实差异但只影响性能、无可观察输出）。这些改动只能靠**把实现抄进断言**来「发现」，不构成值得测的业务行为。
-  3. **真漏测 3 条**（`logging` 的 `keep_exc_info` 相关变异）：待补断言覆盖，补完后真实存活数相应下降。
+  3. **真漏测 0 条**：上一份基线这一格挂着 3 条 `keep_exc_info` 相关变异，现在已全部落定——`True` 那条被断言杀死，`None` 与删除 kwarg 那两条按上一条归入等价，**没有需要补断言的缺口了**。
   具体清单以 `scripts/check.sh` 第 5 步当次输出与 `uv run mutmut results` 为准——本册只定口径与归因分类，不复述逐条清单（断言一增补，编号与条数就会变）。
 - **变异范围固定为 `tests/unit`**：门禁结论必须与环境无关——容器起没起不能改变门禁是否通过，因此不把需要 Docker 的集成测试纳入变异运行；集成路径由集成测试自身覆盖并由人工核对。
 - **`mutate_only_covered_lines = true`**：只变异被测试执行到的行，于是「存活变异」＝**执行过但没有被断言验证**的缺口；「完全没被执行」的行交给第 4 步的 `term-missing` 暴露。两个工具的分工因此不重叠，而不是各说一遍。
-- **`mutants/` 是工具的工作目录**（源码副本 + 运行缓存），进 `.gitignore`，不提交。
+- **一条已知盲区：配置行的增删可能完全不在变异分数里**。`logging.configure_logging` 的 console 分支里那行 `format_exc_info` 是**处理器列表里的一个元素**，`mutmut` 不为它生成删除变异——于是把这一行删掉，门禁不会红、覆盖率不掉、**变异分数也不掉**。也就是说：「两种格式渲染口径一致」这条契约**不能靠变异测试维持**。它实际由两条独立防线兜住：`tests/unit/test_logging_output.py` 的断言（traceback 头恰好 1 次；输出里没有 rich 框线）与 `docs/testing.md` 的 **R13** 评审项（逐条回到代码确认契约点名的配置行仍在）。**「变异测试看不见」不等于「没有自动检查」**——这两件事不要混着写。
+- **`mutants/` 是工具的工作目录**（源码副本 + 运行缓存），进 `.gitignore`，不提交；门禁每次运行前先删掉它做全量变异（见「实测证据」的取数口径），所以它**不跨次复用**。
 
 **门禁（不跑 CI）**
 
@@ -53,7 +61,7 @@
 - **门禁分两层**：
   1. **pre-commit**——ruff format、ruff lint、commitizen 校验提交信息格式，外加基础文件卫生（行尾空白、文件末尾换行、YAML / TOML 可解析、合并冲突标记、大文件、行尾统一为 LF）。
   2. **一键脚本**——`scripts/check.sh`，固定五步、顺序不可调整：
-     `uv run ruff format --check .` → `uv run ruff check .` → `uv run mypy src` → `uv run pytest`（带覆盖率输出）→ `uv run mutmut run`（变异测试**并逐条复验存活变异**）。
+     `uv run ruff format --check .` → `uv run ruff check .` → `uv run mypy src` → `uv run pytest`（带覆盖率输出）→ `uv run mutmut run`（变异测试**并逐条复验存活变异**；本步固定先清 `mutants/` 做全量变异）。
 - 一键脚本的两个刻意设计：**不接受参数**（避免「本地跑的参数与别人不同」导致门禁不可比），**不加「先起容器」逻辑**（让门禁依赖尽量少，才能随手就跑）。任一步失败立即以非零退出码结束，后续步骤不再执行。
 - **已知代价**：`git commit --no-verify` 可以跳过 pre-commit，且没有任何远端机制拦截；「这个改动跑过测试了吗」只能靠信任。这是接受不跑 CI 的直接代价，不另做补偿机制。
 - **标准不得为了变绿而放宽**：mypy 要求完整类型标注、不允许 `# type: ignore` 兜底；`mypy src` 是门禁的一部分。某个库确实缺类型存根时，处置是先在册里留下结论，再在 `[[tool.mypy.overrides]]` 中按 module 精确放行，**不得整体关闭**。pytest 的标准同样不放宽。
@@ -101,14 +109,14 @@
   - `ruff format --check .` → `74 files already formatted`；
   - `ruff check .` → 零告警，退出码 0；
   - `mypy src` → `Success: no issues found in 26 source files`；
-  - `pytest --cov --cov-report=term-missing` → `158 passed`，覆盖率 `98%`；
-  - `mutmut run` + 存活复验 → **128 个变异体**，mutmut 记 `killed 88 / survived 40`，逐条复验后**真实 `105 杀 / 23 存活`**（变异分数约 82%），退出码 0（未触发任何一条红线）。
-- **变异基线的取数口径**：上条数字取自**清空 `mutants/` 后的全量重跑**（`rm -rf mutants/`）；带着旧缓存增量重跑时，`mutmut` 只对源码变过的文件重新生成变异体，条数会与基线不一致，纵向比较前先清缓存。
-- **存活复验步已用正反两面自测**：常态下它把 17 条 `db/models` 变异体（mutmut 记「存活」）改判为杀死，`88 杀 / 40 存活` → `105 杀 / 23 存活`；反证做法是临时把 `tests/unit/test_repository_statements.py` 里一条入站插入语句的断言弱化，复验步随即报出 `100 杀 / 28 存活`，多出来的 5 条正是 `inbound.x_inbound_pending_insert_statement` 的变异体（临时改动已逐字节还原）。这说明复验数字来自真实运行，不是常量。
+  - `pytest --cov --cov-report=term-missing` → `162 passed`，覆盖率 `98%`；
+  - `mutmut run` + 存活复验 → **128 个变异体**，mutmut 记 `killed 89 / survived 39`，逐条复验后**真实 `106 杀 / 22 存活`**（变异分数约 83%），退出码 0（未触发任何一条红线）。
+- **变异基线的取数口径：门禁自己保证「全量」**。上条数字取自清空 `mutants/` 后的全量重跑，而且第 5 步现在**每次运行都先 `rm -rf mutants/`**（不再靠人的纪律）。原因是实测发现同一份代码能给出不同数字：带残留缓存增量重跑时 `mutmut` 只重新生成它认为变过的文件（它自己的输出是 `done in 891ms (2 files mutated, 0 ignored, 24 unmodified)`），那一轮只跑了 **83 个变异体**、复验后报 `72 杀 / 11 存活`；而**同一份代码**清缓存后是 128 个变异体、复验后 `106 杀 / 22 存活`。同一批工作里还读到过第三种存活数（39，即缓存恰好与工作区同步时）——**11 / 22 / 39 三种取值、代码没变**，根因是 `mutants/` 里那份 `src/` 与 `tests/` 的快照与工作区不一致（复制期间测试正在被改动）。**数字不可复现的基线等于没有基线**，所以清理写进了脚本；代价实测只比增量多约 1 秒（瓶颈在逐条复验，不在变异生成）。手工跑 `uv run mutmut run` 仍是增量，那种数字不要拿去当基线。
+- **存活复验步已用正反两面自测**：常态下它把 17 条 `db/models` 变异体（mutmut 记「存活」）改判为杀死；反证做过两次、互相独立：① 临时把 `tests/unit/test_repository_statements.py` 里一条入站插入语句的断言弱化，复验报出的存活清单随即多出 `inbound.x_inbound_pending_insert_statement` 那组变异体（实测多 5 条）；② 评审侧在冻结沙箱里去掉 `db/models` 的 CHECK 断言，真实存活数上升、其中 4 条 `db.models` 变异体重新进入真实存活清单。两次反证都同时验证了两端：断言确实在断言，复验步确实在量真实行为（临时改动均已逐字节还原）。
 - **存活复验与容器状态无关**：复验只选 `tests/unit`（`mutants/tests/unit` 收集到 115 个用例，整个人 `mutants/tests` 是 158 个；`tests/unit` 里没有任何 `integration` 标记的用例），实测把 `DATABASE_URL` 指向一个关闭的端口后再复验，判定完全不变（真存活的仍退出码 0、该被杀的仍退出码 1）。因此「容器起没起」不影响第 5 步的结论。
-- **覆盖率与变异分数的分工**（同一次快照上覆盖率 98%、复验后变异分数约 82% = 105/128）——这正是把覆盖率降为诊断指标、把断言质量交给变异测试的实测依据：覆盖率说明「大部分行被执行过」，变异分数说明「哪一部分行为没有被断言验证」。复验后仍存活的 23 条按「测试质量的度量口径」那节的三类归因处理，集中在 `logging.py` 与 `main.py`（阶段 1 存量模块）——这些代码**被执行过**（覆盖率不为零），但没有断言验证过那些行为；`db/models.py` 上那 17 条则根本不是缺口，是 mutmut 的度量缺陷。覆盖率看不出这两种情况的区别，变异测试（复验后）看得出。
+- **覆盖率与变异分数的分工**（同一次快照上覆盖率 98%、复验后变异分数约 83% = 106/128）——这正是把覆盖率降为诊断指标、把断言质量交给变异测试的实测依据：覆盖率说明「大部分行被执行过」，变异分数说明「哪一部分行为没有被断言验证」。复验后仍存活的 22 条按「测试质量的度量口径」那节的三类归因处理，集中在 `logging.py` 与 `main.py`（阶段 1 存量模块）——这些代码**被执行过**（覆盖率不为零），但没有断言验证过那些行为；`db/models.py` 上那 17 条则根本不是缺口，是 mutmut 的度量缺陷。覆盖率看不出这两种情况的区别，变异测试（复验后）看得出。
 - **第 5 步的红线已逐条自测**：三条原有红线用合成统计验证——`killed=0 / survived=5` → 退出码 1（全部存活＝同义反复）；`total=0` → 退出码 1（配置失效）；`killed=3 / survived=2` → 退出码 0（正常放行）。复验相关的三条也实测过：不设变异体时全套 `tests/unit` 通过、`MUTANT_UNDER_TEST=fail` 退出码非 0（两条对照）；把某个 `.meta` 的退出码人工改成 2 → 门禁退出码 1 并打印中文原因（「mutmut 把 2 当成 check was interrupted by user，等于静默放过」）。
-- **变异测试的增量重跑成本可接受**：第二次运行复用 `mutants/` 里的缓存，`mutmut run` 实测约 2~3 秒（`mutants/` 被删除时才是全量重跑，实测也是几秒）。第 5 步现在的实测总耗时约 25~30 秒（`mutmut run` 约 3 秒 + 逐条复验 40 条约 24 秒；单条复验跑 115 个单测约 0.5 秒），仍在可接受范围。这正是「门禁脚本不吃参数」与「变异范围固定」两条设计能成立的前提。
+- **第 5 步的运行成本可接受，所以可以每次都全量**：整步实测约 30 秒（`mutmut run` 全量重跑约 3 秒 + 逐条复验 39~40 条约 24 秒；单条复验跑 115 个单测约 0.5 秒），而增量与全量实测只差约 1 秒——瓶颈在逐条复验，不在变异生成。这正是「门禁脚本不吃参数」与「变异范围固定」两条设计能成立的前提，也是「把全量重跑写进脚本」这条决定能成立的前提。
 - **新增开发依赖的许可**：`mutmut` BSD-3-Clause、`pytest-cov` MIT、`coverage` Apache-2.0、`libcst` MIT、`textual` MIT、`setproctitle` BSD-3-Clause——全部为宽松许可，与本仓库的 MIT 兼容，未引入 copyleft。
 - **`ruff check` 的全部告警只来自 `RUF001` / `RUF002` / `RUF003`，零处来自其他规则**。把这三条从 `ignore` 中移出后复现（`ruff check . --select RUF001,RUF002,RUF003 --statistics`）：共 **314 处**，其中 `RUF002` 191 处、`RUF001` 92 处、`RUF003` 31 处，**没有第四种规则出现**。当前 `ignore` 生效时同一份代码报 0 处，且没有冒出任何其他规则的告警——这正是「只有中文标点这一处例外，其余标准未动」的直接证据。
 - 同一次 `pytest` 还输出一条 `StarletteDeprecationWarning`：`Using httpx with starlette.testclient is deprecated; install httpx2 instead`，来源是虚拟环境中的 `fastapi/testclient.py`。它说明**测试是跑通的**（`httpx` 在 3.13 上实际可用），风险性质是「将来会不会被上游弃用」，已登记为未定项 E2。
@@ -137,11 +145,12 @@
 - 关掉整个 RUF 规则族 —— 原因：RUF 族还有其他有价值的规则，不能整族关闭。
 - **现在就**把例外改成 `per-file-ignores` 逐文件列举 —— 原因：中文标点在这类文件里**分布极广**，逐文件列举的维护成本高于收益，也不会比全局例外更安全。若将来真的出现全角字符混进标识符或字面量这类**真问题**，再按本册「结论」里那条路径重新评估——届时属于新的决策，要按 `AGENTS.md` §6 重写本册。
 - 为无类型库整体关闭 mypy 检查 —— 原因：本册既定处置是**按 module 精确放行并在册里留下结论**，整体关闭等于降低门禁标准（既有结论的重申）。
-- **把变异分数设成百分比阈值**（例如核心域 ≥80%、一般逻辑 ≥60–70%）—— 原因：数字一旦成为目标就会被反向优化（写同义反复测试、滥用 `# pragma: no mutate` 把存活抹掉），而且没有实测依据支撑任何具体取值；当前基线是 128 个变异体里**复验后** 105 个被杀（约 82%），阈值一起步就会变成「补断言」或「降门槛」的二选一。门禁只卡结构性红线，存活清单交人工评审。
-- **只加覆盖率、不加变异测试** —— 原因：覆盖率衡量执行、不衡量验证。当前工作副本上 128 个变异体里复验后仍有 23 个存活，而覆盖率是 98%——这一类「执行了但没被断言验证」的缺口只有变异测试看得见。
+- **把变异分数设成百分比阈值**（例如核心域 ≥80%、一般逻辑 ≥60–70%）—— 原因：数字一旦成为目标就会被反向优化（写同义反复测试、滥用 `# pragma: no mutate` 把存活抹掉），而且没有实测依据支撑任何具体取值；当前基线是 128 个变异体里**复验后** 106 个被杀（约 83%），阈值一起步就会变成「补断言」或「降门槛」的二选一。门禁只卡结构性红线，存活清单交人工评审。
+- **只加覆盖率、不加变异测试** —— 原因：覆盖率衡量执行、不衡量验证。当前工作副本上 128 个变异体里复验后仍有 22 个存活，而覆盖率是 98%——这一类「执行了但没被断言验证」的缺口只有变异测试看得见。
 - **直接采信 `mutmut results` 的存活清单**（拿它当「哪些行为没被验证」的结论）—— 原因：见「测试质量的度量口径」那两条坑——mutmut 只给每个变异体挑 1~2 条用例，且把退出码 2 当「用户中断」，清单里混着 17 条其实会被杀死的 `db/models` 变异体；存活必须经**全套 `tests/unit` 复验**才可采信。
 - **把 `forkserver_warmup` 改成 `none` 来修存活误报** —— 原因：误报的根因在 **mutmut 的用例选择**（每个变异体只挑 1~2 条相关用例，导入期构造的 `CHECK` 约束被归因给无关用例），不在预热方式；实测把 `forkserver_warmup` 改成 `none` 后逐条判定结果不变，`db/models` 那批仍被记成存活。
 - **把 pytest 退出码 2 当正常值放过**（沿用 `mutmut/stats.py` 的 `check was interrupted by user` 映射）—— 原因：退出码 2 是收集/导入错误，导入期就崩的变异体因此既不进 killed 也不进 survived，`mutmut-cicd-stats.json` 里根本看不到它；复验命令带 `--continue-on-collection-errors` 让它按失败计（退出码 1），并且 `.meta` 里再出现 2 一律判门禁失败。
+- **保留 `mutants/` 缓存、让门禁做增量重跑**（把基线数字建立在增量结果上，或只在文档里叮嘱「比较前先清缓存」）—— 原因：增量重跑时 `mutmut` 只重新生成它认为变过的文件，实测同一份代码曾给出 11 / 22 / 39 三种存活数而门禁全绿；一个会随残留状态变数字的门禁违背它自己的设计意图（「刻意不接受参数，保证所有人跑的是同一套门禁」）。清理已写进 `scripts/check.sh` 第 5 步，全量重跑只比增量多约 1 秒。
 - **把集成测试纳入变异运行范围** —— 原因：门禁结论会随容器是否启动而改变，直接破坏「所有人跑的是同一套门禁」这条前提。
 - **不在门禁里跑变异、只留一条文档命令** —— 原因：本项目不跑 CI，没有任何自动兜底；不进门禁就等于不存在，只会退化成口头约定。
 - 使用 mutmut 2 —— 原因：mutmut 3+ 的执行模型支持函数级缓存与增量重跑（实测重跑约 3 秒），2 的模型做不到，会让门禁慢到没人愿意跑。
@@ -154,7 +163,7 @@
 - `.python-version` —— 锁定 3.13（不得改动）。
 - `uv.lock` —— 依赖解析与锁定的唯一真源，随依赖变更一起提交。
 - `.pre-commit-config.yaml` —— pre-commit 挂钩清单与 `commit-msg` 阶段；启用命令为 `uv run pre-commit install --install-hooks` 与 `uv run pre-commit install --hook-type commit-msg`。
-- `scripts/check.sh` —— 一键门禁的唯一入口（必须 LF、无 BOM）；Windows 版 `check.ps1` 已删除。第 5 步的**存活复验**（逐条用全套 `tests/unit` 重跑存活变异体、按复验退出码重新认定）也落在这里。
+- `scripts/check.sh` —— 一键门禁的唯一入口（必须 LF、无 BOM）；Windows 版 `check.ps1` 已删除。第 5 步的**存活复验**（逐条用全套 `tests/unit` 重跑存活变异体、按复验退出码重新认定）与**固定先清 `mutants/` 做全量变异**（保证数字可复现）都落在这里。
 - `scripts/README.md` —— 脚本清单、门禁为什么重要、与 Docker 的关系、五步门禁各自的判据与常见问题处置。
 - `tests/unit/` —— 不依赖数据库与网络的纯逻辑单测，边界写在 `tests/unit/README.md`；需要真实 PostgreSQL 与邮件服务的用例放 `tests/integration/`。
 - `docs/open-questions.md` —— 未定项的唯一清单（本册「未定项」段只放指针）。

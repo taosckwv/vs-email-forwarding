@@ -136,7 +136,7 @@ chore: 升级 ruff 到 v0.16.x
 bash scripts/check.sh
 ```
 
-脚本依次执行：`ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut`（变异测试）。各步判据见 `scripts/README.md` 与 `docs/research/03-dependencies-and-toolchain.md`；测试该写什么、怎么写见 `docs/testing.md`。
+脚本依次执行：`ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut`（变异测试）**+ 逐条复验存活变异体**。各步判据见 `scripts/README.md` 与 `docs/research/03-dependencies-and-toolchain.md`；测试该写什么、怎么写见 `docs/testing.md`。
 
 **首次克隆后安装钩子**（只需一次；本机尚未安装）：
 
