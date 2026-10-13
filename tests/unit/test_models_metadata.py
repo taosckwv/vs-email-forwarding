@@ -7,8 +7,9 @@
 期望值来源（`docs/testing.md` R2，逐项都直取规格文本，不从被测模块推导）：
 
 * 列清单与可空性、受控枚举列、索引与 `CHECK` 清单：`design.md` §2.1 / §2.2；
-* `attempt_count` / `next_attempt_at` 为 NOT NULL 且默认 `0` / `now()`、其余时间列不加
-  DDL 默认值且允许 NULL：`design.md` §2.4 / §2.5 与 T-2 派工口径第 6 条；
+* `attempt_count` / `next_attempt_at` 为 NOT NULL 且默认 `0` / `now()`；`created_at` 为
+  **NOT NULL 但不加** DDL 默认值；其余「事件时刻」列不加 DDL 默认值且允许 NULL：
+  `design.md` §2.4 / §2.5；
 * `messages.parent_id` 自引用外键 + 级联删除：`design.md` §2.2（`NFR-8`）。
 
 **本文件刻意不断言 `CHECK` 的 `sqltext` 正文**（把实现抄进断言 = 同义反复期望值）。这里断言
@@ -52,7 +53,7 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "attempt_count": False,
         "next_attempt_at": False,
         "last_error_class": True,
-        "created_at": True,
+        "created_at": False,
     },
     "messages": {
         "id": False,
@@ -71,7 +72,7 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "next_attempt_at": False,
         "last_error_class": True,
         "last_smtp_code": True,
-        "created_at": True,
+        "created_at": False,
         "sent_at": True,
         "received_at": True,
         "reviewed_at": True,
@@ -83,7 +84,7 @@ EXPECTED_COLUMNS: dict[str, dict[str, bool]] = {
         "subject": True,
         "body": True,
         "last_error_class": True,
-        "created_at": True,
+        "created_at": False,
         "reviewed_at": True,
     },
     "imap_cursors": {
@@ -163,14 +164,20 @@ EXPECTED_CHECKS: dict[str, dict[str, frozenset[str]]] = {
     "imap_cursors": {},
 }
 
-# T-2 派工口径第 6 条 + design.md §2.5：时间列不加 DDL 默认值、允许 NULL、由应用显式写。
-APPLICATION_WRITTEN_TIMESTAMPS: tuple[tuple[str, str], ...] = (
+# design.md §2.1 / §2.5：`created_at` 是保留期（NFR-8）判据，必须 NOT NULL，
+# 且不加 DDL 默认值——漏写要插入失败，而不是静默换掉原始提交时刻。
+CREATED_AT_PINNED: tuple[tuple[str, str], ...] = (
     ("pending_messages", "created_at"),
     ("messages", "created_at"),
+    ("rejected_messages", "created_at"),
+)
+
+# design.md §2.5：其余时间列表示「某个可能尚未发生的事件发生的时刻」，
+# 事件没发生就没有值：不加 DDL 默认值、允许 NULL、由应用显式写。
+NULLABLE_EVENT_TIMESTAMPS: tuple[tuple[str, str], ...] = (
     ("messages", "sent_at"),
     ("messages", "received_at"),
     ("messages", "reviewed_at"),
-    ("rejected_messages", "created_at"),
     ("rejected_messages", "reviewed_at"),
     ("imap_cursors", "updated_at"),
 )
@@ -316,11 +323,20 @@ def test_check_constraints_cover_expected_columns(table_name: str) -> None:
     assert actual == EXPECTED_CHECKS[table_name]
 
 
-@pytest.mark.parametrize(("table_name", "column_name"), APPLICATION_WRITTEN_TIMESTAMPS)
-def test_application_written_timestamp_has_no_ddl_default(
-    table_name: str, column_name: str
-) -> None:
-    # 时间列不加 DDL 默认值、允许 NULL，取时点只有应用一处（design.md §2.5）。
+@pytest.mark.parametrize(("table_name", "column_name"), CREATED_AT_PINNED)
+def test_created_at_is_not_null_without_ddl_default(table_name: str, column_name: str) -> None:
+    # design.md §2.1 / §2.5：保留期判据非空；DDL 里恰好是「NOT NULL 且没有 DEFAULT」。
+    column = _table(table_name).c[column_name]
+    assert column.nullable is False
+    assert column.server_default is None
+    assert (
+        _column_ddl(table_name, column_name) == f"{column_name} TIMESTAMP WITH TIME ZONE NOT NULL"
+    )
+
+
+@pytest.mark.parametrize(("table_name", "column_name"), NULLABLE_EVENT_TIMESTAMPS)
+def test_nullable_event_timestamp_has_no_ddl_default(table_name: str, column_name: str) -> None:
+    # 事件时刻列不加 DDL 默认值、允许 NULL，取时点只有应用一处（design.md §2.5）。
     column = _table(table_name).c[column_name]
     assert column.nullable is True
     assert column.server_default is None

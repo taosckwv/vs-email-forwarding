@@ -22,8 +22,10 @@
 ## 列的可空性口径
 
 ``attempt_count`` / ``next_attempt_at`` 为 NOT NULL 且带 DDL 默认值 ``0`` / ``now()``：
-建行即等于 ``0`` 与当前时刻，抢占查询可直接用（``design.md`` §2.4）。**其余时间列不加
-DDL 默认值、允许 NULL**，由应用在写入时显式给值——取时点只有应用一处，不用 ``func.now()``
+建行即等于 ``0`` 与当前时刻，抢占查询可直接用（``design.md`` §2.4）。``created_at`` 为
+**NOT NULL 但不加** DDL 默认值：它是保留期（``NFR-8``）判据、不可为空，而漏写这一列必须是
+**插入失败**而不是静默换成搬运时刻（``design.md`` §2.5）。**其余「事件时刻」列不加 DDL
+默认值、允许 NULL**，由应用在写入时显式给值——取时点只有应用一处，不用 ``func.now()``
 兜底（``design.md`` §2.5、``plan.md`` §5.2）。
 """
 
@@ -117,7 +119,7 @@ class PendingMessage(Base):
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )
     last_error_class: Mapped[str | None] = mapped_column(sa.Text)
-    created_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         _enum_check("direction", _DIRECTIONS, "ck_pending_messages_direction_values"),
@@ -179,7 +181,7 @@ class Message(Base):
     )
     last_error_class: Mapped[str | None] = mapped_column(sa.Text)
     last_smtp_code: Mapped[int | None] = mapped_column(sa.Integer)
-    created_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     received_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     reviewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
@@ -273,7 +275,7 @@ class RejectedMessage(Base):
     subject: Mapped[str | None] = mapped_column(sa.Text)
     body: Mapped[str | None] = mapped_column(sa.Text)
     last_error_class: Mapped[str | None] = mapped_column(sa.Text)
-    created_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
     __table_args__ = (

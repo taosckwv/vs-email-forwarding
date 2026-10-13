@@ -64,7 +64,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
         sa.Column("last_error_class", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "direction IN ('outbound', 'inbound')",
             name="ck_pending_messages_direction_values",
@@ -103,7 +103,7 @@ def upgrade() -> None:
         ),
         sa.Column("last_error_class", sa.Text(), nullable=True),
         sa.Column("last_smtp_code", sa.Integer(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
@@ -166,7 +166,7 @@ def upgrade() -> None:
         sa.Column("subject", sa.Text(), nullable=True),
         sa.Column("body", sa.Text(), nullable=True),
         sa.Column("last_error_class", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "direction IN ('outbound', 'inbound')",
