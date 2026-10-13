@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """IMAP 收信适配。
 
 收信走 IMAP：单专用回复邮箱 + UID 游标增量拉取 + 用 ``References`` / ``In-Reply-To``

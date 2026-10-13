@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """`db/models.py` 的元数据形状：四张表、列与可空性、索引、自引用外键、`CHECK` 清单。
 
 **不连数据库**：只读 SQLAlchemy 的内存元数据（`models.metadata`），因此属 `tests/unit/`

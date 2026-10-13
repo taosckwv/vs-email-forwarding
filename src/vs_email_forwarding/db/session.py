@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """异步引擎与会话工厂：进程级单例引擎 + 按阶段开的短会话。
 
 生命周期口径（`docs/architecture.md` §5）：

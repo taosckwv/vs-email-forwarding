@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """pytest 公共夹具与测试环境准备。
 
 ``tests/`` 下各目录按仓库约定不放 ``__init__.py``，靠本文件与各目录的 ``README.md``

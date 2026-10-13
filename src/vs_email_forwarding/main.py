@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """应用入口：FastAPI 应用工厂与进程生命周期钩子。
 
 可用 ``uvicorn vs_email_forwarding.main:app`` 直接启动。

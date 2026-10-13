@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """健康检查接口的单元测试（预研阶段唯一能真实验证的行为）。"""
 
 from __future__ import annotations

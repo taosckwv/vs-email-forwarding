@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """首版迁移：四张邮件表、六项索引（八条 ``Index``）、全部 ``CHECK`` 与一处自引用外键。
 
 真源：`specs/0001-email-forwarding-service/design.md` §2.1 / §2.2；落点、顺序与

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """API v1 路由聚合。
 
 负责把 v1 版本下的各子路由拼装成一个 ``api_router`` 供 ``main.create_app()`` 挂载。

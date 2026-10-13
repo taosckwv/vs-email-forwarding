@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """健康检查路由。"""
 
 from __future__ import annotations

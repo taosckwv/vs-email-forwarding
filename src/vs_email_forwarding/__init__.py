@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """邮件中转服务：DSH 会话通过 HTTP API 投递邮件，由本服务负责审查、发送与回收回复。"""
 
 __version__ = "0.1.0"

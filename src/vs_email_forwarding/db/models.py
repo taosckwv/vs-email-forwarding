@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """四张表的 ORM 模型（数据模型真源：`design.md` §2）。
 
 ## 表与落点

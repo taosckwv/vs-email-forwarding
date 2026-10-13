@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """数据库层。
 
 职责：

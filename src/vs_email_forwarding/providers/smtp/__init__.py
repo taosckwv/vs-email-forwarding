@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """SMTP 发信适配。
 
 发信走 SMTP 直连（企业邮箱 / 自建 MTA），主机、端口、账号、口令、是否 STARTTLS

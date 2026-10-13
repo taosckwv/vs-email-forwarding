@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """日志配置层。
 
 统一使用 structlog，并接管标准库 logging（uvicorn、第三方库的日志同样按本模块

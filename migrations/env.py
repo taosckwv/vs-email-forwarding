@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Alembic 迁移环境：用异步引擎跑迁移，连接串只从配置层取。
 
 口径：
