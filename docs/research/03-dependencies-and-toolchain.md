@@ -49,6 +49,7 @@
 - 一键脚本的两个刻意设计：**不接受参数**（避免「本地跑的参数与别人不同」导致门禁不可比），**不加「先起容器」逻辑**（让门禁依赖尽量少，才能随手就跑）。任一步失败立即以非零退出码结束，后续步骤不再执行。
 - **已知代价**：`git commit --no-verify` 可以跳过 pre-commit，且没有任何远端机制拦截；「这个改动跑过测试了吗」只能靠信任。这是接受不跑 CI 的直接代价，不另做补偿机制。
 - **标准不得为了变绿而放宽**：mypy 要求完整类型标注、不允许 `# type: ignore` 兜底；`mypy src` 是门禁的一部分。某个库确实缺类型存根时，处置是先在册里留下结论，再在 `[[tool.mypy.overrides]]` 中按 module 精确放行，**不得整体关闭**。pytest 的标准同样不放宽。
+- **本包自己声明 PEP 561 类型化**：`src/vs_email_forwarding/py.typed` 是类型标记（与 `pyproject.toml` 的 `Typing :: Typed` classifier 配套），使「单独对 `tests/` 跑 mypy」不再把本包当无类型第三方库。**门禁范围不变：仍是 `mypy src`（`[tool.mypy] files = ["src"]` 与 `scripts/check.sh` 第 3 步都不动）**；测试不进类型门禁，但手工对 `tests/` 跑 mypy 也要求零问题，作为独立检查（判据与实测见「实测证据」）。
 - **不跑 CI 的代价之一是「没有自动化的兼容性验证」**：原本可以在 CI 里加一个「在目标发行版容器里安装依赖」的任务来提前暴露问题，这条路不存在了；因此部署链的兼容性只能靠**人工预演**兜底（预演环境的判定见 `docs/research/01-delivery-and-deploy.md`）。
 
 **版本与 CHANGELOG（手工维护）**
@@ -88,7 +89,7 @@
 
 ## 实测证据
 
-- **门禁五项全绿**（在当前工作副本上逐一执行，命令入口即 `scripts/check.sh` 的五个步骤）：
+- **门禁五项全绿**（**早期快照：业务逻辑尚未实现时**；当前值见本节末的 `py.typed` 条）：
   - `ruff format --check .` → `56 files already formatted`；
   - `ruff check .` → 零告警，退出码 0；
   - `mypy src` → `Success: no issues found in 17 source files`；
@@ -108,6 +109,7 @@
 - **门禁全绿的适用范围**：业务逻辑尚未实现，`src/` 下只有包占位与一个能返回 `/healthz` 的最小入口。因此上述绿只证明**工程配置与工具链可用**，不证明任何业务正确性。
 - **依赖许可与类型标注的实测结果**见 `specs/0001-email-forwarding-service/design.md` 的「实测证据」一节（本册不复述）。
 - **两个无类型存根库的实测结论**：`asyncpg` 与 `imapclient` 的包目录下都不存在 `py.typed`，在 `src/` 下 import 它们后跑 `mypy src` 各报一条 `Skipping analyzing "…": module is installed, but missing library stubs or py.typed marker [import-untyped]`；`sqlalchemy` 与 `alembic` 都有 `py.typed`，因此不放行——这正是放行范围只覆盖前两个的依据。**这两条放行还没有落进 `pyproject.toml`**（该文件 mypy 段记有这条处置）：没有对应 import 的 `[[tool.mypy.overrides]]` 会被 mypy 报成 `unused section(s)`，所以放行与第一个真正 import 该库的模块同一次改动落地。
+- **本包 `py.typed` 的实测结论**（阶段 2 收口后补）：`src/vs_email_forwarding/` 此前没有 `py.typed`（而 `pyproject.toml` 已带 `Typing :: Typed` classifier，属声明与实物不一致）。补 marker 前单独对测试树跑 mypy 会把本包当无类型第三方库：`uv run mypy tests` → **17 条**（16 条 `import-untyped` + 1 条 `var-annotated`）；补 marker 后同命令 **Success（6 files）**。marker 让类型真正流进测试代码，随即暴露两条此前被 `Any` 掩盖的真实问题并已修掉（`test_repositories.py` 的 `FromClause` 没有 `.delete()`；`test_repository_statements.py` 向 `_iter_clause_elements` 传了 `ColumnElement | None`），修后 `uv run mypy src tests` → **Success（32 files）**。构建产物实测：`uv build` 的 wheel 含 `vs_email_forwarding/py.typed`（`RECORD` 有条目），sdist 含同路径，**无需 `[tool.hatch.build]` 配置**（hatchling 默认收录包目录下全部文件）。当前门禁快照：`ruff format --check` 72 files、`ruff check` 零告警、**`mypy src` → 26 source files 零问题**、`pytest --cov` 125 passed（覆盖率 98%）、`mutmut run` 125 个变异体（killed 59 / survived 66，未触发红线）。
 - **`sqlalchemy[asyncio]` 的实测证据**（随第一个异步引擎模块落地）：启用 extra 前虚拟环境里没有任何 `greenlet`（`grep -c 'name = "greenlet"' uv.lock` → **0**；`import greenlet` → `ModuleNotFoundError: No module named 'greenlet'`），`import sqlalchemy.ext.asyncio` 实测失败：`ImportError: The SQLAlchemy asyncio module requires that the Python 'greenlet' library is installed.  In order to ensure this dependency is available, use the 'sqlalchemy[asyncio]' install target:  'pip install sqlalchemy[asyncio]'`，该异常的 `__cause__` 为 `ModuleNotFoundError: No module named 'greenlet'`。`sqlalchemy-2.1.4.dist-info/METADATA` 实测含 `Provides-Extra: asyncio` 与 `Requires-Dist: greenlet>=1; extra == "asyncio"`——即 `greenlet` 由 SQLAlchemy 自身声明、**不引入新上游**；同一份 METADATA 里 `[postgresql-asyncpg]`、`[aiomysql]`、`[aioodbc]`、`[asyncmy]`、`[aiosqlite]` 五个 extra 也都以 `sqlalchemy[asyncio]` 为前置。启用 extra 后 `uv sync` 只新增 `greenlet==3.5.6`（`Requires-Python: >=3.10`，本机 Python 3.13 装到 cp313 wheel），`uv.lock` 在 sqlalchemy 包的 `[package.optional-dependencies]` 下记录 `asyncio = [{ name = "greenlet" }]`——它确实来自该 extra，而不是新增的顶层依赖。许可实测：`greenlet-3.5.6.dist-info/METADATA` 的 `License-Expression: MIT AND PSF-2.0`，随包 `License-File: LICENSE` 与 `LICENSE.PSF`；两段都是宽松许可，与本仓库 MIT 兼容，未引入 copyleft。启用后再测 `import sqlalchemy.ext.asyncio` 正常导入（sqlalchemy 2.1.4）。
 
 ## 已否决方向
