@@ -54,7 +54,12 @@ async def db_engine() -> AsyncIterator[AsyncEngine]:
     # 只清测试库的表（集成测试只准清 vs_email_forwarding_test）。
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        for table in (RejectedMessage.__table__, Message.__table__, PendingMessage.__table__):
+        for table in (
+            RejectedMessage.__table__,
+            Message.__table__,
+            PendingMessage.__table__,
+            ImapCursor.__table__,
+        ):
             await conn.execute(table.delete())
     yield engine
     await engine.dispose()
@@ -684,3 +689,196 @@ class TestRejectedInsertAndExists:
         finally:
             await session.rollback()
             await session.close()
+
+
+# ---------------------------------------------------------------------------
+# T-9：imap_cursors 读取 / 初始化 / UIDVALIDITY 变化重置 / 同事务推进
+# （design §2.2 游标表、plan §5.4 流③：撞唯一键不得把游标推进一起回滚）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.db.models import ImapCursor  # noqa: E402
+from vs_email_forwarding.db.repositories.cursors import (  # noqa: E402
+    advance_cursor,
+    ensure_cursor,
+    read_cursor,
+)
+
+
+class TestCursorEnsureAndRead:
+    """初始化（UIDNEXT - 1）、重复 ensure 不重写、UIDVALIDITY 变化即重置。"""
+
+    async def test_ensure_initializes_last_uid_to_uidnext_minus_one(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            state = await ensure_cursor(
+                session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 初始 last_uid = UIDNEXT - 1：UID 是 1 起算的闭区间（design §2.2）。
+        assert state == (111, 99)
+        assert await read_cursor(session, "reply@example.com") == (111, 99)
+
+    async def test_ensure_same_uidvalidity_keeps_last_uid(self, db_engine: AsyncEngine) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            await ensure_cursor(
+                session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
+            )
+            await session.execute(
+                sa.update(ImapCursor)
+                .where(ImapCursor.mailbox == "reply@example.com")
+                .values(last_uid=150)
+            )
+            # 同一 UIDVALIDITY 再 ensure：这是「拉取前的例行走一次」，不得重置进度。
+            state = await ensure_cursor(
+                session, "reply@example.com", uidvalidity=111, uidnext=200, now=_NOW
+            )
+            await session.commit()
+        finally:
+            await session.close()
+        assert state == (111, 150)
+
+    async def test_ensure_with_new_uidvalidity_resets_last_uid(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            await ensure_cursor(
+                session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
+            )
+            await session.execute(
+                sa.update(ImapCursor)
+                .where(ImapCursor.mailbox == "reply@example.com")
+                .values(last_uid=150)
+            )
+            # UIDVALIDITY 变化：信箱内容已被整体替换，进度作废、回到 UIDNEXT - 1。
+            state = await ensure_cursor(
+                session, "reply@example.com", uidvalidity=222, uidnext=50, now=_NOW
+            )
+            await session.commit()
+        finally:
+            await session.close()
+        assert state == (222, 49)
+
+    async def test_read_missing_cursor_returns_none(self, db_engine: AsyncEngine) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            assert await read_cursor(session, "reply@example.com") is None
+        finally:
+            await session.close()
+
+
+class TestCursorAdvance:
+    """逐封同事务推进：只前进、不回退；撞唯一键不得把推进一起回滚（AC-11 / AC-39）。"""
+
+    async def test_advance_is_monotonic(self, db_engine: AsyncEngine) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            await ensure_cursor(
+                session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
+            )
+            first = await advance_cursor(
+                session, "reply@example.com", uidvalidity=111, uid=105, now=_NOW
+            )
+            await session.commit()
+            # 回退尝试：更小的 UID 不写行。
+            backward = await advance_cursor(
+                session, "reply@example.com", uidvalidity=111, uid=104, now=_NOW
+            )
+            # UIDVALIDITY 不匹配：不写行。
+            foreign = await advance_cursor(
+                session, "reply@example.com", uidvalidity=999, uid=200, now=_NOW
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert first is True
+        assert backward is False
+        assert foreign is False
+        assert await read_cursor(session, "reply@example.com") == (111, 105)
+
+    async def test_duplicate_insert_does_not_rollback_advance(self, db_engine: AsyncEngine) -> None:
+        """同一事务内「撞唯一键的落库被幂等忽略 + 游标照常推进」一并提交（plan §5.4 流③）。"""
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            await ensure_cursor(
+                session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
+            )
+            await session.commit()
+
+            # 预置一条已落待审表的入站行（占据唯一键 mailbox+uidvalidity+uid）；
+            # 游标回退后流③ 会重取这封并再写一次——那正是撞唯一键的场景。
+            existing_id = uuid.uuid4()
+            async with db_engine.begin() as conn:
+                await conn.execute(
+                    sa.insert(PendingMessage).values(
+                        id=existing_id,
+                        direction="inbound",
+                        recipient="reply@example.com",
+                        subject="已有待审行",
+                        body="已有正文",
+                        mailbox="reply@example.com",
+                        uidvalidity=111,
+                        uid=101,
+                        created_at=_NOW - timedelta(hours=1),
+                    )
+                )
+
+            # 流③ 的同一事务：先写重复的待审行（被唯一键幂等挡住），再推进游标。
+            duplicate_id = uuid.uuid4()
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+            await session.execute(
+                pg_insert(PendingMessage)
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        PendingMessage.mailbox,
+                        PendingMessage.uidvalidity,
+                        PendingMessage.uid,
+                    ],
+                    # 部分唯一索引只覆盖入站行（WHERE direction = 'inbound'）。
+                    index_where=PendingMessage.direction == "inbound",
+                )
+                .values(
+                    id=duplicate_id,
+                    direction="inbound",
+                    recipient="reply@example.com",
+                    subject="重复回复",
+                    body="重复正文",
+                    mailbox="reply@example.com",
+                    uidvalidity=111,
+                    uid=101,
+                    created_at=_NOW,
+                )
+            )
+            advanced = await advance_cursor(
+                session, "reply@example.com", uidvalidity=111, uid=101, now=_NOW
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 撞唯一键的插入被忽略（不抛出、不回滚），游标推进与提交一并生效。
+        assert advanced is True
+        assert await read_cursor(session, "reply@example.com") == (111, 101)
+        async with db_engine.connect() as conn:
+            pending_for_uid = (
+                (
+                    await conn.execute(
+                        sa.select(PendingMessage.id).where(
+                            PendingMessage.mailbox == "reply@example.com",
+                            PendingMessage.uidvalidity == 111,
+                            PendingMessage.uid == 101,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert pending_for_uid == [existing_id]  # 重复行未写入，原行仍在
