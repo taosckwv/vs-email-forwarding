@@ -15,6 +15,8 @@ uv run alembic -c migrations/alembic.ini downgrade -1                # 回滚一
 uv run alembic -c migrations/alembic.ini revision --rev-id 0002 -m "add something"
 ```
 
+**本仓库所有 alembic 调用都必须带 `-c migrations/alembic.ini`**——无论写在哪个文件、是命令清单还是行文提及。`alembic.ini` 在 `migrations/` 下，不在仓库根目录，裸跑 `alembic upgrade head` 会以 exit 255 报 `No 'script_location' key found in configuration.`；容器内执行同样要求工作目录是仓库根目录（`script_location = migrations` 与 `prepend_sys_path = .` 都相对它解析）。
+
 ## 约定
 
 1. **禁止手工 DDL。** 任何建表、加字段、加索引、改约束都必须通过迁移脚本完成，不允许直接在数据库里执行 SQL 了事——否则开发、预演、生产三套环境一定会不一致。
