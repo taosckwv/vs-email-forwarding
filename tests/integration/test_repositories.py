@@ -723,18 +723,17 @@ class TestCursorEnsureAndRead:
     async def test_ensure_initializes_last_uid_to_uidnext_minus_one(
         self, db_engine: AsyncEngine
     ) -> None:
-        session = AsyncSession(bind=db_engine, expire_on_commit=False)
-        try:
+        # session 用 async with 托管，读回留在同一会话上下文内：close 之后再借连接
+        # 不会归还池（docs/code-style.md §1 第 4 条）。
+        async with AsyncSession(bind=db_engine, expire_on_commit=False) as session:
             state = await ensure_cursor(
                 session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
             )
             await session.commit()
-        finally:
-            await session.close()
 
-        # 初始 last_uid = UIDNEXT - 1：UID 是 1 起算的闭区间（design §2.2）。
-        assert state == (111, 99)
-        assert await read_cursor(session, "reply@example.com") == (111, 99)
+            # 初始 last_uid = UIDNEXT - 1：UID 是 1 起算的闭区间（design §2.2）。
+            assert state == (111, 99)
+            assert await read_cursor(session, "reply@example.com") == (111, 99)
 
     async def test_ensure_same_uidvalidity_keeps_last_uid(self, db_engine: AsyncEngine) -> None:
         session = AsyncSession(bind=db_engine, expire_on_commit=False)
@@ -790,8 +789,8 @@ class TestCursorAdvance:
     """逐封同事务推进：只前进、不回退；撞唯一键不得把推进一起回滚（AC-11 / AC-39）。"""
 
     async def test_advance_is_monotonic(self, db_engine: AsyncEngine) -> None:
-        session = AsyncSession(bind=db_engine, expire_on_commit=False)
-        try:
+        # session 用 async with 托管，读回留在同一会话上下文内（docs/code-style.md §1 第 4 条）。
+        async with AsyncSession(bind=db_engine, expire_on_commit=False) as session:
             await ensure_cursor(
                 session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
             )
@@ -808,18 +807,16 @@ class TestCursorAdvance:
                 session, "reply@example.com", uidvalidity=999, uid=200, now=_NOW
             )
             await session.commit()
-        finally:
-            await session.close()
 
-        assert first is True
-        assert backward is False
-        assert foreign is False
-        assert await read_cursor(session, "reply@example.com") == (111, 105)
+            assert first is True
+            assert backward is False
+            assert foreign is False
+            assert await read_cursor(session, "reply@example.com") == (111, 105)
 
     async def test_duplicate_insert_does_not_rollback_advance(self, db_engine: AsyncEngine) -> None:
         """同一事务内「撞唯一键的落库被幂等忽略 + 游标照常推进」一并提交（plan §5.4 流③）。"""
-        session = AsyncSession(bind=db_engine, expire_on_commit=False)
-        try:
+        # session 用 async with 托管，读回留在同一会话上下文内（docs/code-style.md §1 第 4 条）。
+        async with AsyncSession(bind=db_engine, expire_on_commit=False) as session:
             await ensure_cursor(
                 session, "reply@example.com", uidvalidity=111, uidnext=100, now=_NOW
             )
@@ -874,12 +871,10 @@ class TestCursorAdvance:
                 session, "reply@example.com", uidvalidity=111, uid=101, now=_NOW
             )
             await session.commit()
-        finally:
-            await session.close()
 
-        # 撞唯一键的插入被忽略（不抛出、不回滚），游标推进与提交一并生效。
-        assert advanced is True
-        assert await read_cursor(session, "reply@example.com") == (111, 101)
+            # 撞唯一键的插入被忽略（不抛出、不回滚），游标推进与提交一并生效。
+            assert advanced is True
+            assert await read_cursor(session, "reply@example.com") == (111, 101)
         async with db_engine.connect() as conn:
             pending_for_uid: Sequence[uuid.UUID] = (
                 (
