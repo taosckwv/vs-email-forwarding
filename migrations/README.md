@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-异步迁移外壳已落地：`alembic.ini`（**不写连接串**）、`env.py`（异步引擎 + 环境变量优先的连接串来源）、`script.py.mako`（迁移脚本模板）。版本文件放在 `versions/`，首版迁移是 `0001_create_mail_tables`（四张表 + 六项索引 + 全部 `CHECK` + 一处自引用外键）。
+异步迁移外壳已落地：`alembic.ini`（**不写连接串**）、`env.py`（异步引擎；连接串只从配置层取，见约定 7）、`script.py.mako`（迁移脚本模板）。版本文件放在 `versions/`，首版迁移是 `0001_create_mail_tables`（四张表 + 六项索引 + 全部 `CHECK` + 一处自引用外键）。
 
-迁移命令一律**在仓库根目录**执行；连接串由 `env.py` 解析（优先环境变量 `DATABASE_URL`，未设时用 `config.get_settings().database_url`）：
+迁移命令一律**在仓库根目录**执行；连接串由配置层解析——`config.get_settings().database_url`，它按 pydantic-settings 口径读环境变量 `DATABASE_URL`（优先）与 `.env`：
 
 ```bash
 uv run alembic -c migrations/alembic.ini history                     # 查看版本链
@@ -23,7 +23,7 @@ uv run alembic -c migrations/alembic.ini revision --rev-id 0002 -m "add somethin
 4. **改表结构属于不可逆决策。** 按 `AGENTS.md` §6，必须先把决策写进它的落点（本特性的 `specs/<特性>/design.md`；跨特性底座写 `docs/research/` 下对应主题册）的『结论』段（被否决的方向写进『已否决方向』段），再来写迁移。
 5. **一个迁移对应一个可解释的意图。** 不要把互不相关的改动塞进同一个迁移文件。
 6. **离线和生产环境不手工跑 Alembic**：统一通过 `deploy/migrate.sh`（在应用容器内执行 `uv run alembic upgrade head`）。注意该脚本在迁移存在之前执行会失败，这是预期行为。
-7. **不在本目录写死连接串。** `alembic.ini` 里没有 `sqlalchemy.url` 取值，`env.py` 只从环境变量 `DATABASE_URL` 或 `config.get_settings().database_url` 取；需要覆盖连接串时用环境变量，不要改仓库文件。`--sql` 离线模式不支持（见 `env.py` 的模块说明）。
+7. **不在本目录写死连接串。** `alembic.ini` 里没有 `sqlalchemy.url` 取值，`env.py` 只从 `config.get_settings().database_url` 取——**不直接读环境变量**（`AGENTS.md` §7）。该配置入口按 pydantic-settings 口径读环境变量 `DATABASE_URL`（优先）与 `.env`，所以需要覆盖连接串时照旧用环境变量、不要改仓库文件。`--sql` 离线模式不支持（见 `env.py` 的模块说明）。
 
 ## 相关文件
 

@@ -1,10 +1,11 @@
-"""Alembic 迁移环境：用异步引擎跑迁移，连接串只从环境变量或配置层取。
+"""Alembic 迁移环境：用异步引擎跑迁移，连接串只从配置层取。
 
 口径：
 
-* **连接串来源**：环境变量 ``DATABASE_URL`` 优先；未设时用 ``config.get_settings().database_url``
-  （唯一配置入口）。本模块自己不读 ``.env``、也不在 ``alembic.ini`` 里放连接串
-  （`AGENTS.md` §7「配置只从 config 读」，集成测试用「环境变量覆盖、不改仓库配置」的口径）。
+* **连接串来源**：唯一入口是 ``config.get_settings().database_url``，本模块**不直接访问
+  进程环境变量**（`AGENTS.md` §7：配置只从 ``config`` 读）。该字段
+  本身按 pydantic-settings 口径读环境变量 ``DATABASE_URL``（**优先**）与 ``.env``，因此集成测试
+  用「环境变量覆盖、不改仓库文件」的口径照旧成立；``alembic.ini`` 里不放连接串。
 * **引擎**：``async_engine_from_config`` + ``poolclass=NullPool``——迁移是一次性进程，
   连接用完即弃，不缓存也不复用连接池。
 * **``target_metadata``**：``db/models.py`` 的 ``metadata``，是迁移的 DDL 真源
@@ -16,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -39,8 +39,8 @@ target_metadata = models.metadata
 
 
 def database_url() -> str:
-    """环境变量 ``DATABASE_URL`` 优先，未设（或为空）时用配置层的 ``database_url``。"""
-    return os.environ.get("DATABASE_URL") or get_settings().database_url
+    """迁移用的连接串：只从配置层取（环境变量覆盖由 ``get_settings()`` 自己处理）。"""
+    return get_settings().database_url
 
 
 def run_migrations_offline() -> None:
