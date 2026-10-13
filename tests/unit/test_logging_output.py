@@ -239,7 +239,8 @@ def test_exception_is_rendered_exactly_once(
     `exception` 字段里；`console` 事件一行 + 异常一份（plain traceback，不带框、不带第二份纯文本）。
     两个断言都落在**实际采集到的输出**上：`keep_exc_info=True` 时 `json` 会多出 4 行裸文本（逐行
     `json.loads` 就在这里失败），`console` 的 traceback 会渲染两份（计数变 2）；若把 console 链上的
-    `format_exc_info` 删掉，`ConsoleRenderer` 会自己渲染成 rich 框（计数变 0、出现框线）。
+    `format_exc_info` 删掉，`ConsoleRenderer` 会自己渲染成 rich 框（行首命中 0、出现框线）。console
+    一侧用两条独立判据钉住这一点——行首形态与不得出现面板框线，各自的依据见下面的注释。
     """
     configure_logging("INFO", fmt)
     _log_exception(path_name, event, marker)
@@ -258,7 +259,17 @@ def test_exception_is_rendered_exactly_once(
         assert plain.count(_TRACEBACK_HEADER) == 1, plain
         assert f"ValueError: {marker}" in plain
         assert event in plain
-        # §4.6 第 2 条硬要求（console 链必须在 `ConsoleRenderer` 之前包含 `format_exc_info`）：
-        # 漏掉那一步，异常就改由 `ConsoleRenderer` 自己渲染成 rich 框（带框线、带 locals），
-        # 「渲染器只负责排版、两模式同源」当即不成立。
+        # §4.6 第 2 条硬要求（console 链必须在 `ConsoleRenderer` 之前包含 `format_exc_info`），
+        # 由下面两条判据各自盯一件事；它们不是彼此的重述，依据与耦合边界都写在这里：
+        # ① 行首形态：plain traceback 的头部必须**恰有一行**以它开头。漏掉 `format_exc_info`
+        #    时异常改由 `ConsoleRenderer` 自行渲染，被画进带 `│ ` 前缀与面板标题的 rich 框里，
+        #    没有任何一行的行首是它——所以这条判据直接对应「异常是 processor 渲染的 plain
+        #    traceback」，且**不依赖任何字形**（rich 换字形也不会让它失真）。
+        # ② 无面板框线（`_RICH_PANEL_CHARS`）：直接对应 §4.6「不带重复框」。字形的取值随 rich
+        #    版本可能变，这条比 ① 脆——① 与 ② 是两条独立通道（① 管「是不是 processor 渲染的
+        #    plain」，② 管「有没有退化成面板」），任一条单独红都说明配置被人改坏了。
+        header_at_line_start = [
+            line for line in plain.splitlines() if line.startswith(_TRACEBACK_HEADER)
+        ]
+        assert len(header_at_line_start) == 1, plain
         assert not any(box in plain for box in _RICH_PANEL_CHARS), plain
