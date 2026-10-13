@@ -19,8 +19,8 @@
 
 ## 阶段 1：数据模型与迁移
 
-- [ ] `T-1` （前置 无）核对 `src/vs_email_forwarding/constants.py` 与 `design.md` §2.3 / §3.4 逐项一致（六态取值与中文名、合法迁移、`CHECK` 取值集合、十一类丢弃原因、拒审来源、`ErrorClass`、`MAX_ATTEMPTS` 与退避表、`4xx` / `5xx` 区间、时间戳格式），确认它零项目内 import，缺项就地补齐 — `FR-11` / `AC-17`
-- [ ] `T-2` （前置 `T-1`）四张表的 ORM 模型：字段、`CHECK`、六项索引、`parent_id` 自引用外键与级联删除 — `FR-11` / `AC-22`
+- [x] `T-1` （前置 无）核对 `src/vs_email_forwarding/constants.py` 与 `design.md` §2.3 / §3.4 逐项一致（六态取值与中文名、合法迁移、`CHECK` 取值集合、十一类丢弃原因、拒审来源、`ErrorClass`、`MAX_ATTEMPTS` 与退避表、`4xx` / `5xx` 区间、时间戳格式），确认它零项目内 import，缺项就地补齐 — `FR-11` / `AC-17`
+- [x] `T-2` （前置 `T-1`）四张表的 ORM 模型：字段、`CHECK`、六项索引、`parent_id` 自引用外键与级联删除 — `FR-11` / `AC-22`
 - [ ] `T-3` （前置 `T-1`）异步引擎与会话工厂：进程级单例、按阶段开短会话、退出时 `dispose()` — `FR-13` / `AC-19`
 - [ ] `T-4` （前置 `T-2`）Alembic 异步迁移外壳（`alembic.ini` 不写连接串、`env.py`、`script.py.mako`）与 `migrations/README.md` 的就地改写 — `FR-11` / `AC-32`
 - [ ] `T-5` （前置 `T-4`、`T-3`）首版迁移 `0001_create_mail_tables`：四张表 + 六项索引 + 全部 `CHECK` + 一处自引用外键，`upgrade()` / `downgrade()` 都实现 — `FR-11` / `AC-22`
