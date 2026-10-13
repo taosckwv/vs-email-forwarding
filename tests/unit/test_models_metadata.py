@@ -18,12 +18,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from sqlalchemy import CheckConstraint, Enum, Index, Text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from vs_email_forwarding.db import models
+
+if TYPE_CHECKING:
+    # 只给类型检查看：`_table()` 的返回标注用它，运行时不需要真的 import。
+    from sqlalchemy import Table
 
 # ---------------------------------------------------------------------------
 # 期望值：design.md §2.1 的字段清单，拆成「必须显式给值（NOT NULL）」与「允许 NULL」两组。
@@ -170,16 +176,16 @@ APPLICATION_WRITTEN_TIMESTAMPS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _table(name: str) -> object:
+def _table(name: str) -> Table:
     return models.metadata.tables[name]
 
 
 def _checks(table_name: str) -> list[CheckConstraint]:
-    return [c for c in _table(table_name).constraints if isinstance(c, CheckConstraint)]  # type: ignore[attr-defined]
+    return [c for c in _table(table_name).constraints if isinstance(c, CheckConstraint)]
 
 
 def _index(table_name: str, index_name: str) -> Index:
-    for index in _table(table_name).indexes:  # type: ignore[attr-defined]
+    for index in _table(table_name).indexes:
         if index.name == index_name:
             return index
     raise AssertionError(f"{table_name} 缺少索引 {index_name}")
@@ -187,9 +193,7 @@ def _index(table_name: str, index_name: str) -> Index:
 
 def _column_ddl(table_name: str, column_name: str) -> str:
     """单列在建表 DDL 里的那一行（列类型 + 默认值 + NOT NULL 归属）。"""
-    ddl = str(
-        CreateTable(_table(table_name)).compile(dialect=postgresql.dialect())  # type: ignore[arg-type]
-    )
+    ddl = str(CreateTable(_table(table_name)).compile(dialect=postgresql.dialect()))
     for line in ddl.splitlines():
         stripped = line.strip()
         if stripped.startswith(f"{column_name} "):
@@ -213,12 +217,12 @@ def test_four_tables_are_declared() -> None:
 
 @pytest.mark.parametrize("table_name", sorted(EXPECTED_COLUMNS))
 def test_column_names_match_design(table_name: str) -> None:
-    assert set(_table(table_name).columns.keys()) == set(EXPECTED_COLUMNS[table_name])  # type: ignore[attr-defined]
+    assert set(_table(table_name).columns.keys()) == set(EXPECTED_COLUMNS[table_name])
 
 
 @pytest.mark.parametrize("table_name", sorted(EXPECTED_COLUMNS))
 def test_nullability_belongs_to_expected_columns(table_name: str) -> None:
-    actual = {column.name: column.nullable for column in _table(table_name).columns}  # type: ignore[attr-defined]
+    actual = {column.name: column.nullable for column in _table(table_name).columns}
     assert actual == EXPECTED_COLUMNS[table_name]
 
 
@@ -227,7 +231,7 @@ def test_controlled_columns_are_text_backed_by_check(table_name: str) -> None:
     # 受控枚举一律以文本列存储，取值合法性由 CHECK 兜底（design.md §2.1 / §2.2）。
     check_names = {check.name for check in _checks(table_name)}
     for column_name in EXPECTED_ENUM_COLUMNS[table_name]:
-        assert isinstance(_table(table_name).c[column_name].type, Text)  # type: ignore[attr-defined]
+        assert isinstance(_table(table_name).c[column_name].type, Text)
         assert f"ck_{table_name}_{column_name}_values" in check_names
 
 
@@ -240,9 +244,7 @@ def test_no_native_enum_type_is_used() -> None:
 
 @pytest.mark.parametrize("table_name", sorted(EXPECTED_INDEXES))
 def test_index_names_match_design(table_name: str) -> None:
-    assert {index.name for index in _table(table_name).indexes} == set(  # type: ignore[attr-defined]
-        EXPECTED_INDEXES[table_name]
-    )
+    assert {index.name for index in _table(table_name).indexes} == set(EXPECTED_INDEXES[table_name])
 
 
 @pytest.mark.parametrize(
@@ -319,7 +321,7 @@ def test_application_written_timestamp_has_no_ddl_default(
     table_name: str, column_name: str
 ) -> None:
     # 时间列不加 DDL 默认值、允许 NULL，取时点只有应用一处（design.md §2.5）。
-    column = _table(table_name).c[column_name]  # type: ignore[attr-defined]
+    column = _table(table_name).c[column_name]
     assert column.nullable is True
     assert column.server_default is None
 
