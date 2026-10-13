@@ -26,24 +26,75 @@ from sqlalchemy.dialects import postgresql
 from vs_email_forwarding.constants import MAX_CLAIMABLE_ATTEMPT_COUNT
 from vs_email_forwarding.db.repositories import inbound, pending
 
-_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-_REPOSITORIES_DIR: Final = _REPO_ROOT / "src" / "vs_email_forwarding" / "db" / "repositories"
+
+def _repository_root() -> Path:
+    """锚定真实仓库根：从本文件向上找到 ``.git`` 所在目录。
+
+    不能用 ``parents[2]`` 固定回数推导：mutmut 把测试复制到 ``mutants/tests/``
+    下运行，``parents[2]`` 会解析到 ``mutants/``，扫描对象变成 mutmut 自生成的
+    变异体（含 ``skip_locked=None`` 之类变异函数），stats 采集必红——五步门禁
+    第五步自 T-6 起结构性红（门禁发现 GATE-T16-MUTMUT-1）。``mutants/`` 下
+    没有 ``.git``（却有 pyproject.toml，故不能拿它当锚），向上找 ``.git``
+    恒定落在真实仓库根。
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ".git").exists():
+            return parent
+    raise AssertionError("测试不在仓库内运行：向上未找到 .git")
+
+
+_REPOSITORIES_DIR: Final = (
+    _repository_root() / "src" / "vs_email_forwarding" / "db" / "repositories"
+)
 
 #: 规格规定的认领谓词上界（attempt_count <= 4）。与 constants 断言一致，防漂移。
 _EXPECTED_CLAIM_ATTEMPT_BOUND: Final = 4
 
+#: 仓储层应有的模块清单（plan.md §2.4 的六个仓储模块 + 包 ``__init__``）。
+#: 扫描面守卫的期望值来自规格，不来自被测目录的运行时内容。
+_EXPECTED_REPOSITORY_MODULES: Final = frozenset(
+    {
+        "__init__.py",
+        "cleanup.py",
+        "cursors.py",
+        "inbound.py",
+        "messages.py",
+        "pending.py",
+        "rejected.py",
+    }
+)
+
 
 def _repository_sources() -> dict[str, str]:
-    """读出仓储层全部源码，供 AST 扫描。"""
+    """读出真实仓储层全部源码（``.git`` 锚定，mutmut 环境下不指向 ``mutants/``）。"""
     return {
         path.name: path.read_text(encoding="utf-8")
         for path in sorted(_REPOSITORIES_DIR.rglob("*.py"))
     }
 
 
+def _drop_mutmut_functions(tree: ast.Module) -> ast.Module:
+    """就地剔除 mutmut 生成的 ``x_*__mutmut_*`` 变异函数（第二道防线）。
+
+    mutmut 3 的 trampoline 会把每个函数复制为 ``x_<名>__mutmut_orig`` 与
+    ``x_<名>__mutmut_<n>``（各变异版）；即使扫描面意外落进 ``mutants/``，
+    被审对象也只是真实函数，不是变异体。
+    """
+    tree.body = [
+        node
+        for node in tree.body
+        if not (
+            isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and "__mutmut_" in node.name
+        )
+    ]
+    return tree
+
+
 def _repository_trees() -> dict[str, ast.Module]:
+    """全部仓储模块的语法树（已剔除变异函数）：三条 AST 扫描共用本口径。"""
     return {
-        name: ast.parse(source, filename=name) for name, source in _repository_sources().items()
+        name: _drop_mutmut_functions(ast.parse(source, filename=name))
+        for name, source in _repository_sources().items()
     }
 
 
@@ -109,7 +160,18 @@ class TestApprovalStatementIdempotent:
 
 
 class TestNoBareSqlOrTwoStepClaim:
-    """AST 扫描：仓储层无 text() 裸串；认领写法唯一（AC-26）。"""
+    """AST 扫描：仓储层无 text() 裸串；认领写法唯一（AC-26）。
+
+    三条扫描与扫描面守卫共用 :func:`_repository_trees` 的同一口径：
+    ``.git`` 锚定的真实 src + 剔除 ``x_*__mutmut_*`` 变异函数（双防线）。
+    """
+
+    def test_scan_surface_is_real_repository_source(self) -> None:
+        # 扫描面守卫：断言确实作用于真实 src——模块清单齐、非空、路径不含
+        # mutants/（mutmut 把本文件复制到 mutants/tests/ 下运行，锚定失效时
+        # 这条最先红，不会让别的断言拿变异体当被审对象）。
+        assert "mutants" not in str(_REPOSITORIES_DIR)
+        assert set(_repository_sources()) == _EXPECTED_REPOSITORY_MODULES
 
     def test_no_text_calls_in_repositories(self) -> None:
         for name, tree in _repository_trees().items():
@@ -122,8 +184,8 @@ class TestNoBareSqlOrTwoStepClaim:
 
     def test_no_raw_sql_string_literals_in_repositories(self) -> None:
         forbidden = ("SELECT ", "INSERT INTO", "UPDATE ", "DELETE FROM")
-        for name, source in _repository_sources().items():
-            for node in ast.walk(ast.parse(source, filename=name)):
+        for name, tree in _repository_trees().items():
+            for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     for fragment in forbidden:
                         assert not node.value.upper().startswith(fragment), (
@@ -133,7 +195,7 @@ class TestNoBareSqlOrTwoStepClaim:
     def test_claim_builder_uses_with_for_update_skip_locked(self) -> None:
         # 「两步写法」的防线：认领必须以 with_for_update(skip_locked=True) 锁行取数，
         # 而不是先取数判断再更新。
-        tree = ast.parse(_repository_sources()["pending.py"], filename="pending.py")
+        tree = _repository_trees()["pending.py"]
         found = False
         for node in ast.walk(tree):
             if (
