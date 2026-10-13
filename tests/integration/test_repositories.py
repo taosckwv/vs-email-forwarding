@@ -303,3 +303,228 @@ class TestIdempotentFinalization:
         assert source == "review_rejected"
         assert direction == "inbound"
         assert subject == "夹具主题（无真实收件人）"  # 入站保留主题供复核
+
+
+# ---------------------------------------------------------------------------
+# T-7：messages 发信侧认领与条件 UPDATE（plan §5.1 / §5.2）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.constants import (  # noqa: E402  # 用例按任务分节排布
+    ERROR_CLASSES,
+    MESSAGE_STATES,
+)
+from vs_email_forwarding.db.repositories.messages import (  # noqa: E402
+    claim_due_send_messages,
+    mark_failed_from_sent,
+    mark_send_failed,
+    mark_sent,
+)
+
+_SENDING: str = MESSAGE_STATES[3]
+_SENT: str = MESSAGE_STATES[4]
+_FAILED: str = MESSAGE_STATES[5]
+
+
+async def _insert_message(
+    db_engine: AsyncEngine,
+    *,
+    status: str = _SENDING,
+    attempt_count: int = 0,
+    next_attempt_at: datetime | None = None,
+    sent_at: datetime | None = None,
+) -> uuid.UUID:
+    """构造一条出站邮件行（夹具数据，等同断言：改动须按 R10 评审）。"""
+    message_id = uuid.uuid4()
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            sa.insert(Message).values(
+                id=message_id,
+                direction="outbound",
+                status=status,
+                message_id=f"<fixture-{message_id}@example.com>",
+                recipient="colleague@example.com",
+                subject="夹具主题（无真实收件人）",
+                body="夹具正文",
+                attempt_count=attempt_count,
+                next_attempt_at=next_attempt_at or _NOW,
+                sent_at=sent_at,
+                created_at=_NOW - timedelta(hours=1),
+            )
+        )
+    return message_id
+
+
+async def _fetch_message(
+    db_engine: AsyncEngine, message_id: uuid.UUID
+) -> tuple[str, int, datetime, datetime | None]:
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    Message.status,
+                    Message.attempt_count,
+                    Message.next_attempt_at,
+                    Message.sent_at,
+                ).where(Message.id == message_id)
+            )
+        ).first()
+    assert row is not None
+    return row[0], row[1], row[2], row[3]
+
+
+class TestSendClaim:
+    """发信认领：只命中 sending + outbound + attempt_count<=4 且到点的行。"""
+
+    async def test_claim_returns_due_sending_row_with_backoff(self, db_engine: AsyncEngine) -> None:
+        message_id = await _insert_message(db_engine)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed = await claim_due_send_messages(session, now=_NOW, batch_size=10)
+            claimed_ids = [row.id for row in claimed]
+            # 认领（阶段①）是已提交的短事务（plan §5.1），照实提交。
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert claimed_ids == [message_id]
+        status, attempt_count, next_attempt_at, _ = await _fetch_message(db_engine, message_id)
+        assert status == _SENDING
+        assert attempt_count == 1
+        # 退避推进：认领第 1 次推 15s（退避表真源在 constants）。
+        assert (next_attempt_at - _NOW).total_seconds() == RETRY_BACKOFF_SECONDS[1]
+
+    async def test_claim_skips_sent_and_inbound_rows(self, db_engine: AsyncEngine) -> None:
+        await _insert_message(db_engine, status=_SENT)
+        await _insert_message(db_engine, status=_FAILED)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed = await claim_due_send_messages(session, now=_NOW, batch_size=10)
+        finally:
+            await session.rollback()
+            await session.close()
+        # 认领谓词只认 status = sending：终态行不属于任何流（design §2.3）。
+        assert claimed == []
+
+    async def test_claim_harvest_face_at_four_is_untouched(self, db_engine: AsyncEngine) -> None:
+        stuck_at = _NOW - timedelta(seconds=1)
+        message_id = await _insert_message(
+            db_engine, attempt_count=MAX_ATTEMPTS, next_attempt_at=stuck_at
+        )
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed = await claim_due_send_messages(session, now=_NOW, batch_size=10)
+            claimed_ids = [row.id for row in claimed]
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 收割支命中面：第 4 次认领的行被返回但不递增、不推退避（无第 5 次投递）。
+        assert claimed_ids == [message_id]
+        _, attempt_count, next_attempt_at, _ = await _fetch_message(db_engine, message_id)
+        assert attempt_count == MAX_ATTEMPTS
+        assert next_attempt_at == stuck_at
+
+    async def test_claim_beyond_four_never_hit(self, db_engine: AsyncEngine) -> None:
+        await _insert_message(db_engine, attempt_count=MAX_ATTEMPTS + 1)
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed = await claim_due_send_messages(session, now=_NOW, batch_size=10)
+        finally:
+            await session.rollback()
+            await session.close()
+        assert claimed == []
+
+
+class TestConditionalUpdates:
+    """条件 UPDATE：只允许声明的起点，rowcount = 0 按幂等忽略。"""
+
+    async def test_mark_sent_only_from_sending(self, db_engine: AsyncEngine) -> None:
+        message_id = await _insert_message(db_engine)
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            first = await mark_sent(session, message_id, now=_NOW)
+            await session.commit()
+            # 第二次写：起点已不是 sending，rowcount = 0 → 幂等忽略、不报错。
+            second = await mark_sent(session, message_id, now=_NOW)
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert first is True
+        assert second is False
+        status, _, _, sent_at = await _fetch_message(db_engine, message_id)
+        assert status == _SENT
+        assert sent_at == _NOW
+
+    async def test_mark_send_failed_from_sending(self, db_engine: AsyncEngine) -> None:
+        message_id = await _insert_message(db_engine)
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            outcome = await mark_send_failed(
+                session,
+                message_id,
+                error_class="permanent",
+                smtp_code=550,
+                now=_NOW,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert outcome is True
+        status, _, _, sent_at = await _fetch_message(db_engine, message_id)
+        assert status == _FAILED
+        assert sent_at is None  # 失败不写 sent_at
+
+    async def test_mark_send_failed_rejects_non_sending_start(self, db_engine: AsyncEngine) -> None:
+        message_id = await _insert_message(db_engine, status=_SENT)
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            outcome = await mark_send_failed(
+                session, message_id, error_class="permanent", smtp_code=550, now=_NOW
+            )
+        finally:
+            await session.rollback()
+            await session.close()
+        # sent 不是 sending→failed 的合法起点：rowcount = 0，状态原样。
+        assert outcome is False
+        status, _, _, _ = await _fetch_message(db_engine, message_id)
+        assert status == _SENT
+
+    async def test_mark_failed_from_sent(self, db_engine: AsyncEngine) -> None:
+        # 预置非默认的 sent_at 与尝试列：覆写只允许碰 status / last_error_class。
+        sent_before = _NOW - timedelta(minutes=30)
+        pushed_to = _NOW + timedelta(seconds=17)
+        message_id = await _insert_message(
+            db_engine,
+            status=_SENT,
+            attempt_count=2,
+            next_attempt_at=pushed_to,
+            sent_at=sent_before,
+        )
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            outcome = await mark_failed_from_sent(
+                session, message_id, error_class="permanent", now=_NOW
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert outcome is True
+        status, attempt_count, next_attempt_at, sent_at = await _fetch_message(
+            db_engine, message_id
+        )
+        assert status == _FAILED
+        # 退信覆写保留「已发出」的事实，也不碰尝试列（plan §5.2：结果事务
+        # 一律不写 attempt_count / next_attempt_at）。
+        assert sent_at == sent_before
+        assert attempt_count == 2
+        assert next_attempt_at == pushed_to
+
+    async def test_error_class_values_are_controlled(self, db_engine: AsyncEngine) -> None:
+        # 期望值来自规格：错误分类只有 permanent / transient / internal（constants）。
+        assert ERROR_CLASSES == ("permanent", "transient", "internal")
