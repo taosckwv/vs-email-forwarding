@@ -20,6 +20,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import TypedDict
 
 import pytest
 import sqlalchemy as sa
@@ -65,13 +66,27 @@ async def db_engine() -> AsyncIterator[AsyncEngine]:
     await engine.dispose()
 
 
+class _PendingRow(TypedDict):
+    """待审行夹具的字段契约：键名与待审行列一一对应，值是构造时的真实类型。"""
+
+    id: uuid.UUID
+    direction: str
+    message_id: str | None
+    recipient: str
+    subject: str
+    body: str
+    attempt_count: int
+    next_attempt_at: datetime
+    created_at: datetime
+
+
 def _pending_row(
     *,
     attempt_count: int = 0,
     next_attempt_at: datetime | None = None,
     direction: str = "outbound",
     pending_id: uuid.UUID | None = None,
-) -> dict[str, object]:
+) -> _PendingRow:
     """构造一条待审行。字段取值是夹具数据（docs/testing.md R10：等同断言，改动须评审）。"""
     return {
         "id": pending_id or uuid.uuid4(),
@@ -86,10 +101,10 @@ def _pending_row(
     }
 
 
-async def _insert_pending(engine: AsyncEngine, row: dict[str, object]) -> uuid.UUID:
+async def _insert_pending(engine: AsyncEngine, row: _PendingRow) -> uuid.UUID:
     async with engine.begin() as conn:
         await conn.execute(sa.insert(PendingMessage).values(**row))
-    return row["id"]  # type: ignore[return-value]
+    return row["id"]
 
 
 async def _fetch_pending(engine: AsyncEngine, pending_id: uuid.UUID) -> tuple[int, datetime] | None:
@@ -675,9 +690,7 @@ class TestRejectedInsertAndExists:
         # source 只接受三个受控取值（constants 为唯一出处），越界在写入前被拒。
         session = AsyncSession(bind=db_engine, expire_on_commit=False)
         try:
-            import pytest as _pytest
-
-            with _pytest.raises(ValueError):
+            with pytest.raises(ValueError):
                 await insert_rejected_message(
                     session,
                     rejected_id=uuid.uuid4(),
@@ -963,9 +976,11 @@ async def _insert_rejected_row(db_engine: AsyncEngine, created_at: datetime) -> 
     return rejected_id
 
 
-async def _count(db_engine: AsyncEngine, model: type) -> int:
+async def _count(
+    db_engine: AsyncEngine, model: type[Message] | type[PendingMessage] | type[RejectedMessage]
+) -> int:
     async with db_engine.connect() as conn:
-        return len((await conn.execute(sa.select(model.id))).all())  # type: ignore[attr-defined]
+        return len((await conn.execute(sa.select(model.id))).all())
 
 
 class TestCleanupBatching:
@@ -1127,8 +1142,8 @@ class TestMessageStateQueries:
 
         session = AsyncSession(bind=db_engine, expire_on_commit=False)
         try:
-            zero = await pending_attempt_count(session, row_zero["id"])  # type: ignore[arg-type]
-            two = await pending_attempt_count(session, row_two["id"])  # type: ignore[arg-type]
+            zero = await pending_attempt_count(session, row_zero["id"])
+            two = await pending_attempt_count(session, row_two["id"])
             missing = await pending_attempt_count(session, uuid.uuid4())
         finally:
             await session.close()
