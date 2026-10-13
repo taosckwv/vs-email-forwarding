@@ -40,7 +40,7 @@
 - [x] `T-13` （前置 `T-1`）`core/message_id.py` + `tests/unit/test_message_id.py` — `FR-2` / `AC-4`
 - [x] `T-14` （前置 `T-1`）`core/retry.py`（`next_attempt_at(now, attempt)` + 返回码分类）+ `tests/unit/test_retry_policy.py`（含 `AC-21` 的最坏路径算术）— `FR-5` / `AC-9` / `AC-21`
 - [x] `T-15` （前置 `T-1`）`core/states.py` 的六态判定 + `tests/unit/test_states.py` — `FR-11` / `AC-36`
-- [ ] `T-16` （前置 `T-1`）`core/inbound.py` 的 DSN / MDN 结构判定与关联匹配 + `tests/unit/test_inbound_sorting.py` — `FR-9` / `AC-13`
+- [x] `T-16` （前置 `T-1`）`core/inbound.py` 的 DSN / MDN 结构判定与关联匹配 + `tests/unit/test_inbound_sorting.py` — `FR-9` / `AC-13`
 - [ ] `T-17` （前置 `T-1`）`providers/review/base.py` 与 `always_pass.py`（显式标注空实现）+ `tests/unit/test_review_placeholder.py` — `NFR-6` / `AC-25`
 - [ ] `T-18` （前置 `T-17`）`providers/review/factory.py`（依赖覆盖的注入点）— `FR-3` / `AC-6`
 - [ ] `T-19` （前置 `T-1`）`providers/smtp/base.py` 与 `smtplib_sender.py`：显式写 `From` 与 `Reply-To`、超时上界、只回传返回码与分类 — `FR-2` / `AC-5`
