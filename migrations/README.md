@@ -22,7 +22,7 @@ uv run alembic -c migrations/alembic.ini revision --rev-id 0002 -m "add somethin
 3. **文件名用「四位序号 + 下划线 + 英文短语」**，序号与 `revision` 一致，例如 `0001_create_mail_tables.py`。序号用 `--rev-id` 指定（`0001`、`0002`…，`file_template` 已按此配置），`down_revision` 指向上一个序号，首个迁移为 `None`。**文件名一律 ASCII，注释用中文。**
 4. **改表结构属于不可逆决策。** 按 `AGENTS.md` §6，必须先把决策写进它的落点（本特性的 `specs/<特性>/design.md`；跨特性底座写 `docs/research/` 下对应主题册）的『结论』段（被否决的方向写进『已否决方向』段），再来写迁移。
 5. **一个迁移对应一个可解释的意图。** 不要把互不相关的改动塞进同一个迁移文件。
-6. **离线和生产环境不手工跑 Alembic**：统一通过 `deploy/migrate.sh`（在应用容器内执行 `uv run alembic upgrade head`）。注意该脚本在迁移存在之前执行会失败，这是预期行为。
+6. **离线和生产环境不手工跑 Alembic**：统一通过 `deploy/migrate.sh`（在应用容器内执行 `uv run alembic -c migrations/alembic.ini upgrade head`）。注意该脚本在迁移存在之前执行会失败，这是预期行为。
 7. **不在本目录写死连接串。** `alembic.ini` 里没有 `sqlalchemy.url` 取值，`env.py` 只从 `config.get_settings().database_url` 取——**不直接读环境变量**（`AGENTS.md` §7）。该配置入口按 pydantic-settings 口径读环境变量 `DATABASE_URL`（优先）与 `.env`，所以需要覆盖连接串时照旧用环境变量、不要改仓库文件。`--sql` 离线模式不支持（见 `env.py` 的模块说明）。
 
 ## 相关文件

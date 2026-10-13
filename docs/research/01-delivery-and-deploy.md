@@ -62,7 +62,7 @@
 - **校验完整性时先 `cd` 到 tar 所在目录再 `sha256sum -c --status`**；旁路文件缺失时打印实算 hash 供人工比对——这是**降级路径，不是直接失败**。
 - **归档自检必须在生成 `.sha256` 旁路文件之前执行**；自检工具的退出码语义固定为 `0` 通过 / `1` 归档不合格 / `2` 用法或读取错误。
 - **归档自检必须显式指定期望的基础镜像个数**（新链路下是 **3 个**）；旧的「默认 3 / 含预演按 4 计」那套参数语义已随预演环境一起作废，不得沿用。
-- **迁移用 `docker compose run --rm app uv run alembic upgrade head`**：用 `run --rm` 而**不是**对跑着的容器 `exec`；**不要加 `--no-deps`**，让 compose 先把数据库等到 healthy；`migrations/` 里还没有版本时首次迁移**必然失败、属预期**，脚本必须把这条判别法打印出来。
+- **迁移用 `docker compose run --rm app uv run alembic -c migrations/alembic.ini upgrade head`**：用 `run --rm` 而**不是**对跑着的容器 `exec`；**不要加 `--no-deps`**，让 compose 先把数据库等到 healthy；`migrations/` 里还没有版本时首次迁移**必然失败、属预期**，脚本必须把这条判别法打印出来。
 - **`docker compose up -d` 返回 0 不等于服务可用**：启动要同时做 `docker compose up -d` 与 `/healthz` 轮询才算成功（默认 **30 次 × 2s**，可用环境变量覆盖）；从 `.env` 解析端口时要容忍 CR、引号与行尾注释；宿主没有 `curl` 时降级为在容器内用 Python 标准库探测。
 - **介质传输渠道要求**：**可续传、不得改动二进制内容、文件名一律 ASCII、`.env` 单独传输**。
 - **读 `docker load` 的输出用 `sed -n` 而不是 `head`**：`head` 会让 docker 收到 SIGPIPE，在 `set -o pipefail` 下变成假失败（exit 141）。
@@ -107,7 +107,7 @@
   - 基础镜像 tar 的导出、带入与 `docker load` 流程——**待实现**。
   - 交付前单平台归档自检（不依赖 Docker、只用 Python 标准库）——**待实现**；原归档自检脚本（**已随 `deploy/` 一起删除**），其判据已记于本册「结论」，须在待实现的脚本里重建。
   - sha256 旁路文件的生成与校验（两个空格 + LF）——**待实现**。
-  - 迁移与启动脚本（容器内 `alembic upgrade head`、`docker compose up -d` + `/healthz` 轮询后才算成功）——**待实现**。
+  - 迁移与启动脚本（容器内 `alembic -c migrations/alembic.ini upgrade head`、`docker compose up -d` + `/healthz` 轮询后才算成功）——**待实现**。
 
 ## 未定项
 
