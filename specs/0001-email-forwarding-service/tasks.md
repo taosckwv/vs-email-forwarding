@@ -55,7 +55,7 @@
 - [x] `T-25` （前置 `T-9`、`T-12`、`T-16`、`T-21`）`flows/fetch_inbound.py`：取回 → 判定 → 落库 / 置失败 / 按十一类计数丢弃，游标同事务推进 — `FR-9` / `AC-11`
 - [x] `T-26` （前置 `T-6`、`T-8`、`T-18`）`flows/review_inbound.py` — `FR-8` / `AC-12`
 - [x] `T-27` （前置 `T-1`）`schemas/messages.py`（请求 / 响应模型、六态取值、时间序列化）+ `tests/unit/test_schemas.py` — `FR-11` / `AC-17`
-- [ ] `T-28` （前置 `T-27`、`T-12`）`service/submit_message.py` — `FR-1` / `AC-1`
+- [x] `T-28` （前置 `T-27`、`T-12`）`service/submit_message.py` — `FR-1` / `AC-1`
 - [ ] `T-29` （前置 `T-27`、`T-11`）`service/query_message.py` 与 `query_replies.py` — `FR-10` / `AC-15`
 - [ ] `T-30` （前置 `T-27`、`T-28`）`api/v1/messages.py` 三个端点 + `tests/unit/test_request_validation.py` — `FR-1` / `AC-2` / `AC-3` / `AC-33`
 - [ ] `T-31` （前置 `T-30`、`T-3`）`api/v1/dependencies.py` 的鉴权占位、路由注册、`api/v1/health.py` 补数据库探测 — `F3`（鉴权占位，无对应 `AC`）/ `AC-35`

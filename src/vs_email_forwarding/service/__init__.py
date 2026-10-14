@@ -9,5 +9,7 @@
 ``vs_email_forwarding.providers``）、定时任务（走 ``vs_email_forwarding.flows``）。
 
 分层与依赖方向见 ``docs/architecture.md``。
-当前状态：仅占位，尚未实现。
+当前状态：``submit_message.py``（提交邮件用例：生成 ``Message-ID`` → 写出站待审行 → 返回
+``{id, status}``）已落地；其余 ``query_message.py`` / ``query_replies.py`` 随 T-29 落地。
+用例编排与字段定义见 ``specs/0001-email-forwarding-service/design.md`` §3.1 与 ``plan.md`` §2.5。
 """
