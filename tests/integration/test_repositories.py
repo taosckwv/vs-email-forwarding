@@ -1896,3 +1896,141 @@ class TestOutboundTargetsByMessageId:
                 await conn.execute(sa.select(Message.id).where(Message.id == inbound_row))
             ).first()
         assert stored_inbound is not None
+
+
+# ---------------------------------------------------------------------------
+# T-28 前置：出站待审行的建行接缝
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.db.repositories.pending import (  # noqa: E402  # 用例按任务分节排布
+    insert_outbound_pending,
+)
+
+
+class TestOutboundPendingInsert:
+    """提交建行（`design.md` §3.1 / §2.4 / §2.5）：一行可被流① 认领的出站待审行。
+
+    期望值全部来自规格字面量，不来自被测实现：``id`` 即主键、``message_id`` 由提交方
+    按该 ``id`` 与发件域生成（§3.1）；``attempt_count`` 建行即 0、``next_attempt_at``
+    建行即当前时刻（§2.4）；``created_at`` 取提交时刻，`NFR-8` 的 30 天保留期自它起算
+    （§2.5）；入站三要素与 ``parent_id`` 全空——出站行没有 IMAP 来源（§2.1 / §2.2）。
+    """
+
+    #: 提交方新生成的对外 ID（也是主键）与它对应的 Message-ID（夹具数据，R10）。
+    _PENDING_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
+    _MESSAGE_ID = "<33333333-3333-4333-8333-333333333333@example.com>"
+
+    async def _build_row(self, db_engine: AsyncEngine, *, body_format: str = "text") -> None:
+        """走被测接缝建一行出站待审行并提交（受控的提交侧调用形状）。"""
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            await insert_outbound_pending(
+                session,
+                pending_id=self._PENDING_ID,
+                message_id=self._MESSAGE_ID,
+                recipient="colleague@example.com",
+                subject="夹具主题（无真实收件人）",
+                body="夹具正文",
+                body_format=body_format,
+                now=_NOW,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+    async def test_writes_row_with_expected_columns(self, db_engine: AsyncEngine) -> None:
+        await self._build_row(db_engine)
+
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    sa.select(
+                        PendingMessage.direction,
+                        PendingMessage.message_id,
+                        PendingMessage.recipient,
+                        PendingMessage.subject,
+                        PendingMessage.body,
+                        PendingMessage.body_format,
+                        PendingMessage.parent_id,
+                        PendingMessage.mailbox,
+                        PendingMessage.uidvalidity,
+                        PendingMessage.uid,
+                        PendingMessage.attempt_count,
+                        PendingMessage.next_attempt_at,
+                        PendingMessage.created_at,
+                        PendingMessage.last_error_class,
+                    ).where(PendingMessage.id == self._PENDING_ID)
+                )
+            ).one()
+
+        assert row.direction == "outbound"
+        assert row.message_id == self._MESSAGE_ID
+        assert row.recipient == "colleague@example.com"
+        assert row.subject == "夹具主题（无真实收件人）"
+        assert row.body == "夹具正文"
+        assert row.body_format == "text"
+        # 入站三要素与父行必须留空（出站行没有 IMAP 来源，表上的行模型 CHECK 兜底）。
+        assert row.parent_id is None
+        assert row.mailbox is None
+        assert row.uidvalidity is None
+        assert row.uid is None
+        # 建行初值：尚未认领（0 次尝试），两个时间列都取入参 now——若实现改用 func.now()，
+        # 拿到的是真实当前时刻（远晚于夹具的 2025-06-01），这两条即红。
+        assert row.attempt_count == 0
+        assert row.next_attempt_at == _NOW
+        assert row.created_at == _NOW
+        assert row.last_error_class is None
+
+    async def test_new_row_is_claimable_as_outbound(self, db_engine: AsyncEngine) -> None:
+        await self._build_row(db_engine)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed = await claim_due_pending_messages(
+                session, direction="outbound", now=_NOW, batch_size=10
+            )
+        finally:
+            await session.close()
+
+        # 建行即到点（next_attempt_at = now）且 attempt_count = 0 < 4：流① 当轮即可认领，
+        # 且不是收割支（design §3 阶段①）。
+        assert [(row.id, is_harvest) for row, is_harvest in claimed] == [(self._PENDING_ID, False)]
+
+    async def test_new_row_is_invisible_to_inbound_claim(self, db_engine: AsyncEngine) -> None:
+        await self._build_row(db_engine)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed_inbound = await claim_due_pending_messages(
+                session, direction="inbound", now=_NOW, batch_size=10
+            )
+        finally:
+            await session.close()
+
+        # 方向隔离：出站建行不得混进流④ 的入站队列。
+        assert claimed_inbound == []
+        # 夹具前提：那一行确实在库里（不是「没建出来」才认领不到）。
+        async with db_engine.connect() as conn:
+            stored = (
+                await conn.execute(
+                    sa.select(PendingMessage.direction).where(PendingMessage.id == self._PENDING_ID)
+                )
+            ).first()
+        assert stored is not None
+        assert stored[0] == "outbound"
+
+    async def test_body_format_is_written_from_caller(self, db_engine: AsyncEngine) -> None:
+        await self._build_row(db_engine, body_format="html")
+
+        async with db_engine.connect() as conn:
+            stored = (
+                await conn.execute(
+                    sa.select(PendingMessage.body_format).where(
+                        PendingMessage.id == self._PENDING_ID
+                    )
+                )
+            ).scalar_one()
+
+        # html 必须原样入库：写死 text、或漏写该列而落到 server_default 'text'，都会被这条钉住
+        # （取值合法性由 schema 层保证，仓储只做搬运）。
+        assert stored == "html"

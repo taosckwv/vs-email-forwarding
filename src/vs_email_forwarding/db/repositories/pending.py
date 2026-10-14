@@ -4,6 +4,9 @@
 写法口径（真源：`specs/0001-email-forwarding-service/design.md` §3、
 `plan.md` §2.9 / §5.1 ~ §5.3）：
 
+* **建行（提交路径，同步请求）**：``insert_outbound_pending`` 写一行出站待审行
+  （``direction = outbound``、``message_id`` 非空、入站三要素留空、``attempt_count = 0``、
+  ``next_attempt_at`` 与 ``created_at`` 都取入参 ``now``），供流① 认领（``design.md`` §3.1）。
 * **认领（阶段①）**：``select(...).with_for_update(skip_locked=True)``，
   谓词 ``attempt_count <= 4`` 且 ``next_attempt_at <= <绑定的 now 参数>``；
   认领第 n 次（n < 4）在同一事务内把 ``attempt_count`` 推到 n、
@@ -46,8 +49,9 @@ from vs_email_forwarding.constants import (
 from vs_email_forwarding.db.models import Message, PendingMessage, RejectedMessage
 
 # 受控取值一律从 constants 引用，不在本模块重复字面量：
-# 入站取方向集合第二项（DIRECTIONS 即 (outbound, inbound)），
+# 出站 / 入站各取方向集合的一项（DIRECTIONS 即 (outbound, inbound)），
 # sending 是出站六态中 messages.status 的第一个取值。
+_OUTBOUND: Final = DIRECTIONS[0]
 _INBOUND: Final = DIRECTIONS[1]
 _SENDING: Final = MESSAGE_STATES[3]
 
@@ -64,8 +68,61 @@ __all__ = [
     "claim_due_pending_messages",
     "claim_due_statement",
     "harvest_pending_message",
+    "insert_outbound_pending",
     "reject_pending_message",
 ]
+
+
+async def insert_outbound_pending(
+    session: AsyncSession,
+    *,
+    pending_id: uuid.UUID,
+    message_id: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    body_format: str,
+    now: datetime,
+) -> None:
+    """提交路径建行：写一行出站待审行，供流① 认领（``design.md`` §3.1）。
+
+    ``pending_id`` 与 ``message_id`` 由提交方传入：``pending_id`` 既是对外 ID、
+    也是主键（§3.1「``id`` 与主键同值」），``message_id`` 由 ``core/message_id``
+    按该 ``id`` 与发件域生成（同节）——本函数不做任何生成、解析或业务判定。
+
+    建行初值：``attempt_count = 0``、``next_attempt_at`` 与 ``created_at`` **都取入参
+    ``now``**。取时只有用例层一处（``plan.md`` §5.2），不用 ``func.now()`` 兜底；
+    两个时间列必须等于提交时刻——``created_at`` 是 ``NFR-8`` 30 天保留期的起算点
+    （§2.5），``next_attempt_at`` 建行即可被抢占（§2.4）。
+
+    ``direction = outbound``，且 ``parent_id`` / ``mailbox`` / ``uidvalidity`` / ``uid``
+    全部留空：出站行没有 IMAP 来源，这几个字段只属入站行（§2.1 / §2.2 的行模型 CHECK
+    兜底）。``body_format`` 由调用方给（取值合法性由 schema 层保证），本层只做搬运。
+
+    **本建行不是幂等路径**：``pending_id`` 每次提交新生成，撞主键只可能是调用方的
+    编程错误，因此**不**用 ``ON CONFLICT DO NOTHING`` 把它吞掉——入站侧的
+    :func:`insert_inbound_pending` 之所以幂等，是因为那里有 ``(mailbox, uidvalidity, uid)``
+    唯一键要兜住游标回退重拉（§3.4），提交路径没有对应的重复来源。返回 ``None``：
+    没有「是否新写入」这一位可表达，提交方本来就持有 ``pending_id``。
+    """
+    await session.execute(
+        sa.insert(PendingMessage).values(
+            id=pending_id,
+            direction=_OUTBOUND,
+            message_id=message_id,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            body_format=body_format,
+            parent_id=None,
+            mailbox=None,
+            uidvalidity=None,
+            uid=None,
+            attempt_count=0,
+            next_attempt_at=now,
+            created_at=now,
+        )
+    )
 
 
 def claim_due_statement(*, direction: str, now: datetime, batch_size: int) -> Select:
