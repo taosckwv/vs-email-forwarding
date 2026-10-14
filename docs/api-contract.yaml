@@ -89,6 +89,12 @@ paths:
         「该 ID 不存在」与「该邮件还没到某一步」都返回 200：
         前者是 `found: false`，后者是 `found: true` 且尚未发生的时刻为 `null`。
         **不得用 404 之类的状态码区分业务语义。**
+
+        路径参数 `id` 的 **ID 空间只含出站邮件**（`MessageId` 就是「出站邮件的对外 ID」）：
+        拿入站回复行 id（即本文件 `Reply.id`）来查一律返回 `found: false`，**不另设错误码**
+        ——出站六态不表达入站行的终态 `received`，而 `found: true` + `status: null` 又与
+        `MessageStatusResponse.status` 的口径（`found` 为 `false` 时才为 `null`）矛盾。
+        裁决与两条已否决方向见 `specs/0001-email-forwarding-service/design.md` §4.1。
       operationId: getMessage
       parameters:
         - $ref: "#/components/parameters/MessageId"
@@ -116,6 +122,9 @@ paths:
 
         「该 ID 不存在」返回 200 + `found: false` + 空 `replies`；
         「存在但尚无回复」返回 200 + `found: true` + 空 `replies`——**后者是正常状态，不是错误**。
+
+        本端点的 `{id}` 与 `GET /v1/messages/{id}` 是**同一个 ID 空间**（只含出站邮件，
+        入站行 id 返回 `found: false`），口径见该端点的说明。
       operationId: listReplies
       parameters:
         - $ref: "#/components/parameters/MessageId"

@@ -31,7 +31,8 @@
           │ flows/        定时任务层：入口 + 编排         │  五条后台任务
           └─────────────────────────────────────────────┘
 
-        schemas/   Pydantic 请求 / 响应模型（只被 api/ 用）
+        schemas/   Pydantic 请求 / 响应模型（api/ 与 service/ 都用：service/ 在自身作用域内
+                   做 ORM → Pydantic 的转换，见 specs/0001-email-forwarding-service/design.md §8）
         config.py  唯一配置入口（pydantic-settings）+ 启动即校验
         constants.py  服务固定语义常量（状态取值、重试算术、受控枚举）；共享叶子层，谁都能 import 它
         main.py    FastAPI 组装：挂路由、随 lifespan 启停定时任务
@@ -44,7 +45,7 @@
 | 层 | 允许依赖 | 不得依赖 |
 |---|---|---|
 | `api/` | `schemas/`、`service/` | `flows/`、SQL 与仓储、`providers/` 的具体实现 |
-| `service/` | `core/`、`db/`（仓储）、`providers/`（按需） | `api/`、`flows/` |
+| `service/` | `core/`、`db/`（仓储）、`schemas/`（ORM → Pydantic 的转换，`design.md` §8）、`providers/`（按需） | `api/`、`flows/` |
 | `flows/` | `core/`、`db/`（仓储）、`providers/` | `api/`、`service/` |
 | `providers/` | 各自 `base.py` 定义的接口 | `db/`、`core/`、`flows/`、`service/`、`api/` |
 | `db/` | 无——只依赖 ORM 与会话本身 | 任何业务层：`core/`、`providers/`、`flows/`、`service/`、`api/` |
