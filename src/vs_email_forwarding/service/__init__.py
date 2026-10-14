@@ -9,7 +9,10 @@
 ``vs_email_forwarding.providers``）、定时任务（走 ``vs_email_forwarding.flows``）。
 
 分层与依赖方向见 ``docs/architecture.md``。
-当前状态：``submit_message.py``（提交邮件用例：生成 ``Message-ID`` → 写出站待审行 → 返回
-``{id, status}``）已落地；其余 ``query_message.py`` / ``query_replies.py`` 随 T-29 落地。
-用例编排与字段定义见 ``specs/0001-email-forwarding-service/design.md`` §3.1 与 ``plan.md`` §2.5。
+当前状态：同步请求路径的三个用例都已落地——``submit_message.py``（提交：生成 ``Message-ID`` →
+写出站待审行 → 返回 ``{id, status}``）、``query_message.py``（状态查询：``REPEATABLE READ``
+单事务快照内判定六态 → 转成 ``MessageStatusResponse``）、``query_replies.py``（回复查询：
+``received_at ASC, id ASC`` 的 keyset 翻页 → 转成 ``RepliesPageResponse``）。
+用例编排与字段定义见 ``specs/0001-email-forwarding-service/design.md`` §3.1 / §4.1 / §8 与
+``plan.md`` §2.5。
 """
