@@ -157,7 +157,7 @@
 | `body_format` | `html` | HTML 正文 | `pending_messages`、`messages`、审查接口 |
 | `last_error_class` | `permanent` | 永久失败：`5xx`，直接置终态 `failed`，不再消耗剩余重试次数 | `pending_messages`、`messages`、`rejected_messages` |
 | `last_error_class` | `transient` | 临时失败：`4xx` 与连接 / 超时类故障，按固定重试语义重试 | `pending_messages`、`messages`、`rejected_messages` |
-| `last_error_class` | `internal` | 服务自身内部故障（审查环节异常、代码或组装错误这一类）；重试处理与 `transient` 一致，区别只在分类语义 | `pending_messages`、`messages`、`rejected_messages` |
+| `last_error_class` | `internal` | 服务自身内部故障（审查环节异常、代码或组装错误这一类），兼表「对端退信但 `Status` 不可分类」（裁决记录见 §3.3「退信到达」）；重试处理与 `transient` 一致，区别只在分类语义 | `pending_messages`、`messages`、`rejected_messages` |
 | `rejected_messages.source` | `review_rejected` | 审查器返回 `reject`：不投递（出站）/ 不入库（入站），直接写本表 | `rejected_messages` |
 | `rejected_messages.source` | `review_error` | 审查器抛异常，按固定重试语义重试，用尽后同样写本表 | `rejected_messages` |
 | `rejected_messages.source` | `review_incomplete` | 第 4 次尝试已被认领、结果未提交（崩溃窗口）的行由收割支推进终态 | `rejected_messages` |
@@ -221,7 +221,7 @@
 **收割**：认领谓词放宽到 `attempt_count <= 4`，因此「第 4 次尝试已认领、结果事务未提交」的崩溃遗留行仍会被认领一次；这一次**不递增计数、不推退避、不发起外部调用**，直接进结果事务把它推进终态（`messages` → `failed`；`pending_messages` → `rejected_messages`，`source = review_incomplete`）。没有这一支，该行此后永远无人认领，对外永久停在「已提交」/「审查中」，而 `pending_messages` 不参与清理、卡住即永久。这一支也不产生真实的第 5 次投递。
 
 - **错误里不落任何自由文本**：`FR-5` / `AC-8` / `AC-30` 要求的「只记 SMTP 返回码与永久 / 临时分类」由列类型保证，而不是靠写入方自觉；`permanent` / `transient` 就是 `AC-8` 要的分类，SMTP 返回码的分类策略落地时不需要改表。
-- 三个取值的分工：`permanent` = 对端永久拒绝（`5xx`）；`transient` = 对端临时故障（`4xx` 与连接、超时）；`internal` = 服务自身内部故障（审查环节异常、代码或组装错误这一类），既不是对端永久拒绝、也不是对端临时故障。
+- 三个取值的分工：`permanent` = 对端永久拒绝（`5xx`）；`transient` = 对端临时故障（`4xx` 与连接、超时）；`internal` = 服务自身内部故障（审查环节异常、代码或组装错误这一类），兼表「对端退信但 `Status` 不可分类」——这一支是对端行为、只是读不出永久 / 临时子类，复用 `internal` 而不另设第四类的裁决记录见 §3.3「退信到达」。
 - `internal` 在重试处理上与 `transient` 一致（按固定重试语义重试，用尽后同样写 `rejected_messages`，见 §4.2 的「抛异常」一行），区别只在分类语义。
 
 ### 2.5 时间字段
@@ -284,7 +284,7 @@
 | `5xx` | 计为 `permanent`，直接置终态 `failed`，不再消耗剩余重试次数（`AC-34`） |
 | `4xx` 与连接 / 超时类故障 | 计为 `transient`；未达 4 次尝试时保持 `sending` 等下一轮认领，已达 4 次则置终态 `failed` |
 | 进入终态后 | 不做任何通知；`NFR-3` 与 `spec.md` §7 已定不做回调推送，调用方靠轮询 `GET /v1/messages/{id}` 得知终态 |
-| 退信到达 | **只作用于已发出的行**（`sent_at` 非空）：置 `failed`；`last_error_class` 按 DSN 的 `Status` 映射（`5.x.x` → `permanent`、`4.x.x` → `transient`）；`last_smtp_code` 留空（本次没有 SMTP 交互）、`attempt_count` 不变、`sent_at` 保留不清空。**`sent_at` 为空的行（`sending`）收到退信不置状态**：按受控原因 `dsn_target_not_sent` 计数丢弃、不打断重试——退信的前提是某台 MTA 已接受该邮件，`sending` 行收到退信只可能来自「SMTP 已接受、结果事务未提交」的窗口，此时继续重试比钉死更正确 |
+| 退信到达 | **只作用于已发出的行**（`sent_at` 非空）：置 `failed`；`last_error_class` 按 DSN 的 `Status` 映射（`5.x.x` → `permanent`、`4.x.x` → `transient`、**取不出时（`Status` 缺失或非 4/5 开头，含 `2.x.x`）复用 `internal`**——所有者裁决：该支是对端退信、只是读不出子类，不另设第四类、也不写 `NULL`；已否决方向：新增 `unknown` 分类、写 `NULL` 留空）；`last_smtp_code` 留空（本次没有 SMTP 交互）、`attempt_count` 不变、`sent_at` 保留不清空。**`sent_at` 为空的行（`sending`）收到退信不置状态**：按受控原因 `dsn_target_not_sent` 计数丢弃、不打断重试——退信的前提是某台 MTA 已接受该邮件，`sending` 行收到退信只可能来自「SMTP 已接受、结果事务未提交」的窗口，此时继续重试比钉死更正确 |
 
 - 失败分类的判据就是 SMTP 标准本身给 4xx / 5xx 的分工，不需要维护「哪些码算确定性拒绝」的猜测量表（`FR-5` 已声明一期只区分「可重试 / 不可重试」两类）。
 - 退信到达后，「曾经被接受、事后被退信」＝ `sent_at` 非空 + `status = failed`，「从未被接受」＝ `sent_at` 为空；这段历史是事实的推论，不需要专门的历史列（`bounced_at` 因此不引入，见 §6「分拣与丢弃」），也不新增 API 字段（`AC-17` 本来就要求响应携带时间字段）。这条推论成立的前提正是「退信只作用于 `sent_at` 非空的行」。代价登记：退信到达时刻不入库，无法统计退信延迟。
