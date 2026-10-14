@@ -56,9 +56,25 @@ async def dispose_engine() -> None:
         _engine = None
 
 
-def session_factory() -> async_sessionmaker[AsyncSession]:
+def session_factory(*, isolation_level: str | None = None) -> async_sessionmaker[AsyncSession]:
     """会话工厂：绑定进程级单例引擎，`expire_on_commit=False`；每次调用开一个短会话。
 
     `async_sessionmaker` 的默认会话类就是 `AsyncSession`，因此不必重复传 `class_`。
+
+    `isolation_level` 是**按次覆盖**的事务隔离级别，`None` 表示用引擎（数据库）默认值。
+    唯一的预期调用方是 `T-29` 的查询用例：六态判定要在**同一快照**内做三次仓储读
+    （`design.md` §4.1「三次查询同一快照」；PostgreSQL 在 READ COMMITTED 下每条语句各取
+    一次快照，所以要真落在同一快照上，只读会话必须提升为 `REPEATABLE READ`）——这与本模块
+    里「`expire_on_commit=False`：`service/` 在会话关闭后仍要读 ORM 行」是同一条路径。
+
+    **不得用于写路径**：`REPEATABLE READ` 下的写事务在并发时可能以序列化失败告终，而现有
+    写路径（`flows/` 的认领与条件 UPDATE、`service/submit_message.py`）没有重试逻辑，
+    它们一律不传本参数。
     """
-    return async_sessionmaker(bind=get_engine(), expire_on_commit=False)
+    engine = get_engine()
+    if isolation_level is not None:
+        # 隔离级别是**连接级**执行选项（`AsyncSession` / `Session` 自身不接受
+        # `isolation_level` 关键字）：绑一个与单例引擎共享同一连接池的分支引擎来按次覆盖。
+        # `None` 时不碰 bind，调用方拿到的会话与改动前完全一致。
+        engine = engine.execution_options(isolation_level=isolation_level)
+    return async_sessionmaker(bind=engine, expire_on_commit=False)

@@ -21,6 +21,9 @@
   两个目标语句都带 ``ON CONFLICT DO NOTHING``——撞键按「这一封已处理过」幂等忽略，
   之后一律删待审行。
 * 取时一律用流程层绑定进来的 ``now`` 参数，不用 ``func.now()``（``plan.md`` §5.2）。
+* **只读整行（同步查询路径，T-29 前置）**：``pending_row`` 按 ID 交出整行，供查询用例
+  做六态判定（``attempt_count``）与响应组装（``created_at``）——``design.md`` §4.1 / §8、
+  ``plan.md`` §2.9。只读、不加锁。
 
 本模块只含语句构造与执行，不承载业务判定（过审与否属审查流）。
 """
@@ -69,6 +72,7 @@ __all__ = [
     "claim_due_statement",
     "harvest_pending_message",
     "insert_outbound_pending",
+    "pending_row",
     "reject_pending_message",
 ]
 
@@ -286,3 +290,24 @@ async def harvest_pending_message(
     ``error_class``（该列保持空）。
     """
     return await reject_pending_message(session, pending_id, source=REJECT_SOURCES[2], now=now)
+
+
+# ---------------------------------------------------------------------------
+# T-29 前置：只读整行（同步查询路径）
+# （design §4.1 判定表的第一级分流：行在不在待审表里 + attempt_count）
+# ---------------------------------------------------------------------------
+
+
+async def pending_row(session: AsyncSession, pending_id: uuid.UUID) -> PendingMessage | None:
+    """按 ID 读一整行待审行；行不存在返回 ``None``（``T-29`` 前置）。
+
+    六态判定按「行在哪张表」分流，待审表这一支的输入是 ``attempt_count``
+    （``0`` = ``submitted``、``> 0`` = ``reviewing``，含审查失败的退避等待；
+    ``design.md`` §2.3 落点表），响应模型还要 ``created_at``（``NFR-8`` 保留期起算点，
+    §2.5）。整行交给 ``service/``，由它就地转换（``design.md`` §8）。
+
+    **只读**：一条 ``SELECT``、无 ``FOR UPDATE``、不写库、不取时。行不存在是正常结果
+    （该 ID 不在待审表里，判定继续往拒审表 / 邮件表走）。
+    """
+    stmt = sa.select(PendingMessage).where(PendingMessage.id == pending_id)
+    return (await session.execute(stmt)).scalar_one_or_none()

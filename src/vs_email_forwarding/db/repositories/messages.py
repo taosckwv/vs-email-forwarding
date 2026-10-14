@@ -15,6 +15,10 @@
 * **结果（阶段③）**：条件 UPDATE 只允许 ``design.md`` §2.3 声明的三个起点——
   ``sending → sent``、``sending → failed``、``sent → failed``（退信覆写）；
   谓词把起点写进 ``WHERE``，``rowcount = 0`` 按幂等忽略、返回 ``False``。
+* **只读整行（同步查询路径，T-29 前置）**：``message_row`` 与 ``replies_page`` 按 ID
+  交出**整行**——六态判定要 ``direction``，响应模型要三个时间列，``Reply`` 契约要
+  内容列，单列投影给不了（``design.md`` §4.1 / §8、``plan.md`` §2.9）。只读、不加锁，
+  行不存在返回 ``None``、无回复返回空页。
 * 取时一律用流程层绑定进来的 ``now`` 参数，不用 ``func.now()``（``plan.md`` §5.2）。
 
 本模块只含语句构造与执行，不承载业务判定（返回码分类属 ``core/retry.py``）。
@@ -70,6 +74,7 @@ __all__ = [
     "mark_failed_from_sent",
     "mark_send_failed",
     "mark_sent",
+    "message_row",
     "message_status",
     "outbound_targets_by_message_id",
     "pending_attempt_count",
@@ -205,6 +210,24 @@ async def mark_failed_from_sent(
 # ---------------------------------------------------------------------------
 
 
+async def message_row(session: AsyncSession, message_id: uuid.UUID) -> Message | None:
+    """按 ID 读一整行 ``messages`` 行；行不存在返回 ``None``（``T-29`` 前置）。
+
+    同步查询路径的读入口（``design.md`` §4.1 / §8、``plan.md`` §2.5 / §2.9）：六态判定
+    需要 ``direction``（``RowFacts`` 的必填字段，``core/states.py``），响应模型还需要
+    ``status``、``created_at`` / ``sent_at`` / ``reviewed_at``——这些都不是
+    :func:`message_status` 的单列投影能给的。整行交给 ``service/``，由它在自己的会话
+    有效期内立即转成 ``schemas/`` 的响应模型或中性对象（``design.md`` §8；
+    ``db/session.py`` 的 ``expire_on_commit=False`` 正是为此预备）。
+
+    **只读**：一条 ``SELECT``、无 ``FOR UPDATE``、不写库、不取时（无 ``now`` 参数）。
+    行不存在＝「该 ID 不存在」，是正常结果而不是错误（``design.md`` §4.1：两个查询端点
+    对不存在的 ID 都返回成功状态）。
+    """
+    stmt = sa.select(Message).where(Message.id == message_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def message_status(session: AsyncSession, message_id: uuid.UUID) -> str | None:
     """读 ``messages.status`` 列值；行不存在返回 ``None``。
 
@@ -236,22 +259,26 @@ async def replies_page(
     *,
     after: tuple[datetime | None, uuid.UUID | None],
     limit: int,
-) -> list[sa.Row]:
-    """取某出站邮件的一页回复：keyset 游标 ``received_at ASC, id ASC``。
+) -> list[Message]:
+    """取某出站邮件的一页回复（**整行**）：keyset 游标 ``received_at ASC, id ASC``。
 
     ``after`` 是上一页最后一行的 ``(received_at, id)``（首页传 ``(None, None)``）；
     排序键与 ``(parent_id, received_at)`` 索引对齐，翻页用行值比较而非
     ``limit`` / ``offset``——新回复到达不会让偏移窗口漂移（``AC-41``）。
-    返回 ``(id, received_at)`` 行序列，正好够客户端拼下一页游标。
+
+    交出整行是查询用例的要求（``T-29`` 前置）：``Reply`` 契约要 ``subject`` /
+    ``body`` / ``body_format``（``docs/api-contract.yaml``、``design.md`` §4.1），
+    只取 ``(id, received_at)`` 时内容列拿不到；下一页的游标由调用方从返回行的
+    ``received_at`` / ``id`` 拼。**只读**：一条 ``SELECT``、无锁、不写库。
     """
     after_received_at, after_id = after
-    stmt = sa.select(Message.id, Message.received_at).where(Message.parent_id == parent_id)
+    stmt = sa.select(Message).where(Message.parent_id == parent_id)
     if after_received_at is not None and after_id is not None:
         stmt = stmt.where(
             sa.tuple_(Message.received_at, Message.id) > sa.tuple_(after_received_at, after_id)
         )
     stmt = stmt.order_by(Message.received_at, Message.id).limit(limit)
-    return list((await session.execute(stmt)).all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
 # ---------------------------------------------------------------------------

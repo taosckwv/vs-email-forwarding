@@ -1403,6 +1403,15 @@ class TestRepliesKeysetPagination:
             prev = (page1 + page2 + page3)[i - 1]
             curr = (page1 + page2 + page3)[i]
             assert (prev.received_at, prev.id) < (curr.received_at, curr.id)
+        # T-29 前置：页里交出的必须是**整行**，不是 (id, received_at) 两列投影——
+        # `Reply` 契约要 subject/body/body_format（docs/api-contract.yaml）。
+        assert all(isinstance(row, Message) for row in page1 + page2 + page3)
+        assert sorted(row.subject for row in page1 + page2 + page3) == sorted(
+            f"回复 {i}" for i in range(5)
+        )
+        assert {row.body for row in page1 + page2 + page3} == {"回复正文"}
+        assert {row.body_format for row in page1 + page2 + page3} == {DEFAULT_BODY_FORMAT}
+        assert {row.parent_id for row in page1 + page2 + page3} == {parent_id}
 
     async def test_unknown_parent_returns_empty_page(self, db_engine: AsyncEngine) -> None:
         session = AsyncSession(bind=db_engine, expire_on_commit=False)
@@ -1442,6 +1451,11 @@ class TestRepliesKeysetPagination:
         assert collected == set(ids) | set(new_ids)
         assert new_ids[0] in {row.id for row in page2}
         assert len(page2) == 3  # 剩余 2 条旧回复 + 1 条新回复
+        # T-29 前置：整行投影下内容列随行到手（旧回复「回复 2」「回复 3」+ 新回复「回复 0」），
+        # 且父指向只落在本出站邮件上——两列投影时这两条即红。
+        assert {row.body for row in page1 + page2} == {"回复正文"}
+        assert {row.parent_id for row in page1 + page2} == {parent_id}
+        assert sorted(row.subject for row in page2) == sorted(["回复 2", "回复 3", "回复 0"])
 
 
 # ---------------------------------------------------------------------------
@@ -2034,3 +2048,222 @@ class TestOutboundPendingInsert:
         # html 必须原样入库：写死 text、或漏写该列而落到 server_default 'text'，都会被这条钉住
         # （取值合法性由 schema 层保证，仓储只做搬运）。
         assert stored == "html"
+
+
+# ---------------------------------------------------------------------------
+# T-29 前置：只读整行接缝与可配置隔离级别
+# （design §8 仓储把 ORM 行交给 service；§4.1「三次查询同一快照」靠按次覆盖
+#  REPEATABLE READ；plan.md §2.9。本节的四个读入口与 session_factory 参数
+#  专供 T-29 的查询用例，不经由写路径使用）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.constants import DEFAULT_BODY_FORMAT  # noqa: E402
+from vs_email_forwarding.db.repositories.messages import message_row  # noqa: E402
+from vs_email_forwarding.db.repositories.pending import pending_row  # noqa: E402
+from vs_email_forwarding.db.repositories.rejected import rejected_row  # noqa: E402
+from vs_email_forwarding.db.session import dispose_engine, session_factory  # noqa: E402
+
+
+class TestMessageRowRead:
+    """`message_row`：按 ID 交出整行（判定输入 + 响应字段都够用，design §4.1 / §8）。"""
+
+    async def test_returns_whole_outbound_row(self, db_engine: AsyncEngine) -> None:
+        message_id = await _insert_message_full(db_engine, created_at=_NEW)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            row = await message_row(session, message_id)
+            # 只读：读完会话里没有被标记为脏的对象（不写库、不加锁）。
+            nothing_dirty = not session.dirty
+        finally:
+            await session.close()
+
+        assert row is not None
+        assert row.id == message_id
+        # 判定输入：direction 是 RowFacts 的必填字段（core/states.py:66）。
+        assert row.direction == "outbound"
+        assert row.status == "failed"
+        # 响应字段：MessageStatusResponse.required 里的三个时间列（docs/api-contract.yaml）。
+        assert row.created_at == _NEW
+        assert row.sent_at is None  # 夹具未设 sent_at
+        assert row.reviewed_at is None
+        # 内容列随整行一起到手——只返回 (id, status) 形态时这三条即红。
+        assert row.subject == "夹具主题（无真实收件人）"
+        assert row.body == "夹具正文"
+        assert row.body_format == DEFAULT_BODY_FORMAT
+        assert nothing_dirty
+
+    async def test_returns_inbound_row_with_direction_visible(self, db_engine: AsyncEngine) -> None:
+        # 入站回复行也按整行交出：六态判定靠 direction 分流到 received（design §2.3）。
+        message_id = await _insert_message_full(db_engine, created_at=_NEW, direction="inbound")
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            row = await message_row(session, message_id)
+        finally:
+            await session.close()
+
+        assert row is not None
+        assert row.direction == "inbound"
+        assert row.status == RECEIVED_STATE
+
+    async def test_missing_id_returns_none(self, db_engine: AsyncEngine) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            row = await message_row(session, uuid.uuid4())
+        finally:
+            await session.close()
+        # 「该 ID 不存在」是正常结果，不是错误（design §4.1、AC-35）。
+        assert row is None
+
+
+class TestPendingRowRead:
+    """`pending_row`：按 ID 交出整行待审行（attempt_count + created_at 都够用）。"""
+
+    async def test_returns_whole_pending_row(self, db_engine: AsyncEngine) -> None:
+        fixture = _pending_row(attempt_count=2)
+        await _insert_pending(db_engine, fixture)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            row = await pending_row(session, fixture["id"])
+            nothing_dirty = not session.dirty
+        finally:
+            await session.close()
+
+        assert row is not None
+        assert row.id == fixture["id"]
+        # 判定输入：attempt_count 是「已提交 / 审查中」的唯一库内判据（design §2.3）。
+        assert row.attempt_count == 2
+        assert row.direction == "outbound"
+        # 响应字段与内容列（created_at 是 NFR-8 保留期起算点，design §2.5）。
+        assert row.created_at == fixture["created_at"]
+        assert row.next_attempt_at == fixture["next_attempt_at"]
+        assert row.subject == fixture["subject"]
+        assert row.body == fixture["body"]
+        assert row.message_id == fixture["message_id"]
+        assert nothing_dirty
+
+    async def test_missing_id_returns_none(self, db_engine: AsyncEngine) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            row = await pending_row(session, uuid.uuid4())
+        finally:
+            await session.close()
+        assert row is None
+
+
+class TestRejectedRowRead:
+    """`rejected_row`：按 ID 交出整行拒审行（created_at + reviewed_at 都够用）。"""
+
+    async def test_returns_whole_rejected_row(self, db_engine: AsyncEngine) -> None:
+        rejected_id = await _insert_rejected_row(db_engine, _NEW)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            row = await rejected_row(session, rejected_id)
+            nothing_dirty = not session.dirty
+        finally:
+            await session.close()
+
+        assert row is not None
+        assert row.id == rejected_id
+        assert row.direction == "outbound"
+        assert row.source == "review_rejected"
+        # 响应字段：created_at（提交时刻）与 reviewed_at（审查结束时刻）。
+        assert row.created_at == _NEW
+        assert row.reviewed_at == _NEW
+        assert nothing_dirty
+
+    async def test_missing_id_returns_none(self, db_engine: AsyncEngine) -> None:
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            row = await rejected_row(session, uuid.uuid4())
+        finally:
+            await session.close()
+        assert row is None
+
+
+class TestQuerySnapshotSession:
+    """design §4.1「三次查询同一快照」的落地机制：只读会话按次覆盖为 REPEATABLE READ。"""
+
+    @pytest.fixture(autouse=True)
+    async def _per_test_singleton(self) -> AsyncIterator[None]:
+        # `session_factory` 绑的是进程级单例引擎，而 pytest-asyncio 每个用例一个新事件循环：
+        # 上一个用例留下的池化连接会挂到已关闭的 loop（Task attached to a different loop）。
+        # 用前先释放，让工厂在本用例的 loop 里重建；用例结束再释放（docs/testing.md §4.3）。
+        await dispose_engine()
+        yield
+        await dispose_engine()
+
+    async def test_isolation_override_reaches_the_server(self, db_engine: AsyncEngine) -> None:
+        override = session_factory(isolation_level="REPEATABLE READ")()
+        default = session_factory()()
+        try:
+            override_level = (
+                await override.execute(sa.text("SHOW transaction_isolation"))
+            ).scalar_one()
+            default_level = (
+                await default.execute(sa.text("SHOW transaction_isolation"))
+            ).scalar_one()
+        finally:
+            await override.close()
+            await default.close()
+
+        # 期望值取自 PostgreSQL 的级别名（服务端口径，非被测实现）：
+        assert override_level == "repeatable read"
+        assert default_level == "read committed"
+
+    async def test_repeatable_read_session_keeps_one_snapshot(self, db_engine: AsyncEngine) -> None:
+        parent_id = await _insert_message_full(db_engine, created_at=_NEW)
+        new_reply_id = uuid.uuid4()
+
+        reader = session_factory(isolation_level="REPEATABLE READ")()
+        try:
+            # 这一次读建立快照。
+            first = await message_row(reader, parent_id)
+            assert first is not None
+
+            # 另一会话（引擎默认隔离级别）改这一行、再插一行回复，并已提交。
+            async with db_engine.begin() as conn:
+                await conn.execute(
+                    sa.update(Message).where(Message.id == parent_id).values(subject="另一会话改写")
+                )
+                await conn.execute(
+                    sa.insert(Message).values(
+                        id=new_reply_id,
+                        direction="inbound",
+                        status=RECEIVED_STATE,
+                        parent_id=parent_id,
+                        recipient="reply@example.com",
+                        subject="并发到达的回复",
+                        body="并发正文",
+                        mailbox="reply@example.com",
+                        uidvalidity=999,
+                        uid=4242,
+                        created_at=_NEW,
+                        received_at=_NEW,
+                    )
+                )
+
+            # 同会话再读：快照未变。`expire_all` 是必须的——否则身份图会把旧对象直接还回来，
+            # 这条断言在任何隔离级别下都会绿，就证明不了快照（docs/testing.md §3.6）。
+            reader.expire_all()
+            again = await message_row(reader, parent_id)
+            assert again is not None
+            assert again.subject == "夹具主题（无真实收件人）"
+            invisible = await replies_page(reader, parent_id, after=(None, None), limit=10)
+            assert invisible == []
+        finally:
+            await reader.close()
+
+        # 快照之外（新会话）两处写入都可见——证明它们真的提交了，上面不是「压根没写进去」。
+        fresh = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            latest = await message_row(fresh, parent_id)
+            visible = await replies_page(fresh, parent_id, after=(None, None), limit=10)
+        finally:
+            await fresh.close()
+        assert latest is not None
+        assert latest.subject == "另一会话改写"
+        assert [row.id for row in visible] == [new_reply_id]
