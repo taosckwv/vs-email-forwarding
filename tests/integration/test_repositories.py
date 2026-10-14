@@ -132,7 +132,7 @@ class TestConcurrencyMutualExclusion:
             claimed_a = await claim_due_pending_messages(
                 session_a, direction="outbound", now=_NOW, batch_size=10
             )
-            assert [row.id for row in claimed_a] == [pending_id]
+            assert [row.id for row, _ in claimed_a] == [pending_id]
 
             # 执行体 B：独立会话（独立连接、独立事务），同一批认领必须
             # 拿不到已被 A 锁住的行。
@@ -167,13 +167,14 @@ class TestAttemptCountBoundary:
             claimed = await claim_due_pending_messages(
                 session, direction="outbound", now=_NOW, batch_size=10
             )
-            claimed_ids = [row.id for row in claimed]
+            claimed_rows = [(row.id, is_harvest) for row, is_harvest in claimed]
         finally:
             await session.rollback()
             await session.close()
 
-        # 收割支命中面：第 4 次认领的行被返回，但**不递增、不推退避**（无第 5 次尝试）。
-        assert claimed_ids == [pending_id]
+        # 收割支命中面：第 4 次认领的行被返回、**不递增、不推退避**（无第 5 次尝试），
+        # 并且带收割标志（调用方据此跳过外部调用，见 TestClaimHarvestFlag）。
+        assert claimed_rows == [(pending_id, True)]
         fetched = await _fetch_pending(db_engine, pending_id)
         assert fetched is not None
         attempt_count, next_attempt_at = fetched
@@ -189,7 +190,7 @@ class TestAttemptCountBoundary:
             claimed = await claim_due_pending_messages(
                 session, direction="outbound", now=_NOW, batch_size=10
             )
-            claimed_ids = [row.id for row in claimed]
+            claimed_ids = [row.id for row, _ in claimed]
         finally:
             await session.rollback()
             await session.close()
@@ -214,10 +215,13 @@ class TestBackoffAdvancement:
                 claimed = await claim_due_pending_messages(
                     session, direction="outbound", now=_NOW, batch_size=10
                 )
-                assert [row.id for row in claimed] == [pending_id]
+                assert [(row.id, is_harvest) for row, is_harvest in claimed] == [
+                    (pending_id, False)
+                ]
                 # 直接读认领返回的行（同一会话，避免跨连接等锁）。
-                assert claimed[0].attempt_count == expected_attempt
-                delta = claimed[0].next_attempt_at - _NOW
+                claimed_row, _ = claimed[0]
+                assert claimed_row.attempt_count == expected_attempt
+                delta = claimed_row.next_attempt_at - _NOW
                 assert delta.total_seconds() == RETRY_BACKOFF_SECONDS[expected_attempt]
                 if expected_attempt < 3:
                     # 行已被退避推走；按规格把到点时刻拨回，才能再次认领下一步。
@@ -241,7 +245,7 @@ class TestBackoffAdvancement:
             claimed = await claim_due_pending_messages(
                 session, direction="outbound", now=_NOW, batch_size=10
             )
-            claimed_ids = [row.id for row in claimed]
+            claimed_ids = [row.id for row, _ in claimed]
             # 认领（阶段①）是一个**已提交的短事务**（plan §5.1），这里照实提交。
             await session.commit()
         finally:
@@ -324,6 +328,137 @@ class TestIdempotentFinalization:
         assert direction == "inbound"
         assert subject == "夹具主题（无真实收件人）"  # 入站保留主题供复核
 
+    async def test_reject_error_path_records_error_class(self, db_engine: AsyncEngine) -> None:
+        # 审查出错用尽重试的落库口径（design.md §3.2 / §2.4）：source = review_error、
+        # 分类 = internal。两者都是受控取值，真源是 constants；待审行上没有任何路径写
+        # last_error_class，因此这一列必须由调用方从接缝显式给（对齐 messages.py 的
+        # mark_send_failed(error_class=…)），否则 review_error 行该列恒空。
+        assert "review_error" in REJECT_SOURCES
+        assert "internal" in ERROR_CLASSES
+        pending_id = await _insert_pending(db_engine, _pending_row())
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            finalized = await reject_pending_message(
+                session,
+                pending_id,
+                source="review_error",
+                error_class="internal",
+                now=_NOW,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert finalized is True
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    sa.select(RejectedMessage.source, RejectedMessage.last_error_class).where(
+                        RejectedMessage.id == pending_id
+                    )
+                )
+            ).one()
+            pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+        assert row[0] == "review_error"
+        assert row[1] == "internal"
+        assert pending_count == 0
+
+    async def test_reject_without_error_class_leaves_it_null(self, db_engine: AsyncEngine) -> None:
+        # 判定拒 / 收割路径没有「最后一次错误」：不给分类就不许编一个出来（design §2.4
+        # 的 last_error_class 可为空）。
+        pending_id = await _insert_pending(db_engine, _pending_row())
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            finalized = await reject_pending_message(
+                session, pending_id, source="review_rejected", now=_NOW
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert finalized is True
+        async with db_engine.connect() as conn:
+            stored = (
+                await conn.execute(
+                    sa.select(RejectedMessage.last_error_class).where(
+                        RejectedMessage.id == pending_id
+                    )
+                )
+            ).one()
+        assert stored[0] is None
+
+    async def test_reject_error_class_must_be_controlled_value(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        # 越界分类在写入前即被拒（与本函数对 source 的校验同口径），不落任何行、不删待审行。
+        pending_id = await _insert_pending(db_engine, _pending_row())
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            with pytest.raises(ValueError, match="error class"):
+                await reject_pending_message(
+                    session,
+                    pending_id,
+                    source="review_error",
+                    error_class="not_a_class",
+                    now=_NOW,
+                )
+        finally:
+            await session.rollback()
+            await session.close()
+
+        async with db_engine.connect() as conn:
+            rejected_count = len((await conn.execute(sa.select(RejectedMessage.id))).all())
+            pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+        assert rejected_count == 0
+        assert pending_count == 1
+
+
+class TestClaimHarvestFlag:
+    """认领返回值必须逐行给出「本次是否按收割处理」的标志（`design.md` §3 阶段①）。
+
+    认领之后两种行的列值**完全一样**（都是 `attempt_count == 4`、都不推退避），出库后
+    再没有任何办法分辨；而流① / 流④ 对两者的处置恰恰相反：
+
+    * 真·第 4 次尝试（认领前 3）必须**发起**审查调用——出错用尽重试才写
+      `source = review_error`（`design.md` §3.2），不调用这一支就永远不可达；
+    * 收割遗留行（认领前 4）**不得**发起调用，直接推进终态 `source = review_incomplete`
+      （`design.md` §3 阶段①「不发起外部调用」、`docs/research/02`「不产生第 5 次调用」）。
+
+    因此标志必须在认领这一层给出：认领方是唯一知道「刚才那一增是不是我加的」的地方。
+    """
+
+    async def test_fourth_attempt_and_harvest_leftover_are_told_apart(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        stuck_at = _NOW - timedelta(seconds=1)
+        # 认领前 3：真·第 4 次尝试（本次认领递增到 4，随后必须发起调用）。
+        fourth_id = await _insert_pending(
+            db_engine, _pending_row(attempt_count=MAX_ATTEMPTS - 1, next_attempt_at=stuck_at)
+        )
+        # 认领前 4：第 4 次尝试已认领、结果事务未提交的崩溃遗留行（必须直接推进终态）。
+        harvest_id = await _insert_pending(
+            db_engine, _pending_row(attempt_count=MAX_ATTEMPTS, next_attempt_at=stuck_at)
+        )
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed = await claim_due_pending_messages(
+                session, direction="outbound", now=_NOW, batch_size=10
+            )
+            flags = {row.id: is_harvest for row, is_harvest in claimed}
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert flags == {fourth_id: False, harvest_id: True}
+        # SQL 语义不变：3 -> 4 递增、n=4 不推退避；收割行原样未动。
+        assert await _fetch_pending(db_engine, fourth_id) == (MAX_ATTEMPTS, stuck_at)
+        assert await _fetch_pending(db_engine, harvest_id) == (MAX_ATTEMPTS, stuck_at)
+        # 两行的列值一模一样——这正是标志必须在仓储层给出的理由（本断言是接缝的存在证明）。
+        assert await _fetch_pending(db_engine, fourth_id) == await _fetch_pending(
+            db_engine, harvest_id
+        )
+
 
 # ---------------------------------------------------------------------------
 # T-7：messages 发信侧认领与条件 UPDATE（plan §5.1 / §5.2）
@@ -401,13 +536,13 @@ class TestSendClaim:
         session = AsyncSession(bind=db_engine, expire_on_commit=False)
         try:
             claimed = await claim_due_send_messages(session, now=_NOW, batch_size=10)
-            claimed_ids = [row.id for row in claimed]
+            claimed_rows = [(row.id, is_harvest) for row, is_harvest in claimed]
             # 认领（阶段①）是已提交的短事务（plan §5.1），照实提交。
             await session.commit()
         finally:
             await session.close()
 
-        assert claimed_ids == [message_id]
+        assert claimed_rows == [(message_id, False)]
         status, attempt_count, next_attempt_at, _ = await _fetch_message(db_engine, message_id)
         assert status == _SENDING
         assert attempt_count == 1
@@ -436,13 +571,14 @@ class TestSendClaim:
         session = AsyncSession(bind=db_engine, expire_on_commit=False)
         try:
             claimed = await claim_due_send_messages(session, now=_NOW, batch_size=10)
-            claimed_ids = [row.id for row in claimed]
+            claimed_rows = [(row.id, is_harvest) for row, is_harvest in claimed]
             await session.commit()
         finally:
             await session.close()
 
-        # 收割支命中面：第 4 次认领的行被返回但不递增、不推退避（无第 5 次投递）。
-        assert claimed_ids == [message_id]
+        # 收割支命中面：第 4 次认领的行被返回、不递增、不推退避（无第 5 次投递），
+        # 并带收割标志（调用方据此跳过 SMTP，见 TestSendClaimHarvestFlag）。
+        assert claimed_rows == [(message_id, True)]
         _, attempt_count, next_attempt_at, _ = await _fetch_message(db_engine, message_id)
         assert attempt_count == MAX_ATTEMPTS
         assert next_attempt_at == stuck_at
@@ -456,6 +592,53 @@ class TestSendClaim:
             await session.rollback()
             await session.close()
         assert claimed == []
+
+
+class TestSendClaimHarvestFlag:
+    """发信认领同口径：逐行给出收割标志（`AC-8` 与 `AC-37` 都依赖这一位）。
+
+    `AC-8` 要求第 4 次尝试真的发出（失败后要有 `4xx` 返回码可记），`AC-37` 要求收割
+    遗留行不产生第 5 次投递——认领之后两种行都是 `sending` + `attempt_count == 4`，
+    标志是唯一判据。
+    """
+
+    async def test_fourth_attempt_and_harvest_leftover_are_told_apart(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        stuck_at = _NOW - timedelta(seconds=1)
+        fourth_id = await _insert_message(
+            db_engine, attempt_count=MAX_ATTEMPTS - 1, next_attempt_at=stuck_at
+        )
+        harvest_id = await _insert_message(
+            db_engine, attempt_count=MAX_ATTEMPTS, next_attempt_at=stuck_at
+        )
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed = await claim_due_send_messages(session, now=_NOW, batch_size=10)
+            flags = {row.id: is_harvest for row, is_harvest in claimed}
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert flags == {fourth_id: False, harvest_id: True}
+        # SQL 语义不变：3 -> 4 递增、n=4 不推退避；收割行原样未动。
+        assert await _fetch_message(db_engine, fourth_id) == (
+            _SENDING,
+            MAX_ATTEMPTS,
+            stuck_at,
+            None,
+        )
+        assert await _fetch_message(db_engine, harvest_id) == (
+            _SENDING,
+            MAX_ATTEMPTS,
+            stuck_at,
+            None,
+        )
+        # 两行的列值一模一样——标志是唯一判据（本断言是接缝的存在证明）。
+        assert await _fetch_message(db_engine, fourth_id) == await _fetch_message(
+            db_engine, harvest_id
+        )
 
 
 class TestConditionalUpdates:

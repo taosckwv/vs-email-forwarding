@@ -9,7 +9,9 @@
   且 ``next_attempt_at <= <绑定的 now 参数>``；认领第 n 次（n < 4）在同一事务内
   推 ``attempt_count`` 与 ``next_attempt_at``（退避表在 constants）；
   ``attempt_count = 4`` 的行是收割支命中面，认领时**不递增、不推退避**
-  （不产生第 5 次投递）。
+  （不产生第 5 次投递）。两个分支在返回值里逐行给出分流标志
+  （``(row, is_harvest)``）——认领之后两种行的列值完全一样，调用方只能靠这一位
+  分辨谁要真的投递、谁要直接置终态。
 * **结果（阶段③）**：条件 UPDATE 只允许 ``design.md`` §2.3 声明的三个起点——
   ``sending → sent``、``sending → failed``、``sent → failed``（退信覆写）；
   谓词把起点写进 ``WHERE``，``rowcount = 0`` 按幂等忽略、返回 ``False``。
@@ -46,7 +48,15 @@ _SENDING: Final = MESSAGE_STATES[3]
 _SENT: Final = MESSAGE_STATES[4]
 _FAILED: Final = MESSAGE_STATES[5]
 
+#: 一次认领返回的一行与它的分流标志。``is_harvest`` 为 ``True`` 表示这一行是
+#: 「第 4 次尝试已认领、结果事务未提交」的收割遗留行（本次认领**未**递增计数）：
+#: 调用方不得对它发起 SMTP 投递，直接置终态 ``failed``（``design.md`` §3 流② /
+#: §2.4、``plan.md`` §5.3）。为 ``False`` 的是本次真正认领到的尝试（含真·第 4 次
+#: 尝试），必须发起投递。
+type ClaimedSendMessage = tuple[Message, bool]
+
 __all__ = [
+    "ClaimedSendMessage",
     "claim_due_send_messages",
     "claim_due_send_statement",
     "mark_failed_from_sent",
@@ -82,26 +92,36 @@ def claim_due_send_statement(*, now: datetime, batch_size: int) -> Select:
 
 async def claim_due_send_messages(
     session: AsyncSession, *, now: datetime, batch_size: int
-) -> list[Message]:
+) -> list[ClaimedSendMessage]:
     """认领一批到点的待发行：锁行、推进尝试计数与退避，提交由调用方负责。
 
     认领第 n 次（n < 4）把 ``attempt_count`` 推到 n 并按退避表推 ``next_attempt_at``
-    （第 4 次不推——该行只剩终态一条路）；``attempt_count = 4`` 的行原样返回，
-    由收割支直接推进终态（`plan.md` §5.2 / §5.3）。锁与推进在同一事务内完成，
-    不是「先 SELECT 判断、再 UPDATE」的两步写法。
+    （第 4 次不推——该行只剩终态一条路），返回 ``(row, False)``；
+    ``attempt_count = 4`` 的行原样返回，返回 ``(row, True)``：它是「第 4 次尝试已认领、
+    结果事务未提交」的收割遗留行，调用方**不得**发起投递，直接置终态 ``failed``
+    （`plan.md` §5.2 / §5.3）。锁与推进在同一事务内完成，不是「先 SELECT 判断、
+    再 UPDATE」的两步写法。
+
+    分流标志只能在这一层给出：认领之后两种行的 ``attempt_count`` 都是 4、
+    ``next_attempt_at`` 也都是认领前那个值，出库后无法再分辨；而流② 对两者的处置
+    相反（真·第 4 次尝试必须真的投递，收割遗留行必须不产生第 5 次投递，
+    `AC-8` / `AC-37`）。
     """
     rows = list(
         (await session.scalars(claim_due_send_statement(now=now, batch_size=batch_size))).all()
     )
+    claimed: list[ClaimedSendMessage] = []
     for row in rows:
         if row.attempt_count >= MAX_ATTEMPTS:
             # 收割支命中面：不递增、不推退避、不发起任何外部调用（design.md §3）。
+            claimed.append((row, True))
             continue
         row.attempt_count += 1
         backoff_seconds = RETRY_BACKOFF_SECONDS.get(row.attempt_count)
         if backoff_seconds is not None:
             row.next_attempt_at = now + timedelta(seconds=backoff_seconds)
-    return rows
+        claimed.append((row, False))
+    return claimed
 
 
 async def mark_sent(session: AsyncSession, message_id: uuid.UUID, *, now: datetime) -> bool:

@@ -9,6 +9,8 @@
   认领第 n 次（n < 4）在同一事务内把 ``attempt_count`` 推到 n、
   ``next_attempt_at`` 推到 ``now + 退避[n]``；``attempt_count = 4`` 的行
   是收割支的命中面，认领时**不递增、不推退避**（不产生第 5 次尝试）。
+  两个分支在返回值里逐行给出分流标志（``(row, is_harvest)``）——认领之后两种行的
+  列值完全一样，调用方只能靠这一位分辨谁要发起外部调用、谁要直接推进终态。
 * **结果（阶段③）**：过审 → ``messages`` 一行 ``sending``（跨表 ID 同值、
   ``attempt_count`` 重置为 0、``next_attempt_at`` 重置为参数绑定的 now）；
   拒审 / 收割 → ``rejected_messages`` 一行（``source`` 由调用方给：
@@ -34,6 +36,7 @@ from sqlalchemy.sql import Select
 
 from vs_email_forwarding.constants import (
     DIRECTIONS,
+    ERROR_CLASSES,
     MAX_ATTEMPTS,
     MAX_CLAIMABLE_ATTEMPT_COUNT,
     MESSAGE_STATES,
@@ -48,7 +51,14 @@ from vs_email_forwarding.db.models import Message, PendingMessage, RejectedMessa
 _INBOUND: Final = DIRECTIONS[1]
 _SENDING: Final = MESSAGE_STATES[3]
 
+#: 一次认领返回的一行与它的分流标志。``is_harvest`` 为 ``True`` 表示这一行是
+#: 「第 4 次尝试已认领、结果事务未提交」的收割遗留行（本次认领**未**递增计数）：
+#: 调用方不得对它发起外部调用，直接推进终态（``design.md`` §3 阶段① / §2.4、``plan.md`` §5.3）。
+#: 为 ``False`` 的是本次真正认领到的尝试（含真·第 4 次尝试），必须发起外部调用。
+type ClaimedPendingMessage = tuple[PendingMessage, bool]
+
 __all__ = [
+    "ClaimedPendingMessage",
     "approval_insert_statement",
     "approve_pending_message",
     "claim_due_pending_messages",
@@ -80,13 +90,20 @@ def claim_due_statement(*, direction: str, now: datetime, batch_size: int) -> Se
 
 async def claim_due_pending_messages(
     session: AsyncSession, *, direction: str, now: datetime, batch_size: int
-) -> list[PendingMessage]:
+) -> list[ClaimedPendingMessage]:
     """认领一批到点的待审行：锁行、推进尝试计数与退避，提交由调用方负责。
 
     认领第 n 次（n < 4）把 ``attempt_count`` 推到 n 并按退避表推 ``next_attempt_at``
-    （第 4 次不推——该行只剩终态一条路）；``attempt_count = 4`` 的行原样返回，
-    由收割支直接推进终态（`plan.md` §5.2 / §5.3）。锁与推进在同一事务内完成，
-    不是「先 SELECT 判断、再 UPDATE」的两步写法。
+    （第 4 次不推——该行只剩终态一条路），返回 ``(row, False)``；
+    ``attempt_count = 4`` 的行原样返回，返回 ``(row, True)``：它是「第 4 次尝试已认领、
+    结果事务未提交」的收割遗留行，调用方**不得**对它发起外部调用，直接推进终态
+    （`plan.md` §5.2 / §5.3）。锁与推进在同一事务内完成，不是「先 SELECT 判断、
+    再 UPDATE」的两步写法。
+
+    分流标志只能在这一层给出：认领之后两种行的 ``attempt_count`` 都是 4、
+    ``next_attempt_at`` 也都是认领前那个值，出库后无法再分辨；而流① / 流④ 对两者的
+    处置相反（真·第 4 次尝试必须发起审查调用，收割遗留行必须跳过并置
+    ``review_incomplete``，`design.md` §3 阶段①）。
     """
     rows = list(
         (
@@ -95,15 +112,18 @@ async def claim_due_pending_messages(
             )
         ).all()
     )
+    claimed: list[ClaimedPendingMessage] = []
     for row in rows:
         if row.attempt_count >= MAX_ATTEMPTS:
             # 收割支命中面：不递增、不推退避、不发起任何外部调用（design.md §3）。
+            claimed.append((row, True))
             continue
         row.attempt_count += 1
         backoff_seconds = RETRY_BACKOFF_SECONDS.get(row.attempt_count)
         if backoff_seconds is not None:
             row.next_attempt_at = now + timedelta(seconds=backoff_seconds)
-    return rows
+        claimed.append((row, False))
+    return claimed
 
 
 def approval_insert_statement() -> PGInsert:
@@ -157,14 +177,25 @@ async def reject_pending_message(
     *,
     source: str,
     now: datetime,
+    error_class: str | None = None,
 ) -> bool:
     """拒审落库（阶段③）：写 ``rejected_messages`` 一行 + 删待审行。
 
     跨表 ID 同值（架构图的「id 与目标行同值」）；``subject`` / ``body`` 仅入站行搬运，
     出站行保持 NULL（表上的 ``CHECK`` 兜底）。``source`` 只接受三个受控取值。
+
+    ``error_class`` 是**审查出错路径**（``source = review_error``）要落的受控分类：
+    审查环节异常即 ``internal``（`design.md` §2.4 / §3 阶段③）。待审行上没有任何路径写
+    ``last_error_class``，因此分类由调用方从接缝显式给、不搬运待审行——与
+    ``messages.py`` 的 ``mark_send_failed(error_class=…)`` 同口径；判定拒与收割路径
+    传 ``None``（不存在「最后一次错误」，`design.md` §2.4 允许该列为空）。
+    越界取值在写入前即拒（同 ``source`` 的校验）。
     """
     if source not in REJECT_SOURCES:
         msg = f"unknown reject source: {source}"
+        raise ValueError(msg)
+    if error_class is not None and error_class not in ERROR_CLASSES:
+        msg = f"unknown error class: {error_class}"
         raise ValueError(msg)
     row = await session.get(PendingMessage, pending_id)
     if row is None:
@@ -178,7 +209,7 @@ async def reject_pending_message(
             source=source,
             subject=row.subject if row.direction == _INBOUND else None,
             body=row.body if row.direction == _INBOUND else None,
-            last_error_class=row.last_error_class,
+            last_error_class=error_class,
             created_at=row.created_at,
             reviewed_at=now,
         )
@@ -194,6 +225,7 @@ async def harvest_pending_message(
 
     等价于 ``source = review_incomplete`` 的拒审落库——不递增计数、不推退避、
     不发起任何外部调用，单独成函数是为了让调用方（审查流）的收割分支
-    显式可见、可审计。
+    显式可见、可审计。收割是崩溃窗口、不存在「最后一次错误」，故不传
+    ``error_class``（该列保持空）。
     """
     return await reject_pending_message(session, pending_id, source=REJECT_SOURCES[2], now=now)
