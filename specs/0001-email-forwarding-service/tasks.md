@@ -53,7 +53,7 @@
 - [x] `T-23` （前置 `T-6`、`T-8`、`T-18`）`flows/review_outbound.py`（含收割支）— `FR-3` / `AC-6`
 - [x] `T-24` （前置 `T-7`、`T-14`、`T-19`）`flows/send_email.py`（含收割支）— `FR-4` / `AC-7`
 - [x] `T-25` （前置 `T-9`、`T-12`、`T-16`、`T-21`）`flows/fetch_inbound.py`：取回 → 判定 → 落库 / 置失败 / 按十一类计数丢弃，游标同事务推进 — `FR-9` / `AC-11`
-- [ ] `T-26` （前置 `T-6`、`T-8`、`T-18`）`flows/review_inbound.py` — `FR-8` / `AC-12`
+- [x] `T-26` （前置 `T-6`、`T-8`、`T-18`）`flows/review_inbound.py` — `FR-8` / `AC-12`
 - [ ] `T-27` （前置 `T-1`）`schemas/messages.py`（请求 / 响应模型、六态取值、时间序列化）+ `tests/unit/test_schemas.py` — `FR-11` / `AC-17`
 - [ ] `T-28` （前置 `T-27`、`T-12`）`service/submit_message.py` — `FR-1` / `AC-1`
 - [ ] `T-29` （前置 `T-27`、`T-11`）`service/query_message.py` 与 `query_replies.py` — `FR-10` / `AC-15`
