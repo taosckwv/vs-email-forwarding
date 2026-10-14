@@ -20,8 +20,10 @@
 ## 2. 异常与错误处理
 
 1. 抛出与捕获的是否都是**具体异常类型**？`raise Exception(...)`、`except:`、`except Exception` 一律不允许。
-   - **唯一登记在案的例外：后台任务的监督循环。** 设计要求五条后台流「各自独立循环、独立间隔、**各自吞异常**——单条流阻塞或抛异常都不影响其余各条」（`specs/0001-email-forwarding-service/plan.md` §5.1；落点见同文件 §2.4 的 `flows/scheduler.py` 一行）。监督循环因此允许在最外层按 `except Exception` 兜底，但必须**同时**满足三条：① 只包住那一次 tick 调用，不包住循环体其余部分；② 按本清单第 2 条用 `logger.exception(...)` 留栈，不得静默吞掉；③ 不得把取消一并吞掉（`asyncio.CancelledError` 继承 `BaseException`，本就不在该捕获面内）。落点是 `src/vs_email_forwarding/flows/scheduler.py` 的 `Scheduler._run_loop`。
-   - **已否决方向：把捕获面收窄成受控异常集**（自定义异常 + 外部能力基类）——tick 里走的是数据库与外部能力，异常类型不受监督层约束；收窄后任何一个未预期的 tick 异常都会打死这条流，与「各自吞异常保循环」正好相反。
+   - **登记在案的例外只有两处**（见下两条），每处都写清落点与必须同时满足的条件；这两处之外一律不得宽捕获。
+   - **例外一：后台任务的监督循环。** 设计要求五条后台流「各自独立循环、独立间隔、**各自吞异常**——单条流阻塞或抛异常都不影响其余各条」（`specs/0001-email-forwarding-service/plan.md` §5.1；落点见同文件 §2.4 的 `flows/scheduler.py` 一行）。监督循环因此允许在最外层按 `except Exception` 兜底，但必须**同时**满足三条：① 只包住那一次 tick 调用，不包住循环体其余部分；② 按本清单第 2 条用 `logger.exception(...)` 留栈，不得静默吞掉；③ 不得把取消一并吞掉（`asyncio.CancelledError` 继承 `BaseException`，本就不在该捕获面内）。落点是 `src/vs_email_forwarding/flows/scheduler.py` 的 `Scheduler._run_loop`。
+   - **例外二：流层的单次外部能力调用边界。** 审查接口把「抛异常」定为契约的一部分（`providers/review/base.py`：抛异常 = 审查环节出错（含超时），重试用尽后写 `rejected_messages.source = review_error`，见 `specs/0001-email-forwarding-service/design.md` §3.2 / §4.2），却**不定义任何异常类型**——两条先例都收不拢它的捕获面：发信适配器把失败**全部收进返回值**、不抛异常（`providers/smtp/base.py`），IMAP 适配器捕的是 imaplib / imapclient 的可枚举类型。流层因此允许对**这一次**调用按 `except Exception` 接住，但必须**同时**满足三条：① 只包住那一次外部能力调用，不包住循环体、也不包住落库；② **按 `exc_type` 记事件、不留栈**——`logger.exception(...)` 会把异常原文写进日志，而审查异常原文可能回显邮件正文或收件人地址（`AGENTS.md` §8 第 4 条），故只记异常类型与邮件 ID；③ 不得把取消一并吞掉（`asyncio.CancelledError` 继承 `BaseException`，本就不在该捕获面内）。落点是 `src/vs_email_forwarding/flows/review_outbound.py`（T-23）与 `src/vs_email_forwarding/flows/review_inbound.py`（T-26 同款）。
+   - **已否决方向：把捕获面收窄成受控异常集**（自定义异常 + 外部能力基类，或只捕超时）。两处理由同源：tick 里走的是数据库与外部能力，异常类型不受监督层约束，收窄后任何一个未预期的 tick 异常都会打死这条流，与「各自吞异常保循环」正好相反；在审查调用这一处，只捕 `TimeoutError` 会让非超时的审查异常静默偏离 `design.md` §3.2 的 `review_error` 语义（第 4 次尝试用尽后会被收割支记成 `review_incomplete`），把一条设计内分支降级成看不见的偏差。
 2. 每个捕获处是否要么处理、要么用 `logger.exception(...)` 留下栈，再决定转译或上抛？（静默吞掉 = 隐患。）
 3. 异常类是否定义在它所属的层（api / service / providers 各自定义自己的错误类型），而不是全仓库共用一个？
 4. 异常信息是否只描述「发生了什么、怎么定位」（用邮件 ID 等引用），不含敏感内容？（红线见 `AGENTS.md` §8 第 4 条，此处只提示自检。）
