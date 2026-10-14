@@ -51,7 +51,7 @@
 
 - [x] `T-22` （前置 `T-3`、`T-10`）`flows/scheduler.py`（五条任务的启停与调度，间隔取自配置）+ `flows/cleanup.py` 的编排 + `tests/unit/test_scheduler_intervals.py` — `NFR-2` / `AC-23`
 - [x] `T-23` （前置 `T-6`、`T-8`、`T-18`）`flows/review_outbound.py`（含收割支）— `FR-3` / `AC-6`
-- [ ] `T-24` （前置 `T-7`、`T-14`、`T-19`）`flows/send_email.py`（含收割支）— `FR-4` / `AC-7`
+- [x] `T-24` （前置 `T-7`、`T-14`、`T-19`）`flows/send_email.py`（含收割支）— `FR-4` / `AC-7`
 - [ ] `T-25` （前置 `T-9`、`T-12`、`T-16`、`T-21`）`flows/fetch_inbound.py`：取回 → 判定 → 落库 / 置失败 / 按十一类计数丢弃，游标同事务推进 — `FR-9` / `AC-11`
 - [ ] `T-26` （前置 `T-6`、`T-8`、`T-18`）`flows/review_inbound.py` — `FR-8` / `AC-12`
 - [ ] `T-27` （前置 `T-1`）`schemas/messages.py`（请求 / 响应模型、六态取值、时间序列化）+ `tests/unit/test_schemas.py` — `FR-11` / `AC-17`

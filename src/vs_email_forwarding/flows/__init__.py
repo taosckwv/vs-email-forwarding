@@ -20,8 +20,9 @@
 
 分层与依赖方向见 ``docs/architecture.md``。
 当前状态：``scheduler.py``（五条任务的统一启停与调度）、``cleanup.py``（流⑤ 保留期清理的
-编排）与 ``review_outbound.py``（流① 审查出站：认领 → 审查 → 落库）已落地——编排与调度规格
-见 ``specs/0001-email-forwarding-service/design.md`` §3 与 ``plan.md`` §2.4、§5.1 ~ §5.3；
-其余三条业务流的模块（``send_email.py`` / ``fetch_inbound.py`` / ``review_inbound.py``）
-随 ``plan.md`` §2.4 的后续任务（T-24 ~ T-26）落地。
+编排）、``review_outbound.py``（流① 审查出站：认领 → 审查 → 落库）与 ``send_email.py``
+（流② 发信：认领 → SMTP 投递 → 条件 UPDATE）已落地——编排与调度规格见
+``specs/0001-email-forwarding-service/design.md`` §3 与 ``plan.md`` §2.4、§5.1 ~ §5.3；
+其余两条业务流的模块（``fetch_inbound.py`` / ``review_inbound.py``）随 ``plan.md`` §2.4 的
+后续任务（T-25 ~ T-26）落地。
 """
