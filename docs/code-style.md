@@ -20,6 +20,8 @@
 ## 2. 异常与错误处理
 
 1. 抛出与捕获的是否都是**具体异常类型**？`raise Exception(...)`、`except:`、`except Exception` 一律不允许。
+   - **唯一登记在案的例外：后台任务的监督循环。** 设计要求五条后台流「各自独立循环、独立间隔、**各自吞异常**——单条流阻塞或抛异常都不影响其余各条」（`specs/0001-email-forwarding-service/plan.md` §5.1；落点见同文件 §2.4 的 `flows/scheduler.py` 一行）。监督循环因此允许在最外层按 `except Exception` 兜底，但必须**同时**满足三条：① 只包住那一次 tick 调用，不包住循环体其余部分；② 按本清单第 2 条用 `logger.exception(...)` 留栈，不得静默吞掉；③ 不得把取消一并吞掉（`asyncio.CancelledError` 继承 `BaseException`，本就不在该捕获面内）。落点是 `src/vs_email_forwarding/flows/scheduler.py` 的 `Scheduler._run_loop`。
+   - **已否决方向：把捕获面收窄成受控异常集**（自定义异常 + 外部能力基类）——tick 里走的是数据库与外部能力，异常类型不受监督层约束；收窄后任何一个未预期的 tick 异常都会打死这条流，与「各自吞异常保循环」正好相反。
 2. 每个捕获处是否要么处理、要么用 `logger.exception(...)` 留下栈，再决定转译或上抛？（静默吞掉 = 隐患。）
 3. 异常类是否定义在它所属的层（api / service / providers 各自定义自己的错误类型），而不是全仓库共用一个？
 4. 异常信息是否只描述「发生了什么、怎么定位」（用邮件 ID 等引用），不含敏感内容？（红线见 `AGENTS.md` §8 第 4 条，此处只提示自检。）

@@ -25,6 +25,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from vs_email_forwarding.config import Settings
 from vs_email_forwarding.flows.scheduler import Scheduler
 
@@ -95,12 +97,16 @@ def _ticks() -> dict[str, Tick]:
     return {name: _noop_tick for name in _EXPECTED_TASK_NAMES}
 
 
-def _settings_with(**overrides: int) -> Settings:
+def _settings_with(monkeypatch: pytest.MonkeyPatch, **overrides: int) -> Settings:
     """构造只认用例显式给值的配置对象。
 
-    ``_env_file=None`` 关掉 ``.env`` 读取，免得开发机上那份文件把用例的期望值带偏；
-    构造用参数优先于环境变量与点文件，用例因此完全确定（`docs/testing.md` R12）。
+    ``_env_file=None`` 只关掉 ``.env`` 读取；pydantic-settings 的优先级是「init 参数 >
+    环境变量 > 点文件 > 声明默认值」，导出在 shell 里的 ``POLL_CLEANUP_SECONDS=7200``
+    这类值仍会盖掉默认值。因此这里再把这六个键逐个从环境里剔除，让用例只认自己写进去的
+    取值（`docs/testing.md` R12：不依赖全局状态）。
     """
+    for field in _INTERVAL_AND_BATCH_FIELDS:
+        monkeypatch.delenv(field.upper(), raising=False)
     return Settings(_env_file=None, **overrides)
 
 
@@ -135,7 +141,7 @@ def _int_literals(source: str, *, filename: str) -> list[tuple[int, int]]:
 class TestIntervalComesFromConfig:
     """`AC-23`：间隔从配置读，改配置后重建即为新值；五条任务一条不少。"""
 
-    def test_interval_comes_from_config(self) -> None:
+    def test_interval_comes_from_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # 五个值彼此不同且都偏离默认值：任何「写死默认值」的实现都会红。
         configured = {
             "poll_review_outbound_seconds": 17,
@@ -144,7 +150,7 @@ class TestIntervalComesFromConfig:
             "poll_review_inbound_seconds": 41,
             "poll_cleanup_seconds": 3607,
         }
-        scheduler = Scheduler(_settings_with(**configured), _ticks())
+        scheduler = Scheduler(_settings_with(monkeypatch, **configured), _ticks())
 
         for task_name, field_name in _TASK_INTERVAL_FIELDS.items():
             assert scheduler.interval_seconds(task_name) == configured[field_name], (
@@ -152,14 +158,16 @@ class TestIntervalComesFromConfig:
             )
 
         # 改配置后**重新构造**即为新值（AC-23 的改写口径：不测墙钟，只测构造读到的值）。
-        rebuilt = Scheduler(_settings_with(poll_send_seconds=29), _ticks())
+        rebuilt = Scheduler(_settings_with(monkeypatch, poll_send_seconds=29), _ticks())
         assert rebuilt.interval_seconds("send_email") == 29
         # 先构造的那个不受影响：间隔是构造时读入的，不是每次现读。
         assert scheduler.interval_seconds("send_email") == 23
 
-    def test_default_intervals_are_the_documented_ones(self) -> None:
+    def test_default_intervals_are_the_documented_ones(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # 不传任何覆盖时，读到的是配置声明的默认值——期望值来自 NFR-2 与 design.md §7。
-        scheduler = Scheduler(_settings_with(), _ticks())
+        scheduler = Scheduler(_settings_with(monkeypatch), _ticks())
 
         assert {
             task_name: scheduler.interval_seconds(task_name) for task_name in _EXPECTED_TASK_NAMES
@@ -171,17 +179,34 @@ class TestIntervalComesFromConfig:
             "cleanup": 3600,
         }
 
-    def test_incomplete_task_set_is_rejected(self) -> None:
+    def test_default_intervals_ignore_exported_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # _settings_with 的隔离要能反向证明：把六个键都导出到环境里（值刻意取成与默认值
+        # 不同的 7200），默认值用例仍须读到声明默认值——隔离一旦失效，这条会红。
+        for field in _INTERVAL_AND_BATCH_FIELDS:
+            monkeypatch.setenv(field.upper(), "7200")
+
+        scheduler = Scheduler(_settings_with(monkeypatch), _ticks())
+
+        assert scheduler.interval_seconds("cleanup") == 3600
+
+    def test_incomplete_task_set_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # design.md §3「后台任务共五条」：少一条要当场报错，不能静默只调度四条。
         incomplete = _ticks()
         del incomplete["cleanup"]
 
-        try:
-            Scheduler(_settings_with(), incomplete)
-        except ValueError as error:
-            assert "cleanup" in str(error)
-        else:
-            raise AssertionError("五条任务不齐时调度器仍然构造成功")
+        with pytest.raises(ValueError, match="cleanup"):
+            Scheduler(_settings_with(monkeypatch), incomplete)
+
+    def test_unknown_task_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 另一侧边界：多传一个不认识的任务名同样要当场报错，不能静默忽略（docstring 里
+        # 「缺一条或名字不认识都当场报错」的「多」侧由此有失败证据）。
+        ticks = _ticks()
+        ticks["bogus"] = _noop_tick
+
+        with pytest.raises(ValueError, match="bogus"):
+            Scheduler(_settings_with(monkeypatch), ticks)
 
 
 class TestNoIntervalLiterals:

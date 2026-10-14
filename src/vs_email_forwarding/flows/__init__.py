@@ -19,5 +19,8 @@
 不放：HTTP 路由、SQL 字符串。
 
 分层与依赖方向见 ``docs/architecture.md``。
-当前状态：仅占位，尚未实现；调度规格见 specs 中的调度规格文档。
+当前状态：``scheduler.py``（五条任务的统一启停与调度）与 ``cleanup.py``（流⑤ 保留期清理的
+编排）已落地——编排与调度规格见 ``specs/0001-email-forwarding-service/design.md`` §3 与
+``plan.md`` §2.4；四条业务流的模块（``review_outbound.py`` / ``send_email.py`` /
+``fetch_inbound.py`` / ``review_inbound.py``）随 ``plan.md`` §2.4 的后续任务（T-23 ~ T-26）落地。
 """

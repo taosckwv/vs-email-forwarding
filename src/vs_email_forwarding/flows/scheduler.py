@@ -107,9 +107,9 @@ class Scheduler:
         while True:
             try:
                 await tick()
-            # 单条流的异常不得传染其余四条（plan.md §5.1「各自吞异常」）：这里把
-            # 捕获面放到最宽是有意为之——tick 里走的是数据库与外部能力，异常类型不受
-            # 本层约束；处理方式是留栈后继续（docs/code-style.md §2.2 的落法）。
+            # 单条流的异常不得传染其余四条（plan.md §5.1「各自吞异常」）：这里的兜底捕获
+            # 是 docs/code-style.md §2.1 登记在案的「监督循环」例外——只包住这一次 tick
+            # 调用、必须留栈、不吞取消（同 §2.2 的落法）。
             except Exception:
                 logger.exception("flow_tick_failed", flow=str(name))
             await asyncio.sleep(interval_seconds)
