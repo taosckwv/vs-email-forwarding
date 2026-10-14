@@ -133,11 +133,16 @@ ignore_missing_imports = false
 # 若某个库确实缺少类型存根，必须先在 docs/research/ 下对应的主题册记录理由（见 AGENTS.md §6），
 # 再在 [[tool.mypy.overrides]] 中按 module 精确放行，不要整体关闭。
 #
-# 已登记、不在本文件的放行：asyncpg 与 IMAPClient 的包目录下都没有 py.typed，import 时报
-# import-untyped（实测依据见 docs/research/03-dependencies-and-toolchain.md）。此刻没有任何
-# 模块 import 这两个库，而 [[tool.mypy.overrides]] 在无对应 import 时会被 mypy 报成
-# unused section，因此放行与第一个真正 import 该库的模块同一次改动落地，只覆盖这两个
-# module，不放宽同样新增、但自带 py.typed 的 sqlalchemy 与 alembic。
+# 唯一的放行是 imapclient：它的包目录下没有 py.typed，在 src/ 下 import 后 mypy 报
+# import-untyped（实测依据见 docs/research/03-dependencies-and-toolchain.md），因此按
+# module 精确放行（下方 [[tool.mypy.overrides]]）。asyncpg 同样没有 py.typed，但此刻没有
+# 任何模块 import 它，而 [[tool.mypy.overrides]] 在无对应 import 时会被 mypy 报成
+# unused section，因此它的放行与第一个真正 import 它的模块同一次改动落地。只覆盖实测报
+# import-untyped 的 module，不放宽同样新增、但自带 py.typed 的 sqlalchemy 与 alembic。
+
+[[tool.mypy.overrides]]
+module = ["imapclient", "imapclient.*"]
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
 # pytest
