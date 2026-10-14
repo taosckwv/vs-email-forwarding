@@ -1716,3 +1716,124 @@ class TestInboundReceivedInsertIdempotency:
             pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
         assert message_count == 0
         assert pending_count == 0
+
+
+# ---------------------------------------------------------------------------
+# T-25 前置：按 Message-ID 读出站行（流③ 回复支与 DSN 退信支共用的只读口）
+# 真源：design §2.2 的 message_id 列口径（仅出站行、全局唯一）与
+# §3.3「退信到达」一行（靠 sent_at 是否为空分 dsn_target_not_sent / 置 failed）
+# ---------------------------------------------------------------------------
+
+from vs_email_forwarding.db.repositories.messages import (  # noqa: E402
+    outbound_targets_by_message_id,
+)
+
+
+async def _insert_outbound_row(
+    db_engine: AsyncEngine,
+    *,
+    message_id: str,
+    sent_at: datetime | None,
+) -> uuid.UUID:
+    """造一条带指定 Message-ID 的出站行（夹具数据，docs/testing.md R10：改动须评审）。
+
+    ``sent_at`` 是必填夹具参数：它区分「曾被 MTA 接受」与「尚未发出」，正是本读口
+    返回值里第二位分量的考点，不允许由被造对象默认（出站行没有 sent_at 默认值）。
+    """
+    row_id = uuid.uuid4()
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            sa.insert(Message).values(
+                id=row_id,
+                direction="outbound",
+                status=_SENT if sent_at is not None else _SENDING,
+                message_id=message_id,
+                recipient="colleague@example.com",
+                subject="夹具主题（无真实收件人）",
+                body="夹具正文",
+                attempt_count=0,
+                next_attempt_at=_NOW,
+                sent_at=sent_at,
+                created_at=_NOW - timedelta(hours=1),
+            )
+        )
+    return row_id
+
+
+class TestOutboundTargetsByMessageId:
+    """按 Message-ID 读出站行：命中映射、未命中空字典、只认出站行。"""
+
+    async def test_hits_map_message_id_to_row_id_and_sent_at(self, db_engine: AsyncEngine) -> None:
+        accepted_at = _NOW - timedelta(minutes=5)
+        sent_row = await _insert_outbound_row(
+            db_engine, message_id="<t25-hit-sent@example.com>", sent_at=accepted_at
+        )
+        # 尚未发出的行：sent_at 为空——退信支据此走 dsn_target_not_sent（§3.3）。
+        unsent_row = await _insert_outbound_row(
+            db_engine, message_id="<t25-hit-sending@example.com>", sent_at=None
+        )
+        # 未被点名的出站行不得进入结果：字典键恰好是入参里能命中的那些。
+        await _insert_outbound_row(
+            db_engine, message_id="<t25-not-queried@example.com>", sent_at=_NOW
+        )
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            targets = await outbound_targets_by_message_id(
+                session,
+                ["<t25-hit-sending@example.com>", "<t25-hit-sent@example.com>"],
+            )
+        finally:
+            await session.close()
+
+        # 期望值就是夹具里写死的 (行 UUID, sent_at) 对——不从被测实现取任何值。
+        assert targets == {
+            "<t25-hit-sent@example.com>": (sent_row, accepted_at),
+            "<t25-hit-sending@example.com>": (unsent_row, None),
+        }
+
+    async def test_unknown_message_id_returns_empty_mapping(self, db_engine: AsyncEngine) -> None:
+        await _insert_outbound_row(db_engine, message_id="<t25-present@example.com>", sent_at=_NOW)
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            # 库里有出站行、但没有任何一行用这个 Message-ID（例：DSN 指向的信已被清理，
+            # §3.3 的 dsn_target_gone 支）。
+            absent = await outbound_targets_by_message_id(session, ["<t25-absent@example.com>"])
+            # 候选集合为空（流③ 一个标识都没抽出来）：仍是空结果，不得退化成「查全部」。
+            nothing_asked = await outbound_targets_by_message_id(session, [])
+        finally:
+            await session.close()
+
+        assert absent == {}
+        assert nothing_asked == {}
+
+    async def test_inbound_rows_are_never_returned(self, db_engine: AsyncEngine) -> None:
+        """只认出站行：入站行即使存在也不会成为关联目标。
+
+        ``messages`` 的 CHECK（`ck_messages_direction_columns`）强制入站行
+        ``message_id`` 为 NULL，因此本读口的 direction 谓词是纵深防御；本用例钉住的
+        可观察行为是「入站行永不进入结果」（design §2.2：`message_id` 只装出站行的
+        对外标识，入站回复靠 `parent_id` 外键关联）。
+        """
+        outbound_row = await _insert_outbound_row(
+            db_engine, message_id="<t25-only-outbound@example.com>", sent_at=_NOW
+        )
+        inbound_row = await _insert_message_full(db_engine, created_at=_NOW, direction="inbound")
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            targets = await outbound_targets_by_message_id(
+                session,
+                ["<t25-only-outbound@example.com>", f"<t25-{inbound_row}@example.com>"],
+            )
+        finally:
+            await session.close()
+
+        assert targets == {"<t25-only-outbound@example.com>": (outbound_row, _NOW)}
+        # 夹具前提：入站行确实在库里（不是「没造出来」才没进结果）。
+        async with db_engine.connect() as conn:
+            stored_inbound = (
+                await conn.execute(sa.select(Message.id).where(Message.id == inbound_row))
+            ).first()
+        assert stored_inbound is not None

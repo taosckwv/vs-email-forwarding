@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any, Final, cast
 
@@ -55,14 +56,22 @@ _FAILED: Final = MESSAGE_STATES[5]
 #: 尝试），必须发起投递。
 type ClaimedSendMessage = tuple[Message, bool]
 
+#: 出站行的关联目标：``(主键, sent_at)``。中性二元组——回复支只取主键当
+#: ``parent_id``（``design.md`` §2.2 的关联口径）；退信支再看 ``sent_at`` 是否为空，
+#: 区分「曾被 MTA 接受」（置 ``failed``）与「尚未发出」（``dsn_target_not_sent``，
+#: ``design.md`` §3.3「退信到达」）。本层不替调用方作这三种判定。
+type OutboundTarget = tuple[uuid.UUID, datetime | None]
+
 __all__ = [
     "ClaimedSendMessage",
+    "OutboundTarget",
     "claim_due_send_messages",
     "claim_due_send_statement",
     "mark_failed_from_sent",
     "mark_send_failed",
     "mark_sent",
     "message_status",
+    "outbound_targets_by_message_id",
     "pending_attempt_count",
     "replies_page",
 ]
@@ -243,3 +252,39 @@ async def replies_page(
         )
     stmt = stmt.order_by(Message.received_at, Message.id).limit(limit)
     return list((await session.execute(stmt)).all())
+
+
+# ---------------------------------------------------------------------------
+# T-25 前置（spec 0001）：按 Message-ID 读出站行
+# （流③ 回复支与 DSN 退信支共用；design §2.2 的 message_id 列口径）
+# ---------------------------------------------------------------------------
+
+
+async def outbound_targets_by_message_id(
+    session: AsyncSession, message_ids: Sequence[str]
+) -> dict[str, OutboundTarget]:
+    """按 Message-ID 批量读出站行，返回 ``Message-ID → (主键, sent_at)``。
+
+    流③ 两条支路的共用入口（``plan.md`` §5.4）：**回复支**用返回的键当「已知集合」
+    （命中即说明引用指向本服务的出站邮件）、用主键当回复行的 ``parent_id``；
+    **退信支**用返回的 ``sent_at`` 分辨「曾被 MTA 接受」（非空 → 置 ``failed``）
+    与「尚未发出」（空 → ``dsn_target_not_sent``、不打断重试）。这两种判定属调用方，
+    本层只把库内事实读出来。
+
+    入参是候选标识集合，未命中的标识**不出现**在结果里（缺键＝该 Message-ID 没有
+    对应行，例：指向的邮件已被保留期清理，``design.md`` §3.3 的 ``dsn_target_gone``）。
+    匹配是精确串比较：解析、去空白与大小写规范化属 ``core/inbound``，不在本层。
+    ``message_id`` 上建的是全局唯一索引（``design.md`` §2.2），故每个键至多一行。
+    只读出站行、不写库、不取时（无 ``now`` 参数）。
+    """
+    rows = (
+        await session.execute(
+            sa.select(Message.message_id, Message.id, Message.sent_at).where(
+                Message.direction == _OUTBOUND,
+                Message.message_id.in_(message_ids),
+            )
+        )
+    ).all()
+    # 出站行的 message_id 由 CHECK 保证非空（models.py ck_messages_outbound_required）；
+    # 列在 ORM 上声明为可空，故在此收窄类型。
+    return {cast(str, row.message_id): (row.id, row.sent_at) for row in rows}
