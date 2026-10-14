@@ -16,6 +16,16 @@
 * 取时一律用流程层绑定进来的 ``now`` 参数，不用 ``func.now()``（`plan.md` §5.2）：
   ``created_at`` 是该回复的落库时刻（§2.5），流④ 搬运时**原样搬运**、不得重新
   取 now 覆盖；``received_at`` / ``reviewed_at`` 在写回复行时取绑定的 now。
+* **过审落库是三态**（``approve_inbound_pending`` 的返回值）：写 ``received`` 行成功 /
+  待审行不存在 / **父行已被保留期清理**。第三态按 `design.md` §3.5 的 ``reply_target_gone``
+  与 §6「分拣与丢弃」处理——**同事务删除待审行、不写任何目标行**（既不写 ``messages``，
+  也不写 ``rejected_messages``），「丢弃」的计数留给流④。留下待审行不行：它会被反复认领，
+  第 4 次由收割支写进 ``rejected_messages``，正是 §3.6 要避免的「把用户的**正常回复误报成
+  拒审**」。父行是否存在由本层在**同一事务**内用一次 ``SELECT`` 判定：PG 细节（SQLSTATE /
+  异常文本 / savepoint）一概不出本层，流层不需要捕获 ``IntegrityError``。代价登记
+  （`design.md` §3.6）：判定与插入之间仍有理论窗口——清理流恰好先锁走父行时，窗口内的插入
+  会撞外键、由流层的结果事务按 ``SQLAlchemyError`` 吞掉（与流① 同口径）；§3.6 的
+  ``NOT EXISTS`` 规则（父行仍有入站待审行时不删）已把该窗口压到极小。
 
 本模块只含语句构造与执行，不承载业务判定（分拣去重计数属流③ 编排，T-25）。
 """
@@ -24,6 +34,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Final, cast
 
 import sqlalchemy as sa
@@ -39,6 +50,7 @@ from vs_email_forwarding.db.models import Message, PendingMessage
 _INBOUND: Final = DIRECTIONS[1]
 
 __all__ = [
+    "ApproveInboundOutcome",
     "approve_inbound_pending",
     "inbound_pending_insert_statement",
     "inbound_received_insert_statement",
@@ -114,19 +126,56 @@ async def insert_inbound_pending(
     return result.rowcount > 0
 
 
+class ApproveInboundOutcome(StrEnum):
+    """流④ 过审落库的三态结果（本层内部词汇，不落库、不出现在任何列里）。"""
+
+    #: 已收尾：写下 ``received`` 行；或撞 ``messages`` 侧入站唯一键（这一封早已入库过）
+    #: 而只删待审行。两条路径都表示「回复已在库里」，流层按过审计数（`design.md` §3.5）。
+    APPROVED = "approved"
+    #: 待审行不存在（已被其他执行体收尾）：不写任何行，按幂等忽略。
+    PENDING_GONE = "pending_gone"
+    #: 父行已被保留期清理：同事务删掉这条待审行、**不写任何目标行**，流层按
+    #: ``reply_target_gone`` 计数丢弃（`design.md` §3.5 / §6）。
+    PARENT_GONE = "parent_gone"
+
+
+async def _parent_row_exists(session: AsyncSession, parent_id: uuid.UUID) -> bool:
+    """父行（``parent_id`` 指向的出站邮件）是否仍在：同事务一次 ``SELECT``。
+
+    过审插入会撞 ``fk_messages_parent_id``（``messages.parent_id`` 是自引用外键），
+    但捕获外键违例要 savepoint + 认 SQLSTATE，属不该出 ``db/`` 的知识面——改为**先判**。
+    判定与插入之间仍有理论窗口（清理流恰好在这一瞬删掉父行，见模块 docstring 的代价登记）。
+    """
+    stmt = sa.select(Message.id).where(Message.id == parent_id)
+    return (await session.execute(stmt)).first() is not None
+
+
 async def approve_inbound_pending(
     session: AsyncSession, pending_id: uuid.UUID, *, now: datetime
-) -> bool:
-    """流④ 过审落库：写 ``messages`` 一行 ``received`` + 删待审行。
+) -> ApproveInboundOutcome:
+    """流④ 过审落库：写 ``messages`` 一行 ``received`` + 删待审行；三态见返回值类型。
 
     同一事务内「写目标行 → 删待审行」；``created_at`` 原样搬运（保持该回复的
     落库时刻），``received_at`` / ``reviewed_at`` 取绑定的 now，``attempt_count``
     与 ``next_attempt_at`` 建行即重置（§2.4）。撞 ``messages`` 侧入站唯一键
-    （这一封已入库过）时只删待审行、返回 ``True``；待审行不存在返回 ``False``。
+    （这一封已入库过）时只删待审行、返回 ``APPROVED``；待审行不存在返回
+    ``PENDING_GONE``。
+
+    父行（``parent_id`` 指向的出站邮件）已被保留期清理时返回 ``PARENT_GONE``：
+    同一事务内删掉这条待审行，**不写 ``messages``、也不写 ``rejected_messages``**
+    ——后者是 ``design.md`` §6 明令否掉的方向（把用户的正常回复误报成拒审）。
+    父行判定在同一事务内用一次 ``SELECT`` 完成，流层不接触 PG 错误码与异常文本。
+
+    ``parent_id`` 为空只可能是库外写进来的行（流③ 的 ``insert_inbound_pending``
+    该参数必填）：没有父行可判，按既有语义原样插入，不冒充丢弃。
     """
     row = await session.get(PendingMessage, pending_id)
     if row is None:
-        return False
+        return ApproveInboundOutcome.PENDING_GONE
+    if row.parent_id is not None and not await _parent_row_exists(session, row.parent_id):
+        # 先判后写：父行已清理 → 丢弃（§3.5）。留下待审行会被反复认领并最终误报成拒审（§3.6）。
+        await session.execute(sa.delete(PendingMessage).where(PendingMessage.id == pending_id))
+        return ApproveInboundOutcome.PARENT_GONE
     await session.execute(
         inbound_received_insert_statement().values(
             id=row.id,
@@ -149,4 +198,4 @@ async def approve_inbound_pending(
         )
     )
     await session.execute(sa.delete(PendingMessage).where(PendingMessage.id == pending_id))
-    return True
+    return ApproveInboundOutcome.APPROVED

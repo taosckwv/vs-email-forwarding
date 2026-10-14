@@ -1452,6 +1452,7 @@ class TestRepliesKeysetPagination:
 
 from vs_email_forwarding.constants import RECEIVED_STATE  # noqa: E402
 from vs_email_forwarding.db.repositories.inbound import (  # noqa: E402
+    ApproveInboundOutcome,
     approve_inbound_pending,
     insert_inbound_pending,
 )
@@ -1608,7 +1609,7 @@ class TestInboundReceivedInsertIdempotency:
         finally:
             await session.close()
 
-        assert finalized is True
+        assert finalized is ApproveInboundOutcome.APPROVED
         async with db_engine.connect() as conn:
             rows = (
                 await conn.execute(
@@ -1686,7 +1687,7 @@ class TestInboundReceivedInsertIdempotency:
             await session.close()
 
         # 待审行已收尾，但 messages 恰一行、且是先落库那条（received_at 未被覆盖）。
-        assert finalized is True
+        assert finalized is ApproveInboundOutcome.APPROVED
         async with db_engine.connect() as conn:
             received_rows = (
                 await conn.execute(
@@ -1710,12 +1711,70 @@ class TestInboundReceivedInsertIdempotency:
         finally:
             await session.close()
 
-        assert finalized is False
+        assert finalized is ApproveInboundOutcome.PENDING_GONE
         async with db_engine.connect() as conn:
             message_count = len((await conn.execute(sa.select(Message.id))).all())
             pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
         assert message_count == 0
         assert pending_count == 0
+
+
+class TestInboundReplyParentGoneDiscard:
+    """T-26 前置：父行已被保留期清理时的「丢弃」接缝（design §3.5 ``reply_target_gone`` + §6）。"""
+
+    async def test_approve_after_parent_purged_discards_pending_row(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        # 场景：回复已落待审行，父行随后被保留期清理（清理流的 NOT EXISTS 只在不撞并发
+        # 窗口时挡住这一情形）。此时过审必须按 reply_target_gone 丢弃：删待审行、零目标行。
+        parent_id = await _insert_message_full(db_engine, created_at=_NOW - timedelta(hours=2))
+        pending_id = await _insert_inbound_pending_row(db_engine, uid=3005, parent_id=parent_id)
+        async with db_engine.begin() as conn:
+            await conn.execute(sa.delete(Message).where(Message.id == parent_id))
+
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            outcome = await approve_inbound_pending(session, pending_id, now=_NOW)
+            await session.commit()
+        finally:
+            await session.close()
+
+        # 三态可区分：父行已清理给 PARENT_GONE，既不是 APPROVED 也不是 PENDING_GONE。
+        assert outcome is ApproveInboundOutcome.PARENT_GONE
+        async with db_engine.connect() as conn:
+            message_count = len((await conn.execute(sa.select(Message.id))).all())
+            rejected_count = len((await conn.execute(sa.select(RejectedMessage.id))).all())
+            pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+        # 零目标行：不写 received（父行已不在，写不出来）、也不写 rejected
+        # （§6 明令否掉「把用户的正常回复误报成拒审」）。
+        assert message_count == 0
+        assert rejected_count == 0
+        # 待审行被丢弃：留下它会被反复认领，第 4 次由收割支写进 rejected_messages。
+        assert pending_count == 0
+
+    async def test_missing_pending_with_purged_parent_reports_pending_gone(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        # 分支顺序：待审行不在就先按幂等忽略，不得因为「库是空的、父行查不到」而报丢弃。
+        missing_parent = uuid.uuid4()
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            outcome = await approve_inbound_pending(session, uuid.uuid4(), now=_NOW)
+            await session.commit()
+        finally:
+            await session.close()
+
+        assert outcome is ApproveInboundOutcome.PENDING_GONE
+        assert outcome is not ApproveInboundOutcome.PARENT_GONE
+        async with db_engine.connect() as conn:
+            message_count = len((await conn.execute(sa.select(Message.id))).all())
+            pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
+            rejected_count = len((await conn.execute(sa.select(RejectedMessage.id))).all())
+            still_there = (
+                await conn.execute(sa.select(Message.id).where(Message.id == missing_parent))
+            ).all()
+        assert (message_count, pending_count, rejected_count) == (0, 0, 0)
+        assert still_there == []
 
 
 # ---------------------------------------------------------------------------
