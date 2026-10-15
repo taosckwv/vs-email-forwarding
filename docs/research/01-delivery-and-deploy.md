@@ -20,9 +20,10 @@
 - **`docker save` / `docker load` 一律不传 `--platform`**：该参数需要 API 1.48（Engine v28），服务器 API 实测 1.45，传了会因未知参数直接失败。
 - **基础镜像以镜像 tar 形式从外部带入服务器并 `docker load`**；介质传输对象由「应用镜像 + 依赖镜像」收缩为「基础镜像 tar」。
 - 必须物理抵达服务器的镜像共**三个**：`python:3.13-slim-trixie`（构建期）、`ghcr.io/astral-sh/uv:0.12.20`（构建期）、`postgres:17`（运行期）。
-- 构建输入（`Dockerfile`、`pyproject.toml`、`uv.lock`、`src/`、`compose.yaml`、`.env`）必须送上服务器（以及交付脚本自身——**待实现**）；宿主**没有 `git`**，只能靠 `rsync` / 归档传输。
+- 构建输入（`Dockerfile`、`pyproject.toml`、`uv.lock`、`src/`、`migrations/`、`compose.yaml`、`.env`）必须送上服务器（以及交付脚本自身：`deploy/migrate.sh`、`deploy/run.sh`、`deploy/check_archive.py`、`deploy/README.md`）；`migrations/` 必须在内——应用镜像要带迁移定义（`Dockerfile` 的 builder 与 runtime 两阶段各一处 `COPY`）；宿主**没有 `git`**，只能靠 `rsync` / 归档传输。
 - 交付前必须做**单平台归档自检**：tar 必须是单平台 `linux/amd64`、**不含 image index / manifest list、不含 attestation**。自检**不依赖 Docker、只用 Python 标准库**，在 tar 进入服务器之前执行。
 - sha256 旁路文件格式固定为 `"<hash>  <name>"`（**两个空格**）+ **LF 换行**；CRLF 会让 `sha256sum -c` 失败。
+- **运行期禁止 uv 同步，由镜像 `ENV UV_NO_SYNC=1` 单点保障**：runtime 的 `.venv` 是构建期 `uv sync --frozen --no-dev` 装好的，而 `uv run` 默认会同步**含 dev 组**的项目环境——离线 / 隔离环境里必然去外网取包而失败（撞 `AGENTS.md` §8 第 5 条「运行时不得依赖任何外部网络」）。故镜像 runtime 阶段设 `ENV UV_NO_SYNC=1`，靠它单点覆盖「迁移命令」（`deploy/migrate.sh`）与「镜像默认 `CMD`」两条路径；交付脚本**刻意不重复写 `--no-sync`**，迁移命令保持本册方法性结论段已记录的字面形状。反面提醒：`UV_NO_DEV=1` **不是**修法——它只少装 dev 组，uv 仍会去外网解析构建后端。`.venv` 不完整时的报错（`Failed to spawn` / `Failed to download` + dns error）由 `deploy/migrate.sh` 的失败分类④判读，修复方向是回有网构建机重建镜像，不是在服务器上补装。
 - **podman 保留为将来可能的替代**：生产宿主（CentOS 8）自带 podman 而不带 docker，因此 podman 在目标宿主上天然可得；当前不采用，但作为备选保留。**注意开发机已改用 Docker 且不再安装 podman**（原因见 `docs/research/05-dev-and-build-environment.md`），本册说的是生产宿主。
 
 **镜像选型**
@@ -102,19 +103,17 @@
 - `compose.yaml`：生产编排——`app` 与 `postgres:17` 两个服务、应用镜像由 `${VS_EMAIL_FORWARDING_IMAGE}` 指定（回滚改这里）、`platform: linux/amd64`（运行期保险）、数据卷 `./data/postgres:/var/lib/postgresql/data`、postgres 健康检查、自定义 bridge 网络、不映射 5432。
 - `.env.example`：全部可变配置的占位，含 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `VS_EMAIL_FORWARDING_IMAGE` / `HTTP_PORT`；真实 `.env` 永不进版本库。
 - `docs/open-questions.md`：**未定项的唯一清单**（本册只列指针）。
-- `deploy/`：**即将只留一份职责 README**，脚本与手册随之清空。以下落地位置**待实现**，判读标准与约束以本册为准：
+- `deploy/`：职责 README 与三件脚本**已落地**——`deploy/README.md`（职责与用法要点、判据出处指针）、`deploy/migrate.sh`（迁移入口）、`deploy/run.sh`（起服务 + `/healthz` 探活）、`deploy/check_archive.py`（交付前单平台归档自检，不依赖 Docker、只用 Python 标准库）。以下落地位置**待实现**，判读标准与约束以本册为准：
   - 镜像构建脚本（`docker build --platform linux/amd64`，在服务器上执行；**要不要改到开发机构建留到开发完成后定**）——**待实现**。
-  - 基础镜像 tar 的导出、带入与 `docker load` 流程——**待实现**。
-  - 交付前单平台归档自检（不依赖 Docker、只用 Python 标准库）——**待实现**；原归档自检脚本（**已随 `deploy/` 一起删除**），其判据已记于本册「结论」，须在待实现的脚本里重建。
-  - sha256 旁路文件的生成与校验（两个空格 + LF）——**待实现**。
-  - 迁移与启动脚本（容器内 `alembic -c migrations/alembic.ini upgrade head`、`docker compose up -d` + `/healthz` 轮询后才算成功）——**待实现**。
+  - 基础镜像 tar 的导出与带入（含 `docker load` 流程与 sha256 旁路文件的生成与校验，两个空格 + LF）——**待实现**。
+  - 产出方打包脚本——**待实现**，与 D13 同题（「哪台机器、什么工具产出」未定），随 D13 推迟。
 
 ## 未定项
 
 详见 `docs/open-questions.md`：
 
 - D1 各基础镜像 tag 的 digest 需在写进脚本前复核
-- D2 部署脚本的具体形态（新链路下的构建 / 打包 / 载入 / 启动 / 迁移脚本均**尚未实现**）
+- D2 部署脚本的具体形态（消费侧三件已落地；仍未定的是镜像构建脚本 / 基础镜像 tar 的打包与带入（含 sha256 旁路文件）/ 产出方打包脚本，与 D13 同题）
 - D4 备份与日志采集、保留期
 - D8 服务器侧 Docker 是否有可升级路径
 - D12 宿主 yum 源版本与发行版错配的风险
