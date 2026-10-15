@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
@@ -120,8 +121,22 @@ async def _fetch_pending(engine: AsyncEngine, pending_id: uuid.UUID) -> tuple[in
     return None if row is None else (row[0], row[1])
 
 
+#: 非阻塞判据的墙钟上界：`SKIP LOCKED` 下另一方的认领应当立即返回；写成阻塞式 `FOR UPDATE`
+#: 时它会一直等到持锁方的事务结束，用例在这里以超时失败收场。只判「有上界」，不判精确耗时
+#: （`docs/testing.md` R12），因此上界取得宽松（2 秒 ≫ 一次本地 SELECT）。
+_CLAIM_WAIT_TIMEOUT_SECONDS = 2.0
+
+
 class TestConcurrencyMutualExclusion:
-    """并发互斥：一方持有行锁未提交时，另一方的认领跳过该行（AC-29 的库内侧）。"""
+    """并发互斥：一方持有行锁未提交时，另一方的认领跳过该行（AC-29 的库内侧）。
+
+    三条用例各自钉一段语义：
+    * 既有那条钉「同一批只会被一方拿到」（A 持锁、B 拿不到该行）；
+    * 后两条钉 `SKIP LOCKED` 的**不阻塞**本身——B 的认领必须在墙钟上界内返回
+      （`asyncio.wait_for`）：写成阻塞式 `FOR UPDATE` 时 B 会一直等到 A 的事务结束，
+      用例以超时失败收场。这是 T-35 裁定后补的硬要求：只断言编译产物含 `SKIP LOCKED`
+      属于 T-6 的静态面，钉不住「另一方不等待」这条运行期语义。
+    """
 
     async def test_second_claim_skips_rows_locked_by_first(self, db_engine: AsyncEngine) -> None:
         pending_id = await _insert_pending(db_engine, _pending_row())
@@ -135,11 +150,15 @@ class TestConcurrencyMutualExclusion:
             assert [row.id for row, _ in claimed_a] == [pending_id]
 
             # 执行体 B：独立会话（独立连接、独立事务），同一批认领必须
-            # 拿不到已被 A 锁住的行。
+            # 拿不到已被 A 锁住的行。**带墙钟上界**：认领一旦退化成阻塞式，这里要以
+            # `TimeoutError` 失败，而不是把整条套件挂死（与下方并发用例同一手法、同一常量）。
             session_b = AsyncSession(bind=db_engine, expire_on_commit=False)
             try:
-                claimed_b = await claim_due_pending_messages(
-                    session_b, direction="outbound", now=_NOW, batch_size=10
+                claimed_b = await asyncio.wait_for(
+                    claim_due_pending_messages(
+                        session_b, direction="outbound", now=_NOW, batch_size=10
+                    ),
+                    timeout=_CLAIM_WAIT_TIMEOUT_SECONDS,
                 )
             finally:
                 await session_b.rollback()
@@ -149,6 +168,76 @@ class TestConcurrencyMutualExclusion:
             await session_a.close()
         # SKIP LOCKED 的语义：B 不阻塞、也不重复拿，同一批只会被一方拿到。
         assert claimed_b == []
+
+    async def test_concurrent_claim_single_delivery(self, db_engine: AsyncEngine) -> None:
+        """`AC-29` 的库内侧：两个执行体抢同一批，同一行只被一方认领、另一方**不等待**。
+
+        并发窗口用「A 的会话保持打开、不提交」造出来——这就是「两个执行体同时抢同一批」里真正
+        重叠的那段窗口（`design.md` §3 阶段③ 登记的「结果事务未提交」窗口）；时钟级同时不可
+        确定性复现（`docs/testing.md` R12），而这段窗口正是 `SKIP LOCKED` 要解决的场景。
+        """
+        pending_id = await _insert_pending(db_engine, _pending_row())
+        session_a = AsyncSession(bind=db_engine, expire_on_commit=False)
+        session_b = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            claimed_a = await claim_due_pending_messages(
+                session_a, direction="outbound", now=_NOW, batch_size=10
+            )
+            assert [row.id for row, _ in claimed_a] == [pending_id]
+            # A 的认领尚未提交：另一条连接读到的仍是认领前的值（这正是崩溃窗口的形态）。
+            assert await _fetch_pending(db_engine, pending_id) == (0, _NOW)
+
+            # B 与 A 抢同一批：必须在墙钟上界内返回（阻塞式写法会在这里超时）。
+            claimed_b = await asyncio.wait_for(
+                claim_due_pending_messages(
+                    session_b, direction="outbound", now=_NOW, batch_size=10
+                ),
+                timeout=_CLAIM_WAIT_TIMEOUT_SECONDS,
+            )
+        finally:
+            await session_b.rollback()
+            await session_b.close()
+            await session_a.rollback()
+            await session_a.close()
+
+        assert claimed_b == []  # 对端空手而归：这一批不会产生第二次外部调用（AC-29）
+
+    async def test_second_claimant_takes_the_unlocked_rows(self, db_engine: AsyncEngine) -> None:
+        """`SKIP LOCKED` 的另一半：被锁的行跳过之后，同一批里**没被锁的行照常认领**。
+
+        只断言「B 空手而归」盖不住「B 因为一行被锁而整批放弃」这种退化写法——两条一起才钉住
+        「跳过被锁的、继续拿其余」。
+        """
+        # 两条都到点（到点是认领谓词的一半），但到点时刻不同：A 只认领最早到点的那条。
+        first = await _insert_pending(
+            db_engine, _pending_row(next_attempt_at=_NOW - timedelta(minutes=1))
+        )
+        second = await _insert_pending(db_engine, _pending_row())
+        session_a = AsyncSession(bind=db_engine, expire_on_commit=False)
+        session_b = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            # A 只认领最早到点的那条（排序键 next_attempt_at 决定，不靠插入顺序）。
+            claimed_a = await claim_due_pending_messages(
+                session_a, direction="outbound", now=_NOW, batch_size=1
+            )
+            assert [row.id for row, _ in claimed_a] == [first]
+
+            claimed_b = await asyncio.wait_for(
+                claim_due_pending_messages(
+                    session_b, direction="outbound", now=_NOW, batch_size=10
+                ),
+                timeout=_CLAIM_WAIT_TIMEOUT_SECONDS,
+            )
+            # 主键在会话内取（会话 rollback/close 会让实例过期，detach 后再读属性即报错）。
+            claimed_ids = [row.id for row, _ in claimed_b]
+        finally:
+            await session_b.rollback()
+            await session_b.close()
+            await session_a.rollback()
+            await session_a.close()
+
+        # B 既没等待、也没空手：跳过被 A 锁住的那条，认领了剩下那条。
+        assert claimed_ids == [second]
 
 
 class TestAttemptCountBoundary:
@@ -1333,6 +1422,47 @@ class TestMessageStateQueries:
         assert missing is None
 
 
+#: `plan.md` §7.4 的 `AC-41` 场景参数：250 条回复、每页 100 条（配置项 `REPLIES_PAGE_SIZE`
+#: 的默认值同为 100；页大小由调用方传给仓储，用例按这个值构造分页）。
+_AC41_TOTAL = 250
+_AC41_PAGE_SIZE = 100
+
+#: 翻页途中插入的那条新回复的到达时刻偏移（分钟）：种子行每 2 条前进 1 分钟（`_seed_replies`），
+#: 250 条覆盖第 0 ~ 124 分钟，因此第 51 分钟正落在第 2 页（第 100 ~ 199 条）的时间范围内。
+_AC41_MID_PAGE_OFFSET_MIN = 51
+
+
+async def _expected_reply_order(db_engine: AsyncEngine, parent_id: uuid.UUID) -> list[uuid.UUID]:
+    """按规格排序键独立排出全集顺序（`received_at ASC, id ASC`，`design.md` §4.1）。
+
+    裸 `SELECT` 取回 `(id, received_at)` 后在 Python 侧排序——不经 `replies_page`，因此它不是
+    「用被测实现生成期望值」（`docs/testing.md` R2）。
+    """
+    async with db_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(Message.id, Message.received_at).where(Message.parent_id == parent_id)
+            )
+        ).all()
+    return [row.id for row in sorted(rows, key=lambda row: (row.received_at, row.id))]
+
+
+async def _page_through(db_engine: AsyncEngine, parent_id: uuid.UUID) -> list[uuid.UUID]:
+    """从游标起点逐页取到空页为止，返回按取回顺序累计的回复主键。"""
+    collected: list[uuid.UUID] = []
+    after: tuple[datetime | None, uuid.UUID | None] = (None, None)
+    session = AsyncSession(bind=db_engine, expire_on_commit=False)
+    try:
+        while True:
+            page = await replies_page(session, parent_id, after=after, limit=_AC41_PAGE_SIZE)
+            if not page:
+                return collected
+            collected.extend(row.id for row in page)
+            after = (page[-1].received_at, page[-1].id)
+    finally:
+        await session.close()
+
+
 class TestRepliesKeysetPagination:
     """回复 keyset 分页：received_at ASC, id ASC，翻页不重不漏（AC-15 / AC-16 / AC-41）。"""
 
@@ -1458,6 +1588,60 @@ class TestRepliesKeysetPagination:
         assert {row.body for row in page1 + page2} == {"回复正文"}
         assert {row.parent_id for row in page1 + page2} == {parent_id}
         assert sorted(row.subject for row in page2) == sorted(["回复 2", "回复 3", "回复 0"])
+
+    async def test_keyset_250_replies(self, db_engine: AsyncEngine) -> None:
+        """`AC-41`：250 条回复、每页 100 条，用游标逐页取完；翻页途中插入一条新回复不重不漏。
+
+        手法按 `plan.md` §7.4 的 `AC-41` 三步：① 逐页取完 → 250 条且顺序与全集一致；
+        ② 取完第 1 页之后、取第 2 页之前插入一条新回复（其 `received_at` 落在第 2 页范围内）；
+        ③ 已取过的第 1 页不重不漏，继续翻页最终仍取到全集（新插入的那封也在后续页里）。
+
+        顺序的 oracle 不来自 `replies_page`：用裸 `SELECT` 取回 `(id, received_at)`，再按规格的
+        排序键（`received_at ASC, id ASC`，`design.md` §4.1）在 Python 侧排一遍。
+        """
+        parent_id, ids = await self._seed_replies(db_engine, _AC41_TOTAL)
+        assert len(ids) == _AC41_TOTAL
+        expected_all = await _expected_reply_order(db_engine, parent_id)
+        assert len(expected_all) == _AC41_TOTAL
+
+        # ① 第一遍：从游标起点逐页取完。
+        first_pass = await _page_through(db_engine, parent_id)
+        assert first_pass == expected_all
+
+        # ② 第二遍：第 1 页之后插入一条新回复（到达时刻落在第 2 页的时间范围内）。
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            page1 = await replies_page(
+                session, parent_id, after=(None, None), limit=_AC41_PAGE_SIZE
+            )
+            assert [row.id for row in page1] == first_pass[:_AC41_PAGE_SIZE]
+            new_id = (
+                await self._seed_replies(
+                    db_engine,
+                    1,
+                    parent=parent_id,
+                    uidvalidity=888,
+                    uid_base=9000,
+                    start_offset_min=_AC41_MID_PAGE_OFFSET_MIN,
+                )
+            )[1][0]
+            second_pass = [row.id for row in page1]
+            after = (page1[-1].received_at, page1[-1].id)
+            while True:
+                page = await replies_page(session, parent_id, after=after, limit=_AC41_PAGE_SIZE)
+                if not page:
+                    break
+                second_pass.extend(row.id for row in page)
+                after = (page[-1].received_at, page[-1].id)
+        finally:
+            await session.close()
+
+        expected_final = await _expected_reply_order(db_engine, parent_id)
+        assert len(expected_final) == _AC41_TOTAL + 1
+        # ③ 不重（长度与全集一致、逐位相等）、不漏、顺序一致，且新插入那封在后续页里被取到。
+        assert second_pass == expected_final
+        assert new_id in second_pass
+        assert second_pass[:_AC41_PAGE_SIZE] == first_pass[:_AC41_PAGE_SIZE]  # 第 1 页原样返回
 
 
 # ---------------------------------------------------------------------------
