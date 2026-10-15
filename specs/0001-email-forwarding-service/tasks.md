@@ -11,7 +11,7 @@
 
 - 任务**按依赖顺序**排列，不要跳序执行。
 - 每个任务行的「前置」**就是任务图的边**：前置未完成，该任务不能开工。阶段划分只是可读性分组。
-- **一条任务 = 一个垂直片**：能在实现之前先红的单测与该实现合并在同一条任务里（理由与清单见 `plan.md` §9.1），因此任务总数与阶段区间保持 `T-1` ~ `T-45`。
+- **一条任务 = 一个垂直片**：能在实现之前先红的单测与该实现合并在同一条任务里（理由与清单见 `plan.md` §9.1），因此任务总数与阶段区间保持 `T-1` ~ `T-46`；其中 `T-46` 是阶段 4 收口 code-review 的派生物，无前置，排在阶段 5 首位。
 - 集成测试与跨层静态检查集中在阶段 5，因为它们要等迁移、夹具、真实库与五条流全部到位才写得出。
 - 完成一项就改成 `[x]`，提交信息里引用 spec 编号与本任务编号。
 
@@ -63,6 +63,7 @@
 
 ## 阶段 5：集成测试、文档与交付
 
+- [ ] `T-46` （前置 无；阶段 4 收口 code-review 派生，排本阶段首位）三件收口修正合一，一个 commit、证据按三部分分别给出：① **受控枚举取值改具名常量**——`constants.py` 定义五族具名常量（`Direction` / `BodyFormat` / `ErrorClass` / `RejectSource` / `DiscardReason`）、元组由名字拼出（取值与顺序逐字不变、`CHECK` 面不动），清除 `src/` 全部 28 处按下标取常量（含 `flows/fetch_inbound.py` 那处为绕「`flows/` 零字面量」门禁而写的负下标 `DISCARD_REASONS[-1]`），消费侧保留模块内短别名、只换取值来源，并新增静态守护用例（扫描 `src/` 断言零位置下标）；② **入站回复逐封取写库时刻**——同批 `received_at` 严格递增、批内先后即邮箱内顺序（落实 `design.md` §2.5「回复入库时刻（UTC，写回复行时取）」），tick 级时间只用于游标推进与认领/退避，`plan.md` §5.2 的取时口径与 `flows/fetch_inbound.py` 的 tick docstring 同步改准，先红单测证「同一批两条回复的 `received_at` 不再相等」（红证据落在接入取时 seam 之后、改用之前）；③ **`design.md` §2.4 待审表 `last_error_class` 措辞校订**——写明该列当前只作结构保留、中途失败不写、终态分类落 `rejected_messages`。 — `FR-10` / `AC-15`
 - [ ] `T-33` （前置 `T-5`、`T-22`）`tests/integration/conftest.py`：真实 PostgreSQL 测试库、进程内假 SMTP / 假 IMAP、可替换的假审查实现、清表、容器未起时的跳过标记（§7.2） — `NFR-1` / `AC-29`
 - [ ] `T-34` （前置 `T-33`、`T-23`、`T-26`）`tests/integration/test_review_outbound_flow.py` 与 `test_review_inbound_flow.py` — `FR-3` / `FR-8` / `AC-6` / `AC-12`
 - [ ] `T-35` （前置 `T-33`、`T-24`）`tests/integration/test_send_flow.py` — `FR-4` / `FR-5` / `AC-4` / `AC-5` / `AC-7` / `AC-8` / `AC-9` / `AC-19` / `AC-21` / `AC-24` / `AC-29` / `AC-30` / `AC-34` / `AC-37` / `AC-40`
