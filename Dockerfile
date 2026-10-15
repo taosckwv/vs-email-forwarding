@@ -107,6 +107,16 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 #   （.dockerignore 里 `*.md` 被排除，但 `!README.md` 是反向例外，README 仍在上下文里。）
 COPY README.md LICENSE ./
 COPY src/ ./src/
+# migrations/ 必须进镜像：数据库迁移是「在服务器上、在应用镜像里」跑的
+#   （`docker compose run --rm app uv run alembic -c migrations/alembic.ini upgrade head`，
+#    见 docs/research/01-delivery-and-deploy.md 的「维护与回滚」与「落地位置」段，
+#    以及 deploy/migrate.sh）。alembic.ini 里的 script_location = migrations、
+#    prepend_sys_path = . 都是**相对仓库根**的路径，所以容器内 CWD=/app 下必须同时有
+#    migrations/alembic.ini、migrations/env.py 与 migrations/versions/。
+#   离线服务器上不能临时安装工具、也不能指望宿主提供这些文件，镜像自带是唯一
+#    能同时满足「不依赖宿主」与「回滚是改 tag 不重新构建」的做法（宿主挂载不随 tag 走）。
+#   构建上下文本来就含 migrations/（.dockerignore 未排除它），这一行没有额外代价。
+COPY migrations/ ./migrations/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
@@ -117,11 +127,22 @@ FROM ${PYTHON_IMAGE} AS runtime
 
 # 运行期环境变量：
 #   PYTHONDONTWRITEBYTECODE / PYTHONUNBUFFERED：非 root 下不写 .pyc，日志实时刷出。
-#   UV_FROZEN=1：运行期禁止 uv 动 lock，避免无网环境下尝试解析依赖。
+#   UV_NO_SYNC=1：**运行期禁止 uv 同步项目环境**（等价于每条 `uv run` 都带 `--no-sync`）。
+#     为什么必须：镜像里的 .venv 是构建期 `uv sync --frozen --no-dev` 装的（只有运行依赖），
+#     而 `uv run` 默认会按 uv.lock 同步**含 dev 组**的完整环境；于是容器内每条 `uv run`
+#     —— 迁移命令 `uv run alembic …` 与默认 CMD `uv run uvicorn …` 都是 —— 都会尝试去外网取
+#     ruff/mypy/pytest 等 dev 包。离线服务器上必然 DNS 失败：迁移报错、容器起不来，
+#     撞 AGENTS.md §8.5「运行时不得依赖任何外部网络」。
+#     这一行同时覆盖「迁移」与「服务」两条路径，并刻意**不动** docs/research/01
+#     已记录的命令字面形状（`uv run alembic -c migrations/alembic.ini upgrade head`）。
+#     反面提醒：`UV_NO_DEV=1` **不是**修法 —— 它只是少装 dev 组，uv 仍会去外网解析构建后端
+#     （hatchling 等），离线照样失败；必须关掉同步本身。
+#   UV_FROZEN=1：运行期禁止 uv 动 lock（避免无网环境下尝试重新解析依赖）。
 #   UV_CACHE_DIR：uv 需要一个可写的缓存目录，指到 app 用户家目录下。
 #   PATH：把 .venv/bin 放进 PATH，容器内 exec 直接用 python/alembic/uvicorn 也行。
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    UV_NO_SYNC=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
     UV_FROZEN=1 \
@@ -146,12 +167,21 @@ WORKDIR /app
 COPY --from=builder --chown=10001:10001 /app/.venv /app/.venv
 COPY --from=builder --chown=10001:10001 /app/pyproject.toml /app/uv.lock /app/README.md /app/LICENSE ./
 COPY --from=builder --chown=10001:10001 /app/src ./src
+# migrations/ 同样从 builder 取（内容与构建上下文一致），归属 app 用户：
+#   容器内 CWD=/app 时 `uv run alembic -c migrations/alembic.ini upgrade head` 才能找到
+#   script_location = migrations 与 prepend_sys_path = .（见 builder 阶段的说明）。
+COPY --from=builder --chown=10001:10001 /app/migrations ./migrations
 
 # uv 二进制留在运行镜像里，是**故意**的：
 #   1) 离线服务器上要跑数据库迁移（deploy/migrate.sh ->
 #      `uv run alembic upgrade head`），运行期没有网络，不能临时装工具；
 #   2) 离线服务器上也不允许依赖宿主机装 Python 或 uv（见 deploy/README.md）；
-#   3) `uv run` 会沿用构建期同步好的 .venv，不需要重新解析依赖。
+#   3) 运行镜像里的 .venv 就是**构建期同步好的那一份**：上面 `UV_NO_SYNC=1` 关掉了
+#      `uv run` 的隐式同步，所以容器内 `uv run` 既不解析也不下载依赖，直接用既有 .venv。
+#      —— 修正旧说法「uv run 会沿用构建期同步好的 .venv，不需要重新解析依赖」：
+#      默认行为下它**会**重新解析/同步（含 dev 组），离线必失败；是本 ENV 让它不这么做。
+#      若 .venv 因构建异常而不完整，`uv run` 会以「Failed to spawn / 无法创建环境」告警，
+#      deploy/migrate.sh 的失败分类④ 会把这种情况点名到「构建期 uv sync 未生效」。
 # 只拷两个二进制，不把构建期缓存带进来（体积代价约 30MB 量级）。
 COPY --from=uv-source /uv /uvx /bin/
 

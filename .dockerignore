@@ -24,8 +24,13 @@ deploy/
 Makefile
 
 # --- Python 缓存与虚拟环境 ---
-__pycache__/
-*.py[cod]
+# 必须写成 `**/` 前缀的**全局**模式：本文件的模式默认只匹配构建上下文**根**，
+# 写 `__pycache__/` / `*.py[cod]` 对子目录无效——那样 `COPY src/`、`COPY migrations/`
+# 会把宿主各处 __pycache__ 与 .pyc 一起带进镜像（实测 /app/migrations 下混进 2 个 .pyc
+# 与两个 __pycache__）。其余模式维持根锚定不动：尤其 `*.md` 是靠 `!README.md` 例外
+# 放行 README.md 的，一旦全局化会把构建元数据需要的 README.md 排掉、构建直接失败。
+**/__pycache__/
+**/*.py[cod]
 .venv/
 venv/
 .mypy_cache/
