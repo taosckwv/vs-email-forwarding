@@ -6,5 +6,6 @@
 
 不放：业务状态流转、重试状态机（重试策略属于 ``vs_email_forwarding.core`` 与 ``flows``）。
 
-当前状态：仅占位。具体客户端库选型与接口协议（``base.py``）尚未定案。
+客户端库选型已定：Python 标准库 ``smtplib``（经 ``asyncio.to_thread`` 调用，不新增运行时
+依赖，``design.md`` §5）。接口协议见本目录 ``base.py``，实现在 ``smtplib_sender.py``。
 """

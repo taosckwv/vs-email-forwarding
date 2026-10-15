@@ -4,7 +4,9 @@
 
 ## 依赖怎么起
 
-集成测试需要**真实 PostgreSQL** 与 **GreenMail**（本地 SMTP + IMAP，覆盖流②发信与流③入站）：
+唯一前提是**真实 PostgreSQL**（`bash scripts/dev-up.sh` 起）。SMTP / IMAP / 审查在测试里用
+进程内替身（落点见下节「夹具」）——**进程内替身为主，GreenMail 只作「真回路」的兜底验证**
+（`specs/0001-email-forwarding-service/plan.md` §7.2）：
 
 > GreenMail **按账号分信箱**：投给 `reply@example.com` 的信要用该账号登录 IMAP 才看得到，
 > 这正好贴合 `IMAP_USERNAME` 的用法。它启动时自带 `auth.disabled`，账号口令随便填。
@@ -15,14 +17,31 @@ bash scripts/dev-up.sh                            # 开发机（Linux）
 docker compose -f compose.dev.yaml up -d          # 等价写法
 ```
 
+## 夹具
+
+共同夹具在 `tests/integration/conftest.py`：
+
+- **真实 PostgreSQL 运行级隔离库**：每次 pytest 运行自建测试库，建库后跑一次
+  `alembic -c migrations/alembic.ini upgrade head` 建表，运行结束 `DROP DATABASE ... WITH (FORCE)` 删除；
+  每个用例前后对隔离库做真实 `TRUNCATE` 清表（表名取自 ORM 元数据）。
+- **三条进程内替身**：假 SMTP 是进程内的真实 SMTP 协议服务器（投递仍走生产适配器与标准库
+  `smtplib`，`From` / `Reply-To` 在线上字节上被验证）；假 IMAP 与假审查是 `providers/` 接口的
+  进程内实现，替换点在 `flows/fetch_inbound.py` 的装配函数与 `providers/review/factory.py` 的工厂。
+- **依赖不可达时整组 skip**：收集钩子探测 PostgreSQL 可达性，不可达就把本目录用例全部标记
+  skip，并打印是哪一项依赖不可达——**跳过不等于通过**。
+
 ## 数据库隔离
 
-测试库为 `vs_email_forwarding_test`，与开发库 `vs_email_forwarding_dev` **分离**：集成测试允许清表，
-但绝不允许碰开发库。连接串通过环境变量 / `.env` 覆盖为测试库，不要改仓库里的配置文件。
+测试库**不用手工建**：夹具每次运行自建形如 `vs_email_forwarding_test_<pid>_<随机 8 位>` 的
+隔离库，开发库从不被连接——连接串（环境变量 `VS_EMAIL_FORWARDING_TEST_DATABASE_URL` 显式
+指定，否则取配置层 `DATABASE_URL`）只当**服务器坐标**用，库名一律由夹具自己生成，仓库里的
+配置文件一个字不改。清表与删库只发生在自建的隔离库上。
 
 ## 覆盖重点
 
-1. **状态机转换**：待审 → 已排队 → 已发送 → 已收到 / 拒审 / 终态失败，以及非法转换必须被拒绝。
+1. **状态机转换**：出站邮件沿六态状态机单调推进（六态统一取值见
+   `vs_email_forwarding.constants.MESSAGE_STATES` 与 `specs/0001-email-forwarding-service/design.md`
+   §2.3，库内与对外同一套、无映射层），非法转换必须被拒绝（带谓词的条件 UPDATE）。
 2. **单次 tick 的幂等性**：同一条记录被同一个流重复处理时结果不变，不产生重复副作用。
 3. **并发抢占不重复发信**：四条流并发运行时，一条待发记录只能被一个 worker 抢到，
    依靠 `SELECT ... FOR UPDATE SKIP LOCKED` 与状态字段，禁止「先 SELECT 判断、再 UPDATE」。

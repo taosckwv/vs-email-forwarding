@@ -8,6 +8,7 @@
 
 不放：业务规则。
 
-当前状态：待审表、邮件表、拒审表以及 IMAP UID 游标的表结构**尚未定案**，
-Alembic 迁移方案同样未定，因此本模块暂无实现。见 ``docs/open-questions.md``。
+表结构（四张表、索引、CHECK 与状态机）已在 ``specs/0001-email-forwarding-service/design.md``
+§2 定案：ORM 模型见 ``models.py``，引擎与会话见 ``session.py``，仓储层（所有 SQL）见
+``repositories/``；Alembic 迁移在仓库根的 ``migrations/``。
 """

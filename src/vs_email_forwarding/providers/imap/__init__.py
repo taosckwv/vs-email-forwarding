@@ -8,5 +8,6 @@
 
 不放：业务状态流转、UID 游标持久化（游标落库属于 ``vs_email_forwarding.db`` 仓储层）。
 
-当前状态：仅占位。具体客户端库选型与接口协议（``base.py``）尚未定案。
+客户端库选型已定：``IMAPClient``（同步库，经 ``asyncio.to_thread`` 调用，``design.md`` §5）。
+接口协议见本目录 ``base.py``，实现在 ``imapclient_fetcher.py``。
 """
