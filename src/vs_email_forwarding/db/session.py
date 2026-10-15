@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -78,3 +79,17 @@ def session_factory(*, isolation_level: str | None = None) -> async_sessionmaker
         # `None` 时不碰 bind，调用方拿到的会话与改动前完全一致。
         engine = engine.execution_options(isolation_level=isolation_level)
     return async_sessionmaker(bind=engine, expire_on_commit=False)
+
+
+async def probe_database(session: AsyncSession) -> None:
+    """在给定会话上做一次 `SELECT 1`——`/healthz` 用的轻量数据库探测。
+
+    所有 SQL 都落在 `db/`（`AGENTS.md` §7）：「探测」这件事本身只是一条无副作用的查询，
+    因此它属于本层；谁是调用方（`service/health.py`）、失败怎么表达（`api/` 转 `503`）都不在
+    这里决定。会话由调用方传入、事务边界归调用方——同本模块其余函数的既有口径
+    （`docs/architecture.md` §5）。
+
+    失败（连不上、认证失败、超时等）**原样向上抛**，不吞异常也不重试：健康检查要回答的正是
+    「此刻能不能用」，异常类型取决于驱动，调用方不需要解释它（`design.md` §4.1）。
+    """
+    await session.execute(text("SELECT 1"))

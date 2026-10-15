@@ -169,6 +169,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: 数据库探测失败，进程可用性未达成。
 
 components:
   parameters:
