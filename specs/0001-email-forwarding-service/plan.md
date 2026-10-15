@@ -139,7 +139,7 @@
 | `tests/unit/test_scheduler_intervals.py` | `新增` | `AC-23` 的确定性判定：调度器构造时读到的间隔 == 配置值（改配置后重建即为新值），并静态断言间隔与批量不以字面量出现在源码中（随 `T-22` 先红，§7.3） |
 | `tests/unit/test_request_validation.py` | `新增` | 纯逻辑：请求校验（多收件人、非法地址、CR/LF 头注入、超限、非法 `body_format`）（随 `T-30` 先红，§7.3） |
 | `tests/unit/test_settings_validation.py` | `新增` | 纯逻辑：`validate_startup()` 三条判据各自制造一次违规（随 `T-32` 先红，§7.3） |
-| `tests/unit/test_api_contract.py` | `新增` | 契约一致性：把 FastAPI 应用生成的 OpenAPI（`app.openapi()`）与 `docs/api-contract.yaml` 逐字段比对（路径、字段名、必填、`enum`），防两处漂移（随 `T-38`；**留阶段 5**——三方产物齐备后才写得出） |
+| `tests/unit/test_openapi_contract.py` | `新增` | 契约一致性：把 FastAPI 应用生成的 OpenAPI（`app.openapi()`）与 `docs/api-contract.yaml` 逐字段比对（路径、字段名、必填、`enum`），防两处漂移（随 `T-38`；**留阶段 5**——三方产物齐备后才写得出） |
 | `tests/unit/test_constants_consistency.py` | `新增` | 三方取值一致：`docs/api-contract.yaml` 的 `MessageState` / `BodyFormat` 枚举 == `constants.py` 的取值集合 == 迁移与 `db/models.py` 中 `CHECK` 的取值集合；另断言 `constants.py` **零项目内 import**（共享叶子层的硬约束，靠静态读源码判定）（随 `T-38`；**留阶段 5**） |
 | `tests/unit/test_repository_statements.py` | `新增` | 抢占写法唯一（`AC-26`）：静态 AST 扫描认领函数、断言不存在「先 `SELECT` 判断再 `UPDATE`」的两步写法，并断言认领语句编译出的 SQL 同时含 `FOR UPDATE` 与 `SKIP LOCKED`（随 `T-6` 先红，§7.1 / §7.3） |
 | `tests/unit/test_config_hygiene.py` | `新增` | 配置口径（`AC-27`）：除 `config.py` 外没有模块直接读环境变量、没有第二处读 `.env`；`git ls-files` 含 `.env.example` 且不含 `.env`（随 `T-32` 先红） |
@@ -351,7 +351,7 @@
 |---|---|---|
 | `docs/configuration.md` | `新增` | 配置项清单文档：逐项写用途、默认值、是否必填、归属（`.env` 值 vs `constants.py` 的服务固定语义），以及启动即校验的三条判据。内容与 `design.md` 的配置项清单对齐、不另立一份取值 |
 | `docs/README.md` | `修改` | ① §2 导航表加两行：「改配置项 → `configuration.md`」「查接口契约 → `api-contract.yaml`」；② §3 的「尚未创建的文档」清单**移除** `configuration.md`（保留其余四份） |
-| `docs/api-contract.yaml` | `新增` | 对外契约唯一真源（§2.8 已列）；本次与 `tests/unit/test_api_contract.py` 互为校验对象 |
+| `docs/api-contract.yaml` | `新增` | 对外契约唯一真源（§2.8 已列）；本次与 `tests/unit/test_openapi_contract.py` 互为校验对象 |
 | `.env.example` | `修改` | 一致性复核（§6.1），不新增键 |
 | `migrations/README.md` | `修改` | 三处就地改写：① 「约定」清单的第 3 条文件名约定（计划正文里也写成「第 23 条」，指的就是这一条）改为**序号前缀 + 下划线**（例 `0001_create_mail_tables.py`），删掉「保留 Alembic 自动生成的 revision 哈希前缀」；② 删掉「不要提前 `alembic init`」这段指引与「当前状态：尚未初始化」段，改为已初始化的现状；③ 「约定」清单的第 6 条迁移入口确认为 `deploy/migrate.sh` |
 | `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：`migrate.sh` / `run.sh` / `check_archive.py` 各自的用途、入口、判据出处；写明 **D2-乙（产出方那一侧的打包脚本）本期不在范围、随 D13 推迟** |
@@ -381,7 +381,7 @@
 
 五条**跨层**的静态检查放在单测目录里，它们不连数据库、只读仓库文件：
 
-- **契约不漂移**（`tests/unit/test_api_contract.py`）：把 `create_app().openapi()` 与 `docs/api-contract.yaml` 逐路径、逐字段、逐 `enum` 比对。
+- **契约不漂移**（`tests/unit/test_openapi_contract.py`）：把 `create_app().openapi()` 与 `docs/api-contract.yaml` 逐路径、逐字段、逐 `enum` 比对。
 - **三方取值一致**（`tests/unit/test_constants_consistency.py`）：`docs/api-contract.yaml` 的 `MessageState` / `BodyFormat` 枚举 == `constants.py` 的取值集合 == 迁移文件与 `db/models.py` 里 `CHECK` 的取值集合；另断言 `constants.py` **零项目内 import**（共享叶子层的硬约束，靠静态读源码判定，`docs/architecture.md` 硬规则第 4 条）。
 - **抢占写法唯一**（`tests/unit/test_repository_statements.py`）：见 §7.3 的 `AC-26` 一行。
 - **配置只从配置层读**（`tests/unit/test_config_hygiene.py`）：见 §7.3 的 `AC-27` 一行。
@@ -507,7 +507,7 @@
 | **结果事务的 `rowcount = 0` 被当成错误处理** | 幂等窗口内重跑时报错、留下无法自愈的行 | 明确口径：`rowcount = 0` 与撞唯一键 / 主键**按幂等忽略**（`design.md` §3 阶段③）；`AC-11` / `AC-29` 断言的是「没有副作用」，不是「没有异常」 |
 | **跨表搬运时重复写目标行 / `created_at` 被重新取 `now()` 覆盖** | 出站行的 30 天保留期被推迟；`AC-17` 的时间字段与库值不一致 | 搬运时 `created_at` 原样搬运（`design.md` §2.5）、`attempt_count` 与 `next_attempt_at` 重置为 `0` 与 `now()`（§2.4）；撞唯一键时只删待审行、不重复写目标行；`AC-11` / `AC-22` 覆盖 |
 | **游标推进与冲突处理写反**：撞入站唯一键时把「游标推进」一起回滚 | 每轮重撞同一封、入站永久停摆（`AC-39` 的考点） | 单封的分拣落库与「把 `last_uid` 推到该封 UID」在**同一个事务**里完成（`design.md` §3.4）；`AC-39` 专门断言「冲突不挡推进」 |
-| **契约两处漂移**：`docs/api-contract.yaml` 与 FastAPI 生成的 OpenAPI 各说一套 | 字段 / 枚举悄悄不一致，调用方按错的那份实现 | `tests/unit/test_api_contract.py` 逐字段比对；`tests/unit/test_constants_consistency.py` 断言契约枚举 == `constants.py` == 迁移与 ORM 的 `CHECK` 三方一致 |
+| **契约两处漂移**：`docs/api-contract.yaml` 与 FastAPI 生成的 OpenAPI 各说一套 | 字段 / 枚举悄悄不一致，调用方按错的那份实现 | `tests/unit/test_openapi_contract.py` 逐字段比对；`tests/unit/test_constants_consistency.py` 断言契约枚举 == `constants.py` == 迁移与 ORM 的 `CHECK` 三方一致 |
 | **`constants.py` 被当成便利模块，开始 import 项目内模块** | 破坏 `docs/architecture.md` 硬规则第 4 条（共享叶子层），`db/` 的反向依赖会随之出现 | `test_constants_consistency.py` 静态断言该文件零项目内 import；`db/` 的 `CHECK` 文本由迁移与 ORM 各持一份，**不**去 import 该模块 |
 | **集成测试依赖外部环境（Docker 起得来 + 测试库已建）** | 换机器后集成用例直接失败，容易被误判成代码问题 | §7.2 的三步前置写进 `tests/integration/README.md`；测试库连接串通过环境变量覆盖（不改仓库配置）；清表只清测试库 |
 | **测试用库与开发库串号**：跑集成测试时 `.env` 恰好指向开发库 | 洗掉开发数据 | 集成夹具**不读** `.env` 的 `DATABASE_URL`，只认显式的测试库环境变量；库名以 `_test` 结尾做一次断言兜底（`docs/research/02-runtime-and-scheduling.md` 的「库隔离」） |
@@ -576,7 +576,7 @@
 | `S-4` | `uv run pytest tests/unit/test_message_id.py tests/unit/test_retry_policy.py tests/unit/test_states.py tests/unit/test_inbound_sorting.py`：四份纯逻辑单测全绿即通过。**这一步不碰数据库**，因此可以完全脱离 §7.2 的前置独立跑 |
 | `S-5` | `uv run pytest tests/unit/test_review_placeholder.py`（`AC-25` 的关键词断言）+ `uv run mypy src`：三个 `base.py` 只依赖各自接口、不 import `db/`；`providers/review/` 的两个文件开头注释含「空实现」「永远通过」 |
 | `S-6` | 单条流各自可验：`uv run pytest tests/integration/test_review_outbound_flow.py`、`test_send_flow.py`、`test_fetch_inbound_flow.py`、`test_review_inbound_flow.py`、`test_cleanup_flow.py`。每条流都是「构造行 → `await` 一次 tick → 断言状态与列值」，不依赖别的流先跑（跨流用例把需要的 tick 都显式调用一次）。调度器那一条随实现先红：`uv run pytest tests/unit/test_scheduler_intervals.py`（`AC-23`） |
-| `S-7` | `uv run pytest tests/integration/test_api_contract.py tests/integration/test_startup_validation.py tests/unit/test_request_validation.py tests/unit/test_settings_validation.py tests/unit/test_config_hygiene.py tests/unit/test_schemas.py tests/unit/test_api_contract.py`：三个端点、422 清单、`found` 区分、时间格式、三条启动校验与配置口径各自独立可判定（`AC-1` ~ `AC-5`、`AC-15` ~ `AC-18`、`AC-27`、`AC-31`、`AC-32`、`AC-33`、`AC-35`、`AC-36`） |
+| `S-7` | `uv run pytest tests/integration/test_api_contract.py tests/integration/test_startup_validation.py tests/unit/test_request_validation.py tests/unit/test_settings_validation.py tests/unit/test_config_hygiene.py tests/unit/test_schemas.py tests/unit/test_openapi_contract.py`：三个端点、422 清单、`found` 区分、时间格式、三条启动校验与配置口径各自独立可判定（`AC-1` ~ `AC-5`、`AC-15` ~ `AC-18`、`AC-27`、`AC-31`、`AC-32`、`AC-33`、`AC-35`、`AC-36`） |
 | `S-8` | 每个测试文件单独可跑（上表逐个给了路径）；`AC-20` 除外，它在 `S-12` 按步骤验。**未跑真实数据库的用例不得计入通过**——`pytest` 的退出码就是判据 |
 | `S-9` | 只读检查：`git grep -n "尚未定案" src/` 只剩 `providers/review/__init__.py` 里那半句「真实审查能力何时补上仍未定」；`docs/README.md` §3 的清单里已无 `configuration.md`；`tests/integration/README.md` 不再出现旧状态词「已排队」 |
 | `S-10` | `bash scripts/check.sh` 五步全绿（`ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut`）；随后把每条 `AC-n` 的结果回填 `spec.md` §9 |
