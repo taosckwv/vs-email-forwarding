@@ -45,6 +45,7 @@
 
 - **已落地（`T-43`），不再属本条**：`deploy/migrate.sh`（迁移入口）、`deploy/run.sh`（起服务 + `/healthz` 探活）、`deploy/check_archive.py`（交付前归档自检）——职责与判据出处见 `deploy/README.md`。
 - **未定**：产出方一侧这批脚本的整体形态——① 镜像构建脚本（`docker build --platform linux/amd64`，在服务器上执行；要不要改到开发机构建留到开发完成后再定）；② 基础镜像 tar 的打包与带入（含 `docker load` 流程与 sha256 旁路文件的生成）；③ 产出方打包脚本。**与 D13 同题**（tar 由哪台机器、用什么工具产出未定），随其一并推迟；判读标准与约束以 `docs/research/01-delivery-and-deploy.md` 的「结论」与「待实现脚本必须保留的方法性结论」两段为准。
+- **未定（细目）**：**回滚步骤要不要脚本化**——回滚的**动作**已定（改 `VS_EMAIL_FORWARDING_IMAGE` 成上一个版本 tag 再 `up -d`；含破坏性迁移时单独执行 `alembic downgrade`，入口沿用迁移入口的同一条命令形状，见 `specs/0001-email-forwarding-service/plan.md` §10.1 与 `docs/research/01-delivery-and-deploy.md` 的「维护与回滚」），**未单独脚本化**；是否要落一个 `deploy/rollback.sh` 未定，与本节产出方脚本一并定。
 - **已定**：构建侧与 tar 带入的形态已定，本条不复述，只给指针（见 `docs/research/01-delivery-and-deploy.md`）。
 - **阻塞**：交付链整体落地；当前的载入与完整性校验只能按 `deploy/README.md` 的手动步骤执行。
 
