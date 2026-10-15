@@ -168,7 +168,9 @@ async def _probe_database(url: URL, database: str) -> str | None:
     """试连一个库做一次往返；成功返回 ``None``，失败返回受控的失败描述。
 
     连接建立后一律经 `try/finally` 关闭（与 `_create_database` / `_drop_database` 同一形状）：
-    `close()` 自己出问题时不留下泄漏的连接，也不会把异常冒泡进收集钩子。
+    `close()` 自己出问题时不留下泄漏的连接。只有**建连**那一步的失败被转成受控描述（调用方
+    据此判定「依赖不可达」并整组跳过）；`SELECT 1` 与 `close()` 的异常照常向上冒泡——`try/finally`
+    只保证不漏掉关闭，不吞异常。
     """
     try:
         connection = await asyncpg.connect(**_connection_kwargs(url, database))

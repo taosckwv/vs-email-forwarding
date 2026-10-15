@@ -338,7 +338,8 @@ class TestSenderIdentity:
             },
         )
         assert response.status_code == 200, response.text
-        message_id = UUID(response.json()["id"])
+        # 契约 `MessageId`：响应里的 id 必须能解析成 UUID（不是任意串、也不是空）。
+        UUID(response.json()["id"])
         tick_now = datetime.now(UTC)
         assert (await review_outbound_tick(session_factory, settings, now=tick_now)).approved == 1
 
@@ -350,7 +351,6 @@ class TestSenderIdentity:
         assert caller_address not in (delivery.header("From") or "")
         assert delivery.mail_from == settings.mail_from_address
         assert _decoded_body(delivery.raw) == _BODY
-        assert message_id is not None
         # 调用方连「指定发件人」的入口都不存在：接口形状里就没有身份字段（`design.md` §4.3）。
         assert "from" not in {field.name for field in fields(OutboundMessage)}
 
@@ -584,10 +584,11 @@ class TestRefusalRedLines:
         assert row["last_smtp_code"] == 550
         assert row["last_error_class"] == ERROR_CLASS_PERMANENT
         # 全表扫描（四张表的每一列）：对端原话与它回显的地址一个字都不许留下。
+        # 先绑定再断言、且失败信息里不带库内容——否则 pytest 的断言自省会把这四张表的文本
+        # dump 进失败报告，等于把「不许留」的东西又抄一遍（`docs/testing.md` §4.7）。
         persisted = await _persisted_text(session_factory)
-        assert free_text not in persisted
-        assert echoed_address not in persisted
-        assert "5.1.1" not in persisted
+        leaked = [text for text in (free_text, echoed_address, "5.1.1") if text in persisted]
+        assert leaked == [], "库中出现了本不该留下的对端文本（此处不回显库内容）"
 
     async def test_logs_no_content(
         self,
