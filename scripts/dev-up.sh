@@ -46,7 +46,8 @@ cat <<'EOF'
   POP3 (GreenMail): 127.0.0.1:3110          （想在邮件客户端里看收下的信时用）
   PostgreSQL     : 127.0.0.1:5432
     开发库       : vs_email_forwarding_dev  (用户 vs_email_forwarding / 口令 vs_email_forwarding_dev)
-    测试库       : vs_email_forwarding_test （需手工创建，命令见 compose.dev.yaml 末尾说明）
+    测试库       : 不用手工建——集成夹具每次运行自建运行级隔离库并自删
+                   （口径见 tests/integration/README.md 的「数据库隔离」）
 
 GreenMail 的用途：验证「发出去 -> 被拉回来 -> 关联上原邮件」的完整回路，
 不需要真实邮箱账号，也不会把测试邮件发到外网。
