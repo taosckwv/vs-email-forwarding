@@ -169,7 +169,7 @@
 
 ## 9. 验收结果
 
-> 本特性已按 `tasks.md` 阶段 1～5 实现，验收结果逐条回填如下；`AC-20` 属交付阶段验证（隔离环境容器启动），留 `T-45` 本机交付验证回填。门禁 `bash scripts/check.sh` 五步全绿——第 1 步 ruff format --check、第 2 步 ruff check、第 3 步 `mypy src`、第 4 步 pytest（含覆盖率）、第 5 步 mutmut——下表每条用例级证据都被第 4 步实际执行。
+> 本特性已按 `tasks.md` 阶段 1～5 实现，验收结果逐条回填如下；`AC-20` 属交付阶段验证（隔离环境容器启动），已在 `T-45` 本机交付验证中实测回填（见下表该行）。门禁 `bash scripts/check.sh` 五步全绿——第 1 步 ruff format --check、第 2 步 ruff check、第 3 步 `mypy src`、第 4 步 pytest（含覆盖率）、第 5 步 mutmut——下表每条用例级证据都被第 4 步实际执行。
 
 | 编号 | 验证方式（命令 / 测试名 / 步骤） | 结果 |
 |---|---|---|
@@ -192,7 +192,7 @@
 | `AC-17` | `tests/integration/test_api_contract.py::test_three_phase_states`、`tests/unit/test_schemas.py::test_status_timestamps_serialize_as_utc_rfc3339_six_digits_z` | 通过 |
 | `AC-18` | `tests/integration/test_api_contract.py::test_rejected_state_queryable` | 通过 |
 | `AC-19` | `tests/integration/test_send_flow.py::test_restart_resumes` | 通过 |
-| `AC-20` | 留 `T-45` 本机交付验证回填 | 待补 |
+| `AC-20` | `bash deploy/run.sh` → `GET /healthz` 返回 200（实测 14.65 秒 ≤ 60 秒，隔离形态：镜像架构复检 → 迁移到 head → 起服务 → 探活；运行时零外部网络依赖：观察窗口内已建立出站连接 0） | 通过 |
 | `AC-21` | `tests/unit/test_retry_policy.py::test_worst_case_attempts_within_180s`、`tests/integration/test_send_flow.py::test_within_three_minutes` | 通过 |
 | `AC-22` | `tests/integration/test_cleanup_flow.py::test_cleanup_scope_and_not_exists` | 通过 |
 | `AC-23` | `tests/unit/test_scheduler_intervals.py::test_interval_comes_from_config`、`tests/unit/test_scheduler_intervals.py::test_no_interval_literals` | 通过 |

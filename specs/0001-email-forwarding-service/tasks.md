@@ -76,7 +76,7 @@
 - [x] `T-42` （前置 `T-41`）逐条按 `AC-n` 回填 `spec.md` §9 的验收结果 — `AC-1` ~ `AC-19`、`AC-21` ~ `AC-41`（`AC-20` 在 `T-45` 回填）；并补 `design.md` §3.4 的**取回结果类型**条目（T-21 已落地承载形态，正式条目欠账在此收口）
 - [x] `T-43` （前置 `T-41`）交付三件脚本：`deploy/migrate.sh`、`deploy/run.sh`、`deploy/check_archive.py` — `FR-14` / `AC-20`
 - [x] `T-44` （前置 `T-43`）`deploy/README.md`、`docs/research/01-delivery-and-deploy.md` 与 `docs/open-questions.md` D2 的就地收窄 — `FR-14` / `AC-20`
-- [ ] `T-45` （前置 `T-42`、`T-44`）**交付阶段验证（不入门禁）**：在隔离服务器上完成 `AC-20`——`bash deploy/run.sh` 后 `GET /healthz` 在 60 秒内返回 200，且运行时无任何外部网络依赖；结果回填 `spec.md` §9 — `FR-14` / `NFR-3` / `AC-20`
+- [x] `T-45` （前置 `T-42`、`T-44`）**交付阶段验证（不入门禁）**：在隔离服务器上完成 `AC-20`——`bash deploy/run.sh` 后 `GET /healthz` 在 60 秒内返回 200，且运行时无任何外部网络依赖；结果回填 `spec.md` §9 — `FR-14` / `NFR-3` / `AC-20`
 
 ---
 
