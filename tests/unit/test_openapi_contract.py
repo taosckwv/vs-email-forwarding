@@ -31,7 +31,32 @@ import yaml
 
 from vs_email_forwarding.main import create_app
 
-_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+
+def _repo_root() -> Path:
+    """定位真仓库根：从本文件逐级向上找 ``docs/api-contract.yaml``。
+
+    mutmut 把源树拷进 ``mutants/`` 沙箱再跑同一套单测，沙箱里只有 pyproject.toml /
+    src / tests / uv.lock、**没有 docs/**——按固定层级（``parents[2]``）取根会在沙箱里
+    指向不存在的路径（`T-41` 首次跑门禁即报 ``FileNotFoundError:
+    mutants/docs/api-contract.yaml``）。逐级向上找则两种语境都成立：常规运行时**第三个候选**
+    （``parents[2]``，即真仓库根）就命中；沙箱里同一个锚多走一级（``parents[3]``）同样落回真根，
+    断言因此读的是**未变异**的真契约文件（与被变异的 ``schemas/`` 比对，判定力不受影响）。
+    找不到即说明测试脱离了仓库检出，直接失败而不是静默跳过。
+
+    本函数**有意自包含**、不抽公共 helper：三处同名函数的取根需求不同——两处锤
+    ``docs/api-contract.yaml``（本文件与 `tests/unit/test_constants_consistency.py`）、
+    一处锤 ``docs/security.md``（`tests/unit/test_review_placeholder.py`），而
+    `tests/unit/test_constants_consistency.py` 还另需 `migrations/`；三处都为在 mutmut
+    沙箱内**零导入耦合**而各自实现（只用标准库 `pathlib`），这是沙箱里唯一稳的取根方式
+    （先例与起因见 `tests/unit/test_review_placeholder.py` 的同名函数）。
+    """
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "docs" / "api-contract.yaml").is_file():
+            return candidate
+    raise AssertionError("未找到仓库根：docs/api-contract.yaml 不在本文件的任何上级目录")
+
+
+_REPO_ROOT: Final = _repo_root()
 _CONTRACT_PATH: Final = _REPO_ROOT / "docs" / "api-contract.yaml"
 
 #: 契约里**带 properties** 的 schema：字段名与必填逐项比对。

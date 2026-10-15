@@ -33,9 +33,16 @@ def _repo_root() -> Path:
     pyproject.toml / src / tests / uv.lock、**没有 docs/**——按固定层级
     （``parents[2]``）取根会在沙箱里指向不存在的路径（阶段 3 门禁，当时
     任务号 ``T-17``，曾因此失败）。逐级向上找则两种语境都成立：常规运行
-    第一站即命中真根，沙箱里多走两级同样落回真根，标注断言因此读的是
-    **未变异**的真文件，不被变异运行误伤。找不到即说明测试脱离了仓库
-    检出，直接失败。
+    **第三个候选**（``parents[2]``，即真仓库根）就命中，沙箱里同一个锚多走
+    **一级**（``parents[3]``）同样落回真根，标注断言因此读的是**未变异**的
+    真文件，不被变异运行误伤。找不到即说明测试脱离了仓库检出，直接失败。
+
+    本函数**有意自包含**、不抽公共 helper：三处同名函数的取根需求不同——本函数锤
+    ``docs/security.md``，`tests/unit/test_openapi_contract.py` 与
+    `tests/unit/test_constants_consistency.py` 锤 ``docs/api-contract.yaml``（后者还另需
+    `migrations/`）；三处都为在 mutmut 沙箱内**零导入耦合**而各自实现（只用标准库
+    `pathlib`），这是沙箱里唯一稳的取根方式（**本函数是先例**，另两处同名函数的注释即指向
+    这里）。
     """
     for candidate in Path(__file__).resolve().parents:
         if (candidate / "docs" / "security.md").is_file():

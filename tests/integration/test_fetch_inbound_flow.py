@@ -19,8 +19,8 @@
 `AC-12` 的拒审档）——分拣判定与落库全走真实现。
 
 **「取回顺序 = UID 升序」这条契约钉在哪**：真实承载在 `providers/imap/base.py`——`FetchResult.messages`
-的字段说明（`:160`「取回并解析好的封，按 UID 升序」）与 `ImapFetcher.fetch_messages` 的 docstring（`:207`
-「返回按 UID 升序——调用方靠它**逐封**『处理该封 + 把游标推到该封的 UID』同事务推进」）。本文件的
+字段的注释（「取回并解析好的封，按 UID 升序」）与 `ImapFetcher.fetch_messages` 的 docstring
+（「返回按 UID 升序——调用方靠它**逐封**『处理该封 + 把游标推到该封的 UID』同事务推进」）。本文件的
 `imap_fake` 只是**镜像**该契约（`conftest.FakeImapFetcher.fetch_messages` 按 `sorted(key=uid)` 交出），
 真实 `ImapClientFetcher` 的取回顺序在集成层没有运行期用例——集成测试不连真 IMAP；顺序的**后果**由本文件的
 游标断言承担：`advance_cursor` 推到**该封自己的 UID**，顺序若反过来，游标会退到批内较小的 UID。
@@ -765,8 +765,11 @@ class TestRealLogSurface:
         text = "\n".join((captured.out, captured.err, caplog.text))
 
         assert "inbound_discarded" in text  # 非空转正控：事件真的落到了采集面
-        for marker in _leak_markers():
-            assert marker not in text
+        # 先绑定再断言，并给断言带显式消息——失败报告里出现的是这条消息与命中标记，而不是整段
+        # 日志文本被抄进报告；标记值本身仍会回显（都是 `example.com` 占位夹具，风险近零）
+        # （`docs/testing.md` §4.7、`AGENTS.md` §8.4）。
+        leaked = [marker for marker in _leak_markers() if marker in text]
+        assert leaked == [], "日志里出现了不该回显的标记（此处不回显采集面）"
 
     async def test_mailbox_failure_event_is_rendered_with_its_controlled_class(
         self,
@@ -781,8 +784,9 @@ class TestRealLogSurface:
         captured = capsys.readouterr()
         text = "\n".join((captured.out, captured.err, caplog.text))
         assert "inbound_fetch_failed" in text
-        for marker in _leak_markers():
-            assert marker not in text
+        # 同上：先绑定再断言、断言带显式消息，失败报告里出现的是消息与命中标记而不是整段日志文本。
+        leaked = [marker for marker in _leak_markers() if marker in text]
+        assert leaked == [], "日志里出现了不该回显的标记（此处不回显采集面）"
 
 
 def _leak_markers() -> tuple[str, ...]:

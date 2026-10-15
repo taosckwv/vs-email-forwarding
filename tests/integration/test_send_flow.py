@@ -339,6 +339,9 @@ class TestSenderIdentity:
         )
         assert response.status_code == 200, response.text
         # 契约 `MessageId`：响应里的 id 必须能解析成 UUID（不是任意串、也不是空）。
+        # 这里**故意用裸表达式承载判决**（无 `assert`）：非 UUID 与空串抛 `ValueError`、`None` 抛
+        # `TypeError`、字段缺失抛 `KeyError`——三种都算用例失败，判据落在异常类型上；
+        # 早先那句 `assert message_id is not None` 恒真、等于没判（t11 复核 S-1）。
         UUID(response.json()["id"])
         tick_now = datetime.now(UTC)
         assert (await review_outbound_tick(session_factory, settings, now=tick_now)).approved == 1
@@ -584,8 +587,8 @@ class TestRefusalRedLines:
         assert row["last_smtp_code"] == 550
         assert row["last_error_class"] == ERROR_CLASS_PERMANENT
         # 全表扫描（四张表的每一列）：对端原话与它回显的地址一个字都不许留下。
-        # 先绑定再断言、且失败信息里不带库内容——否则 pytest 的断言自省会把这四张表的文本
-        # dump 进失败报告，等于把「不许留」的东西又抄一遍（`docs/testing.md` §4.7）。
+        # 先绑定再断言，并给断言带显式消息——失败报告里出现的是这条消息与命中列表，而不是
+        # 整张表的文本被抄进报告（`docs/testing.md` §4.7 的「失败信息不回显正文/地址」）。
         persisted = await _persisted_text(session_factory)
         leaked = [text for text in (free_text, echoed_address, "5.1.1") if text in persisted]
         assert leaked == [], "库中出现了本不该留下的对端文本（此处不回显库内容）"

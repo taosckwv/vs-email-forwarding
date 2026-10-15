@@ -119,12 +119,23 @@ async def _count(session_factory: Any, table: sa.Table) -> int:
         return int(await session.scalar(sa.select(sa.func.count()).select_from(table)))
 
 
+async def _columns_of(session: Any, row: Any) -> dict[str, Any]:
+    """把一行读成**显式列投影**（不伸进实例的 `__dict__`）。
+
+    实例字典里除列之外还有 `_sa_instance_state` 之类的私有键，其形态是 ORM 的实现细节；按
+    `__table__.columns` 投影取的是同一份库内可观察值。先 `refresh` 一次保证列已加载——异步会话上
+    对未加载属性取值会触发惰性加载（`MissingGreenlet`），这里不给它这个机会。
+    """
+    await session.refresh(row)
+    return {column.key: getattr(row, column.key) for column in row.__table__.columns}
+
+
 async def _pending_row(session_factory: Any, message_id: uuid.UUID) -> dict[str, Any] | None:
     async with session_factory() as session:
         row = (
             await session.execute(sa.select(PendingMessage).where(PendingMessage.id == message_id))
         ).scalar_one_or_none()
-        return None if row is None else dict(row.__dict__)
+        return None if row is None else await _columns_of(session, row)
 
 
 async def _due_at(session_factory: Any, message_id: str) -> datetime:
@@ -146,7 +157,7 @@ async def _message_row(session_factory: Any, message_id: uuid.UUID) -> dict[str,
         row = (
             await session.execute(sa.select(Message).where(Message.id == message_id))
         ).scalar_one_or_none()
-        return None if row is None else dict(row.__dict__)
+        return None if row is None else await _columns_of(session, row)
 
 
 async def _seed_outbound(

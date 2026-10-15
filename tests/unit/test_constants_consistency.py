@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""三方取值一致与共享叶子层的静态守护（spec 0001 / T-38 / `NFR-4` / `AC-26` 的常量面）。
+"""三方取值一致与共享叶子层的静态守护（spec 0001 / T-38）。
+
+归属说明：本件**不是** `AC-26` 的落点——`AC-26`（`NFR-1`）管的是「不得先 `SELECT` 判断、再
+`UPDATE` 的两步抢占写法」，其静态面由 `tests/unit/test_repository_statements.py`（`T-6`）承接。
+本件的真锚点是 `plan.md` §2.0（`constants.py` 的取值清单）与 §6.2（归属口径：`.env` 值 vs
+服务固定语义），以及 `docs/architecture.md` 硬规则第 4 条（共享叶子层）。
 
 真源（期望值全部来自这三处，**不来自被测代码**）：
 
@@ -37,10 +42,40 @@ import yaml
 
 from vs_email_forwarding import constants
 
-_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+
+def _repo_root() -> Path:
+    """定位真仓库根：从本文件逐级向上找 ``docs/api-contract.yaml``。
+
+    mutmut 把源树拷进 ``mutants/`` 沙箱再跑同一套单测，沙箱里只有 pyproject.toml /
+    src / tests / uv.lock、**没有 docs/ 也没有 migrations/**——按固定层级（``parents[2]``）
+    取根会在沙箱里指向不存在的路径（`T-41` 首次跑门禁即报 ``FileNotFoundError:
+    mutants/docs/api-contract.yaml``）。逐级向上找则两种语境都成立：常规运行时**第三个候选**
+    （``parents[2]``，即真仓库根）就命中；沙箱里同一个锚多走一级（``parents[3]``）同样落回真根，
+    三方比对因此读的是**未变异**的真契约与真迁移文件。找不到即说明测试脱离了仓库检出，直接
+    失败而不是静默跳过。
+
+    本函数**有意自包含**、不抽公共 helper：三处同名函数的取根需求不同——本文件与
+    `tests/unit/test_openapi_contract.py` 锤 ``docs/api-contract.yaml``、
+    `tests/unit/test_review_placeholder.py` 锤 ``docs/security.md``，且本文件还另需
+    `migrations/`（故另有 ``_MIGRATIONS_DIR``）；三处都为在 mutmut 沙箱内**零导入耦合**
+    而各自实现（只用标准库 `pathlib`），这是沙箱里唯一稳的取根方式（先例与起因见
+    `tests/unit/test_review_placeholder.py` 的同名函数）。
+    """
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "docs" / "api-contract.yaml").is_file():
+            return candidate
+    raise AssertionError("未找到仓库根：docs/api-contract.yaml 不在本文件的任何上级目录")
+
+
+_REPO_ROOT: Final = _repo_root()
 _CONTRACT_PATH: Final = _REPO_ROOT / "docs" / "api-contract.yaml"
 _CONSTANTS_PATH: Final = _REPO_ROOT / "src" / "vs_email_forwarding" / "constants.py"
 _MIGRATIONS_DIR: Final = _REPO_ROOT / "migrations" / "versions"
+#: 上面三条路径都指向**真仓库**里的原文件（沙箱里也一样）：mutmut 只把源树拷进 `mutants/` 再变异
+#: 那份副本，本文件读的 `constants.py` 与 `migrations/versions/*.py` 始终是未变异真源。因此本文件
+#: 那些静态源码断言（如「`constants.py` 零项目内 import」）在变异运行中对**变异体**的判力是减弱的
+#: ——它判的是真源那一份；但 mutmut 的变异体只改既有语句、不会新增 import，所以没有可杀的变异因此
+#: 丢失（判定面在变异运行中不增不减）。
 
 #: 设计原文里的字面取值（`design.md` §2.3 的六态 + §3.4 的入站终态 `received`）。
 _DESIGN_MESSAGE_STATES: Final = frozenset(

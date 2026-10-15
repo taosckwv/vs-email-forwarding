@@ -2364,7 +2364,7 @@ class TestMessageRowRead:
 
         assert row is not None
         assert row.id == message_id
-        # 判定输入：direction 是 RowFacts 的必填字段（core/states.py:66）。
+        # 判定输入：direction 是 RowFacts 的必填字段（`core/states.py` 的 `RowFacts.direction`）。
         assert row.direction == "outbound"
         assert row.status == "failed"
         # 响应字段：MessageStatusResponse.required 里的三个时间列（docs/api-contract.yaml）。

@@ -3,9 +3,13 @@
 
 真源：`spec.md` 的 `AC-22` 原文（31 天前的邮件与其回复、31 天前的拒审行清理后查不到，29 天前的仍在；
 **另有一条 31 天前但仍有入站待审行指向它的出站行，清理后必须仍在**）；`NFR-8`（保留 30 天）；
-`design.md` §3.6（清理范围、`NOT EXISTS` 保护、回复行随父行级联、`pending_messages` 不参与清理）；
-`plan.md` §5.5（分批口径：一批删满继续下一批，某批一条也删不掉时停止；被并发执行体锁走的行本轮跳过、
-留给下一轮）与 §7.3 的 `AC-22` 一行（用例名与手法）；`AGENTS.md` §8.1（并发安全）与 §8.2（批次大小是配置项）。
+`design.md` §3.6（清理范围、`NOT EXISTS` 保护、回复行随父行级联、`pending_messages` 不参与清理；**分批
+语义的原文**「删除分批进行：每批按 `BATCH_SIZE` 取行并 `SELECT ... FOR UPDATE SKIP LOCKED` 后删除」与
+「结果事务写 0 行按幂等忽略、不报错」）；
+`plan.md` §5.5（每批条数、被并发执行体锁走的行本轮跳过、留给下一轮，**并含同一句**「写 0 行按幂等忽略、
+不报错」——**两册都没有**逐字写「某批删 0 即停」，本套件的循环停止条件由这两处同款原文推出）与 §7.3 的
+`AC-22` 一行（用例名与
+手法）；`AGENTS.md` §8.1（并发安全）与 §8.2（批次大小是配置项）。
 
 **期望值不来自 `flows/cleanup.py` 与 `db/repositories/cleanup.py`**：保留期时长取自 `constants.RETENTION_DAYS`
 （`NFR-8` 的产品语义，不是配置项）、批次大小由用例自己注入、取时点由注入的 `now` 固定
@@ -151,7 +155,8 @@ async def _row_ids(factory: _Factory, model: Any) -> set[uuid.UUID]:
 
 @asynccontextmanager
 async def _counting_factory(factory: _Factory, rounds: list[int]) -> AsyncIterator[AsyncSession]:
-    """包一层会话工厂：每开一个会话记一笔，用来数「本轮删了几批」（`plan.md` §5.5 的停止条件）。"""
+    """包一层会话工厂：每开一个会话记一笔，用来数「本轮删了几批」（停止条件出自哪里见模块 docstring：
+    `design.md` §3.6 与 `plan.md` §5.5 都只写「写 0 行按幂等忽略」，没有逐字写「删 0 即停」）。"""
     rounds.append(1)
     async with factory() as session:
         yield session
@@ -210,7 +215,8 @@ class TestCleanupScope:
 
 
 class TestCleanupBatching:
-    """`plan.md` §5.5：一批删满就继续下一批，某批一条也删不掉时停止（批次大小取自配置）。"""
+    """一批删满就继续下一批，某批一条也删不掉时停止（批次大小取自配置；出处见模块 docstring——
+    `design.md` §3.6 与 `plan.md` §5.5 都只写「写 0 行按幂等忽略、不报错」，未逐字写「删 0 即停」）。"""
 
     async def test_batches_until_every_expired_row_is_gone(
         self, session_factory: _Factory, integration_environment: Settings
@@ -231,8 +237,10 @@ class TestCleanupBatching:
         message_ids = await _row_ids(session_factory, Message)
         assert all(row_id not in message_ids for row_id in expired)
         assert fresh in message_ids
-        # 停止条件的推导（plan §5.5）：messages 侧 3 批（2 + 2 + 1）之后还要空跑一批确认「删 0 即停」，
-        # rejected 侧本轮无到期行、空跑一批 —— 合计 5 个短会话、每个会话独立一个事务。
+        # 分批条数的推导：messages 侧 3 批（2 + 2 + 1）。其中「删 0 即停」这一步的出处是
+        # `design.md` §3.6 与 `plan.md` §5.5 **共有**的那句原文「结果事务写 0 行按幂等忽略、不报错」
+        # ——两册都没有逐字写「某批删 0 即停」；因此 messages 侧
+        # 再空跑一批、rejected 侧本轮无到期行也空跑一批 —— 合计 5 个短会话、每个会话独立一个事务。
         assert len(rounds) == 5
 
 
