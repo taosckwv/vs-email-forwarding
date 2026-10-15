@@ -35,7 +35,8 @@ services:
       POSTGRES_USER: vs_email_forwarding
       # 仅本地开发用的固定弱口令，禁止出现在生产 .env 里
       POSTGRES_PASSWORD: vs_email_forwarding_dev
-      # 开发主库。测试库 vs_email_forwarding_test 见文件末尾的"开发/测试库初始化"说明。
+      # 开发主库。集成测试**不用**固定测试库——夹具每次运行自建隔离库，
+      # 口径见 tests/integration/README.md 的「数据库隔离」。
       POSTGRES_DB: vs_email_forwarding_dev
       TZ: UTC
     ports:
@@ -103,25 +104,19 @@ networks:
     driver: bridge
 
 # =============================================================================
-# 开发库与测试库的初始化
+# 开发库初始化与测试库口径
 #
 #   * 开发库 vs_email_forwarding_dev：由 POSTGRES_DB 在**首次**初始化数据卷时自动创建。
-#   * 测试库 vs_email_forwarding_test：官方 postgres 镜像**不支持** POSTGRES_MULTIPLE_DATABASES
-#     这种多库参数（那是 bitnami 等第三方镜像的扩展）。只有一个库会被自动建出来，
-#     第二个库用下面两条命令之一手工建（只做一次，数据卷在就不用重做）：
-#
-#       docker compose -f compose.dev.yaml exec postgres \
-#         psql -U vs_email_forwarding -d postgres -c "CREATE DATABASE vs_email_forwarding_test OWNER vs_email_forwarding;"
-#
-#     或者从宿主机连（需要本机装了 psql 客户端）：
-#
-#       psql "postgresql://vs_email_forwarding:vs_email_forwarding_dev@127.0.0.1:5432/postgres" \
-#         -c "CREATE DATABASE vs_email_forwarding_test OWNER vs_email_forwarding;"
-#
+#   * 集成测试的库**不用手工建、也不是固定库名**：官方 postgres 镜像不支持
+#     POSTGRES_MULTIPLE_DATABASES 这类多库参数（那是 bitnami 等第三方镜像的扩展），
+#     而 T-33 的夹具每次 pytest 运行自建形如 vs_email_forwarding_test_<pid>_<随机 8 位>
+#     的**运行级隔离库**（建库 → 迁移到 head → 跑完 DROP DATABASE ... WITH (FORCE)），
+#     开发库 vs_email_forwarding_dev 从头到尾不被连接。连接串只当**服务器坐标**用：
+#     优先显式环境变量 VS_EMAIL_FORWARDING_TEST_DATABASE_URL，否则取配置层的 DATABASE_URL；
+#     库名一律由夹具自己生成（口径见 tests/integration/README.md「数据库隔离」与
+#     docs/configuration.md）。
 #   * 注意：docker-entrypoint-initdb.d 里的初始化脚本只在数据卷**首次**初始化时执行，
-#     卷已存在时再改脚本不会生效——要么手工执行上面的 SQL，要么 down -v 重建卷。
-#   * 集成测试（tests/integration/）用 vs_email_forwarding_test，避免把开发数据洗掉；
-#     测试用的连接串同样从 .env 读（键名以 .env.example 为准）。
+#     卷已存在时再改脚本不会生效——需要它生效就 down -v 重建卷。
 #
 # 应用本体在开发机上怎么跑（不通过本文件）：
 #

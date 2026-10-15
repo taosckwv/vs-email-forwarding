@@ -145,7 +145,7 @@
 | `tests/unit/test_config_hygiene.py` | `新增` | 配置口径（`AC-27`）：除 `config.py` 外没有模块直接读环境变量、没有第二处读 `.env`；`git ls-files` 含 `.env.example` 且不含 `.env`（随 `T-32` 先红） |
 | `tests/unit/test_review_placeholder.py` | `新增` | 空实现标注（`AC-25`）：`providers/review/{base,always_pass}.py` 开头注释含「空实现」「永远通过」，`docs/security.md` 安全边界一节关键词可检索（随 `T-17` 先红） |
 | `tests/unit/test_schemas.py` | `新增` | 响应模型：字段集合与契约一致、时间序列化为 UTC RFC 3339 六位小数 + `Z`（`NFR-7` / `AC-17`）（随 `T-27` 先红） |
-| `tests/integration/conftest.py` | `新增` | 集成夹具：真实 PostgreSQL（测试库 `vs_email_forwarding_test`）、假 SMTP / 假 IMAP、可替换的假审查实现、测试库清表（`T-33`，§7.2） |
+| `tests/integration/conftest.py` | `新增` | 集成夹具：真实 PostgreSQL（每次 pytest 运行自建的隔离库 `vs_email_forwarding_test_<pid>_<随机 8 位>`）、假 SMTP / 假 IMAP、可替换的假审查实现、测试库清表（`T-33`，§7.2） |
 | `tests/integration/test_review_outbound_flow.py` | `新增` | 流① 集成用例（`T-34`，§7.3） |
 | `tests/integration/test_send_flow.py` | `新增` | 流② 集成用例，含 `AC-4` / `AC-5` / `AC-7` / `AC-8` / `AC-9` / `AC-19` / `AC-21` / `AC-24` / `AC-29` / `AC-30` / `AC-34` / `AC-37` / `AC-40`（`T-35`） |
 | `tests/integration/test_fetch_inbound_flow.py` | `新增` | 流③ 集成用例，含 `AC-10` ~ `AC-14` / `AC-28` / `AC-38` / `AC-39`（`T-36`） |
@@ -331,7 +331,7 @@
 
 ### 6.1 本次变更的配置项
 
-**本次不新增、不修改任何 `.env` 配置项。** 本特性的配置面已在前几轮提交里落地：`config.py` 的 **32 个字段**与 `.env.example` 里的 **32 个同名大写键**逐一对应，`.env.example` 另有 4 个不属于 `Settings` 的键（`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` 供 compose 里的 postgres 容器 initdb，`VS_EMAIL_FORWARDING_IMAGE` 供 `compose.yaml` 选镜像 tag），合计 36 个键。六态重构（把内外状态统一成一套取值）**没有**引入新配置——状态取值是服务固定语义，按 `AGENTS.md` §7 的判据归 `constants.py`，**不得**为它新增 `.env` 项。
+**本次不新增、不修改任何 `.env` 配置项。** 本特性的配置面已在前几轮提交里落地：`config.py` 的 **33 个字段**与 `.env.example` 里的 **33 个同名大写键**逐一对应，`.env.example` 另有 4 个不属于 `Settings` 的键（`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` 供 compose 里的 postgres 容器 initdb，`VS_EMAIL_FORWARDING_IMAGE` 供 `compose.yaml` 选镜像 tag），合计 37 个键。六态重构（把内外状态统一成一套取值）**没有**引入新配置——状态取值是服务固定语义，按 `AGENTS.md` §7 的判据归 `constants.py`，**不得**为它新增 `.env` 项。
 
 本次对配置层的改动只有两处**行为**（都不改 `.env` 键名或默认值）：
 
@@ -374,7 +374,7 @@
 
 | | `tests/unit/` | `tests/integration/` |
 |---|---|---|
-| 依赖 | 无数据库、无网络、无 Docker；允许 `fastapi.testclient.TestClient` 走进程内 HTTP | 真实 PostgreSQL（测试库 `vs_email_forwarding_test`）+ 假 SMTP / 假 IMAP / 可替换的假审查（§7.2） |
+| 依赖 | 无数据库、无网络、无 Docker；允许 `fastapi.testclient.TestClient` 走进程内 HTTP | 真实 PostgreSQL（每次运行自建的隔离库 `vs_email_forwarding_test_<pid>_<随机 8 位>`）+ 假 SMTP / 假 IMAP / 可替换的假审查（§7.2） |
 | 覆盖的层 | `core/`、`constants.py`、`config.py` 的校验判据、`schemas/` 的校验与序列化、`providers/*/base.py` 的中性对象、`db/repositories/` 的**语句编译产物** | `db/` 的约束与并发语义、三条 HTTP 端点、五条流各自的推进与幂等、跨表搬运、清理与级联 |
 | 典型断言 | 退避算术、六态判定优先级、`Message-ID` 解析、DSN / MDN 结构判定、422 清单、时间格式、`FOR UPDATE SKIP LOCKED` 是否出现在编译出的 SQL 里 | 唯一约束真的挡住重复入站、并发抢占只投一封、游标回退不产生第二条、清理的 `NOT EXISTS`、`next_cursor` 翻页全集一致 |
 | 不放在这 | 任何真实 PostgreSQL / SMTP / IMAP 用例 | 纯逻辑断言；也不放「必须真杀进程」的用例（口径见 §7.4） |
@@ -510,7 +510,7 @@
 | **契约两处漂移**：`docs/api-contract.yaml` 与 FastAPI 生成的 OpenAPI 各说一套 | 字段 / 枚举悄悄不一致，调用方按错的那份实现 | `tests/unit/test_openapi_contract.py` 逐字段比对；`tests/unit/test_constants_consistency.py` 断言契约枚举 == `constants.py` == 迁移与 ORM 的 `CHECK` 三方一致 |
 | **`constants.py` 被当成便利模块，开始 import 项目内模块** | 破坏 `docs/architecture.md` 硬规则第 4 条（共享叶子层），`db/` 的反向依赖会随之出现 | `test_constants_consistency.py` 静态断言该文件零项目内 import；`db/` 的 `CHECK` 文本由迁移与 ORM 各持一份，**不**去 import 该模块 |
 | **集成测试依赖外部环境（Docker 起得来 + PostgreSQL 可达——隔离测试库由夹具自建）** | 换机器后集成用例直接失败，容易被误判成代码问题 | §7.2 的三步前置写进 `tests/integration/README.md`；测试库连接串通过环境变量覆盖（不改仓库配置）；清表只清测试库 |
-| **测试用库与开发库串号**：跑集成测试时 `.env` 恰好指向开发库 | 洗掉开发数据 | 集成夹具**不读** `.env` 的 `DATABASE_URL`，只认显式的测试库环境变量；库名以 `_test` 结尾做一次断言兜底（`docs/research/02-runtime-and-scheduling.md` 的「库隔离」） |
+| **测试用库与开发库串号**：跑集成测试时 `.env` 恰好指向开发库 | 洗掉开发数据 | 集成夹具把连接串只当**服务器坐标**用（优先显式环境变量 `VS_EMAIL_FORWARDING_TEST_DATABASE_URL`，否则取配置层 `DATABASE_URL`），库名一律自建为运行级隔离库；建库 / 删库前按命名约定复核，只允许操作 `vs_email_forwarding_test_*` 形状的库（`tests/integration/conftest.py` 的 `_checked_test_database_name` 与「库隔离」口径，见 `docs/research/02-runtime-and-scheduling.md`） |
 | **异步引擎 / 会话在用例之间泄漏** | 用例随机挂起或连接池耗尽，表现为「偶尔失败」 | 每个用例自建引擎并在结束时 `dispose()`；夹具按 `docs/architecture.md` §5 的口径收发会话，不在用例之间传递会话 |
 | **审查空实现在测试里替换不干净**（`AC-6` / `AC-12` 依赖它） | 假审查漏进别的用例，或反例用例其实跑的是空实现 | 替换点固定在 `providers/review/factory.py`（`design.md` §4.2 已定工厂选取实现）；夹具显式选择「恒 `pass` / 恒 `reject` / 抛异常」三种模式，反例用例在断言前先断言替换已生效 |
 | **`deploy/` 三件脚本触碰未定项**（D2-乙 / D13） | 写出按「产出方已定」假设的脚本，做完就得返工 | 本期只写 **D2-甲**（`migrate.sh` / `run.sh` / `check_archive.py`）；产出方那一侧的打包脚本**不写**，并在 `deploy/README.md` 与 `docs/research/01-delivery-and-deploy.md` 写明随 D13 推迟 |
