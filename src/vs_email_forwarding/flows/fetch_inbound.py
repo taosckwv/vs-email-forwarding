@@ -37,12 +37,9 @@
 监督循环留栈。**后果如实登记**：这一封的游标不推进（事务已回滚），但同一批里后续封的推进会越过
 它——单封写库失败即等于这一封不再重试，`errored` 计数与那条错误事件是排查线索。
 
-【如实登记的缺口】§3.4 的入站行取值表有一行要求「``From`` 超长时**截断后再入库**」，但仓库里
-**没有任何收件人长度上限**可依：``recipient`` 列是 ``text``（无长度约束）、``design.md`` §7 的
-配置项清单里也没有收件人长度项，``MAX_SUBJECT_CHARS`` / ``MAX_BODY_BYTES`` 只作用于 API 提交路径。
-本模块因此**不做截断**——不猜一个没有出处的阈值（``AGENTS.md`` §2「未定项不允许 AI 自行决定」）。
-该行在当前 schema 下也没有触发条件（``text`` 不会被超长头值写失败）；若要保留这道防线，需先由
-所有者给定上限（新增配置项或常量），已在实现报告中如实上报。
+【收件人长度口径】§3.4 的入站行取值表要求「``From`` 超长时**截断后再入库**」，上限取配置项
+``MAX_RECIPIENT_CHARS``（默认 320）：``recipient`` 列虽是 ``text``（无长度约束），但外部可控的头值
+不得把整封写不进去。截断发生在写待审行之前，阈值只从配置读（本层不出现 320 这类字面量）。
 """
 
 from __future__ import annotations
@@ -196,7 +193,12 @@ async def fetch_inbound_tick(
         # 失败时一封都不处理、游标不动：上一轮的区间留到下一轮重试（§3.4）。
         logger.warning("inbound_fetch_failed", stage="fetch", error_class=fetched.error_class)
         return FetchInboundResult()
-    return await _process_all(session_factory, fetched.messages, now=tick_now)
+    return await _process_all(
+        session_factory,
+        fetched.messages,
+        now=tick_now,
+        max_recipient_chars=settings.max_recipient_chars,
+    )
 
 
 async def _ensure_cursor(
@@ -224,6 +226,7 @@ async def _process_all(
     messages: Sequence[FetchedMessage],
     *,
     now: datetime,
+    max_recipient_chars: int,
 ) -> FetchInboundResult:
     """逐封独立短事务：分拣落库 + 同事务推进游标；单封失败只吞掉该封。
 
@@ -241,7 +244,12 @@ async def _process_all(
     for message in messages:
         try:
             async with session_factory() as session:
-                outcome = await _sort_and_land(session, message, now=now)
+                outcome = await _sort_and_land(
+                    session,
+                    message,
+                    now=now,
+                    max_recipient_chars=max_recipient_chars,
+                )
                 await advance_cursor(
                     session,
                     message.mailbox,
@@ -281,7 +289,11 @@ async def _process_all(
 
 
 async def _sort_and_land(
-    session: AsyncSession, message: FetchedMessage, *, now: datetime
+    session: AsyncSession,
+    message: FetchedMessage,
+    *,
+    now: datetime,
+    max_recipient_chars: int,
 ) -> _Outcome | DiscardReason:
     """分拣一封并落库，返回成功处置或受控丢弃原因（不提交，事务由调用方划界）。
 
@@ -295,7 +307,7 @@ async def _sort_and_land(
         return await _apply_dsn(session, email, now=now)
     if is_mdn(email):
         return _MDN
-    return await _land_reply(session, message, now=now)
+    return await _land_reply(session, message, now=now, max_recipient_chars=max_recipient_chars)
 
 
 async def _apply_dsn(
@@ -326,7 +338,11 @@ async def _apply_dsn(
 
 
 async def _land_reply(
-    session: AsyncSession, message: FetchedMessage, *, now: datetime
+    session: AsyncSession,
+    message: FetchedMessage,
+    *,
+    now: datetime,
+    max_recipient_chars: int,
 ) -> _Outcome | DiscardReason:
     """回复支：解析引用 → 关联出站行 → 取 `From` 与正文 → 幂等写待审行。
 
@@ -352,6 +368,8 @@ async def _land_reply(
     recipient = _reply_recipient(message.headers)
     if recipient is None:
         return _NO_REPLY_FROM
+    # §3.4 的取值表：外部可控的头值不得把整封写不进去——入库前按配置上限截断（本层无字面量）。
+    recipient = recipient[:max_recipient_chars]
     body = _select_body(message.parts)
     if body is None:
         return _UNPARSABLE
@@ -399,8 +417,8 @@ def _reply_recipient(headers: Mapping[str, str]) -> str | None:
     """取回复的 `From` 作入站行的 ``recipient``；缺失或空白给 ``None``。
 
     §3.4 的取值表要求「回复的 ``From``（回复者地址，外部可控、**原样入库**）」：本层不解析、
-    不抽取地址、也不净化——头值原样写库（外部可控数据，进入库前既不加解释也不截断，见模块
-    docstring 的【如实登记的缺口】）。缺失或只有空白字符时没有可入库的收件人，调用方按
+    不抽取地址、也不净化——头值原样取出（只按配置的 ``max_recipient_chars`` 截断，截断在
+    :func:`_land_reply` 里做）。缺失或只有空白字符时没有可入库的收件人，调用方按
     ``no_reply_from`` 计数丢弃。
     """
     raw = headers.get(_FROM_HEADER)
@@ -432,7 +450,7 @@ def _log_discards(counts: Mapping[DiscardReason, int]) -> None:
 
     「没出现的记 0」靠的是 :meth:`~collections.abc.Mapping.get` 而不是下标：入参类型是
     ``Mapping``，契约里没有 ``Counter.__missing__``——用 ``counts[reason]`` 取十一类时，传进来的
-    若是普通 Mapping（缺键即 ``KeyError``），这条承诺就变成一次抛异常（``t19`` 的 ``F2``）。
+    若是普通 Mapping（缺键即 ``KeyError``），这条承诺就变成一次抛异常。
     """
     logger.info(
         "inbound_discarded",

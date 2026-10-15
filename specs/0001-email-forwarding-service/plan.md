@@ -56,7 +56,7 @@
 |---|---|---|
 | `src/vs_email_forwarding/db/models.py` | `新增` | 四张表的 ORM 模型：字段、受控枚举的 `CHECK`、索引、`parent_id` 自引用外键与级联删除（`design.md` §2） |
 | `src/vs_email_forwarding/db/session.py` | `新增` | 进程级异步引擎单例、会话工厂、`dispose()`；短会话按阶段开、用完即关（`docs/architecture.md` §5） |
-| `src/vs_email_forwarding/db/repositories/pending.py` | `新增` | 待审表的 SQL：三阶段认领（`FOR UPDATE SKIP LOCKED` + `attempt_count <= 4`）、过审 / 拒审落库与删行、`pending_messages` 到 `rejected_messages` 的收割支写入 |
+| `src/vs_email_forwarding/db/repositories/pending.py` | `新增` | 待审表的 SQL：出站建行 `insert_outbound_pending`（流① 认领前的「提交即入队」）、三阶段认领（`FOR UPDATE SKIP LOCKED` + `attempt_count <= 4`）、过审 / 拒审落库与删行、`pending_messages` 到 `rejected_messages` 的收割支写入 |
 | `src/vs_email_forwarding/db/repositories/messages.py` | `新增` | 邮件表的 SQL：发信认领与条件 UPDATE、退信置失败（仅 `sent_at` 非空）、回复行的 keyset 分页查询、出站行的六态判定查询 |
 | `src/vs_email_forwarding/db/repositories/rejected.py` | `新增` | 拒审表的 SQL：写入与按 ID 查询存在性 |
 | `src/vs_email_forwarding/db/repositories/cursors.py` | `新增` | 游标表的 SQL：读取 / 初始化（`UIDNEXT - 1`）/ `UIDVALIDITY` 变化时的重置、游标与单封落库的同事务推进 |
@@ -417,8 +417,8 @@
 | AC | 覆盖 | 测试与文件 | 期望值来源 | 用例名与断言要点 |
 |---|---|---|---|---|
 | `AC-1` | `FR-1` | `tests/integration/test_api_contract.py` | `spec.md` 的 `FR-1` + `docs/api-contract.yaml` 的请求 / 响应字段定义 | `test_submit_then_query`：`POST /v1/messages`（单收件人 + 主题 + `text` 正文）返回 2xx 且含 `id`；`GET /v1/messages/{id}` 立刻返回 `found: true`、`status == "submitted"` |
-| `AC-2` | `FR-1` | `tests/integration/test_api_contract.py` | `docs/api-contract.yaml` 的必填字段清单（缺 `to` 即 422） | `test_missing_recipient_422`：缺收件人 → 422，响应体出现收件人字段名；断言提交前后 `pending_messages` 行数不变 |
-| `AC-3` | `FR-1` | `tests/integration/test_api_contract.py` | `docs/api-contract.yaml` 的单收件人约束（`to` 是单值、不是数组） | `test_two_recipients_422`：两个收件人（列表与逗号分隔两种形态）→ 422 且不落库 |
+| `AC-2` | `FR-1` | `tests/integration/test_api_contract.py` | `docs/api-contract.yaml` 的必填字段清单（缺 `recipient` 即 422） | `test_missing_recipient_422`：缺收件人 → 422，响应体出现收件人字段名；断言提交前后 `pending_messages` 行数不变 |
+| `AC-3` | `FR-1` | `tests/integration/test_api_contract.py` | `docs/api-contract.yaml` 的单收件人约束（`recipient` 是单值、不是数组） | `test_two_recipients_422`：两个收件人（列表与逗号分隔两种形态）→ 422 且不落库 |
 | `AC-4` | `FR-2` | `tests/integration/test_send_flow.py` | `AGENTS.md` §8.3 + `MAIL_FROM_ADDRESS` 配置值（期望值是配置里那个地址，不是请求里给的） | `test_from_fixed_from_config`：请求体多带一个发件人字段（未知字段）→ 仍能发出，`smtp_capture` 捕获到的 `From` 等于 `MAIL_FROM_ADDRESS`，且不等于请求里给的地址 |
 | `AC-5` | `FR-2` | `tests/integration/test_send_flow.py` | `AGENTS.md` §8.3 + `REPLY_TO_ADDRESS` 配置值 | `test_reply_to_written`：捕获到的报文含 `Reply-To`，其值等于 `REPLY_TO_ADDRESS` |
 | `AC-6` | `FR-3` | `tests/integration/test_review_outbound_flow.py` | `design.md` §3.2 的状态落点表：拒审 → `rejected_messages`，**不产生任何投递** | `test_reject_no_smtp`：`fake_review` 恒 `reject` → `await` 一次流① tick 与一次流② tick，`smtp_capture` 投递次数为 `0`；状态为 `rejected` |

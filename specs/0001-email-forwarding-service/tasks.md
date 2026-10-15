@@ -59,7 +59,7 @@
 - [x] `T-29` （前置 `T-27`、`T-11`）`service/query_message.py` 与 `query_replies.py` — `FR-10` / `AC-15`
 - [x] `T-30` （前置 `T-27`、`T-28`）`api/v1/messages.py` 三个端点 + `tests/unit/test_request_validation.py` — `FR-1` / `AC-2` / `AC-3` / `AC-33`
 - [x] `T-31` （前置 `T-30`、`T-3`）`api/v1/dependencies.py` 的鉴权占位、路由注册、`db/session.py` 的数据库探测 + `service/health.py` 包装 + `api/v1/health.py` 补数据库探测（失败回 `503`） — `F3`（鉴权占位，无对应 `AC`）/ `FR-14` / `AC-20`
-- [ ] `T-32` （前置 `T-22`、`T-23` ~ `T-26`）`config.validate_startup()` 三条判据 + `main.py` 的 lifespan 装配 + `tests/unit/test_settings_validation.py` + `tests/unit/test_config_hygiene.py` — `NFR-4` / `AC-27` / `AC-32`
+- [x] `T-32` （前置 `T-22`、`T-23` ~ `T-26`）`config.validate_startup()` 三条判据 + `main.py` 的 lifespan 装配 + `tests/unit/test_settings_validation.py` + `tests/unit/test_config_hygiene.py` — `NFR-4` / `AC-27` / `AC-32`
 
 ## 阶段 5：集成测试、文档与交付
 

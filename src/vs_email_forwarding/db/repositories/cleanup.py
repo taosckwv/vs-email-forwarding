@@ -6,8 +6,9 @@
 
 * **判据与范围**：按各行的 ``created_at``（本行产生时刻）判定到期；
   范围只覆盖 ``messages`` 与 ``rejected_messages``——``pending_messages`` 是
-  纯队列、不参与清理。到期时刻（cutoff）由流程层按配置的保留期算出后绑定
-  进来，批次大小 batch_size 是入参（``BATCH_SIZE`` 配置项，不写死字面量）。
+  纯队列、不参与清理。到期时刻（cutoff）由调用方按 constants 的保留期常量
+  （``RETENTION_DAYS``——产品语义，不设配置项）算出后绑定进来，批次大小 batch_size
+  是入参（``BATCH_SIZE`` 配置项，不写死字面量）。
 * **并发口径**：每批先 ``select ... with_for_update(skip_locked=True)`` 锁定
   到期行，再在同一事务内按主键删除；与流② 正在投递的行相撞时被跳过的行
   留到下一轮，删 0 行按幂等忽略。
@@ -59,7 +60,7 @@ async def cleanup_expired_messages(
     """清理一批到期的邮件行（含经外键级联的回复行），返回删除的行数。
 
     锁行与删除在同一事务内完成；被并发执行体锁走的行本轮跳过（SKIP LOCKED），
-    删 0 行按幂等忽略。到期时刻由 cutoff 承载（流程层按保留期配置合成）。
+    删 0 行按幂等忽略。到期时刻由 cutoff 承载（调用方按 constants 的保留期常量合成）。
     """
     ids = list(
         (

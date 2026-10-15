@@ -2,39 +2,73 @@
 """应用入口：FastAPI 应用工厂与进程生命周期钩子。
 
 可用 ``uvicorn vs_email_forwarding.main:app`` 直接启动。
+
+lifespan 的三步（``design.md`` §4.4 与 ``plan.md`` §2.7）：**显式启动校验**（不在 import 期）
+→ 建进程级引擎 → 起五条后台任务；关闭阶段先停任务、再释放引擎。
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
+from functools import partial
 
 from fastapi import FastAPI
 
-from vs_email_forwarding import __version__
+from vs_email_forwarding import __version__, constants
 from vs_email_forwarding.api.v1 import api_router
-from vs_email_forwarding.config import get_settings
+from vs_email_forwarding.config import get_settings, validate_startup
+from vs_email_forwarding.db.session import dispose_engine, get_engine, session_factory
+from vs_email_forwarding.flows import (
+    cleanup,
+    fetch_inbound,
+    review_inbound,
+    review_outbound,
+    send_email,
+)
+from vs_email_forwarding.flows.scheduler import Scheduler, TaskName, Tick
 from vs_email_forwarding.logging import configure_logging
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """进程生命周期钩子：预留五条后台任务的启停位置。
+    """进程生命周期钩子：启动校验 → 引擎 → 五条后台任务；关闭时反向收尾。
 
-    启动阶段（预研阶段暂不执行任何动作）：
-      1. 初始化数据库异步引擎与会话工厂（见 ``vs_email_forwarding.db`` 职责说明）；
-      2. 并发启动五条后台任务：``review_outbound`` / ``send_email`` /
-         ``fetch_inbound`` / ``review_inbound``（间隔取自配置，默认 10 秒），
-         外加保留期清理（间隔 ``POLL_CLEANUP_SECONDS``，默认 3600 秒）。
-         五条任务将在此启动与停止，实现见 specs 中的调度规格。
+    1. :func:`~vs_email_forwarding.config.validate_startup` 校验三条判据（``design.md`` §4.4）：
+       这是**显式启动步骤**，不放在 import 期——不满足即抛出，进程非零退出、不监听端口。
+    2. 建进程级引擎（:func:`~vs_email_forwarding.db.session.get_engine` 懒建单例），并取一个
+       会话工厂给五条流共用（短会话按阶段开、用完即关）。
+    3. 五条任务（四条业务流 + 保留期清理）交给 :class:`Scheduler` 并发启动：间隔只从配置读，
+       清理用的保留期取自 ``constants.RETENTION_DAYS``——产品语义常量，既不是字面量也不是配置项。
 
-    关闭阶段：取消五条后台任务的 asyncio 任务并等待其优雅退出，随后释放数据库连接池。
+    关闭阶段先 ``await scheduler.stop()``（取消五条循环并等它们退出），再
+    ``await dispose_engine()`` 释放连接池：任务先停，才不会在引擎释放后还去开新会话。
     """
+    settings = get_settings()
+    validate_startup(settings)
+
+    get_engine()
+    factory = session_factory()
+    ticks: dict[TaskName, Tick] = {
+        TaskName.REVIEW_OUTBOUND: partial(review_outbound.review_outbound_tick, factory, settings),
+        TaskName.SEND_EMAIL: partial(send_email.send_email_tick, factory, settings),
+        TaskName.FETCH_INBOUND: partial(fetch_inbound.fetch_inbound_tick, factory, settings),
+        TaskName.REVIEW_INBOUND: partial(review_inbound.review_inbound_tick, factory, settings),
+        TaskName.CLEANUP: partial(
+            cleanup.cleanup_tick,
+            factory,
+            settings,
+            retention=timedelta(days=constants.RETENTION_DAYS),
+        ),
+    }
+    scheduler = Scheduler(settings, ticks)
+    await scheduler.start()
     try:
         yield
     finally:
-        # 现阶段没有任何后台任务或连接池需要释放。
-        pass
+        await scheduler.stop()
+        await dispose_engine()
 
 
 def create_app() -> FastAPI:

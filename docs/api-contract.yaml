@@ -206,8 +206,7 @@ components:
         subject:
           type: string
           minLength: 1
-          maxLength: 500
-          description: 邮件主题。长度上限由配置项 `MAX_SUBJECT_CHARS` 决定（单位是**字符**）。
+          description: 邮件主题。长度上限由配置项 `MAX_SUBJECT_CHARS` 决定（默认 500，单位是**字符**）；上限随配置取值，契约里不写死 `maxLength`。
         body:
           type: string
           minLength: 1

@@ -25,6 +25,11 @@ from vs_email_forwarding.main import create_app  # noqa: E402
 
 @pytest.fixture()
 def client() -> Iterator[TestClient]:
-    """提供挂载了全部路由的测试客户端；退出时触发 lifespan 关闭阶段。"""
-    with TestClient(create_app()) as test_client:
-        yield test_client
+    """提供挂载了全部路由的测试客户端（**不进入 lifespan**）。
+
+    `T-32` 之后 lifespan 会建进程级引擎并起五条后台流：单测用 `with TestClient(...)` 进入它，
+    等于让 `tests/unit/` 真连 PostgreSQL / IMAP，违背 `AGENTS.md` §4「tests/unit/ 不依赖数据库
+    与网络」与 `docs/testing.md` R12。lifespan 自身的装配（启动校验 → 引擎 → 五任务 → 关闭收尾）
+    由 `tests/unit/test_settings_validation.py` 用假协作者逐条覆盖。
+    """
+    yield TestClient(create_app())

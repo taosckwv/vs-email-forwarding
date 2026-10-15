@@ -173,6 +173,16 @@ REJECT_SOURCES: tuple[RejectSource, ...] = (
     "review_incomplete",
 )
 
+# ---------------------------------------------------------------------------
+# 保留期（`NFR-8`）
+# ---------------------------------------------------------------------------
+
+#: 邮件行与拒审行的保留期（天）：`NFR-8` 约定「保留 30 天」。它是**产品语义**，不是
+#: 「随环境合法地不同」的值，因此落本模块而不进 `.env`（`AGENTS.md` §7 的判定口径）。
+#: 可配置的是清理**间隔**（`POLL_CLEANUP_SECONDS`），保留期本身不设配置项——否则
+#: 「保留多少天」会变成部署差异，同一份对外承诺在不同环境给出不同答案。
+RETENTION_DAYS: int = 30
+
 #: 时间戳的对外格式：UTC 的 RFC 3339、固定六位小数、以 `Z` 结尾（`NFR-7` / `AC-17`）。
 TIMESTAMP_FORMAT: str = "%Y-%m-%dT%H:%M:%S.%fZ"
 
@@ -191,6 +201,7 @@ __all__ = [
     "MESSAGE_STATE_TRANSITIONS",
     "RECEIVED_STATE",
     "REJECT_SOURCES",
+    "RETENTION_DAYS",
     "RETRY_BACKOFF_SECONDS",
     "SMTP_PERMANENT_MAX",
     "SMTP_PERMANENT_MIN",
