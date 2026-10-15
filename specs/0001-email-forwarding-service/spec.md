@@ -169,8 +169,48 @@
 
 ## 9. 验收结果
 
-> 尚未实现，保持为空。
+> 本特性已按 `tasks.md` 阶段 1～5 实现，验收结果逐条回填如下；`AC-20` 属交付阶段验证（隔离环境容器启动），留 `T-45` 本机交付验证回填。门禁 `bash scripts/check.sh` 五步全绿——第 1 步 ruff format --check、第 2 步 ruff check、第 3 步 `mypy src`、第 4 步 pytest（含覆盖率）、第 5 步 mutmut——下表每条用例级证据都被第 4 步实际执行。
 
 | 编号 | 验证方式（命令 / 测试名 / 步骤） | 结果 |
 |---|---|---|
-| `AC-1` | 待补 | 待补 |
+| `AC-1` | `tests/integration/test_api_contract.py::test_submit_then_query` | 通过 |
+| `AC-2` | `tests/integration/test_api_contract.py::test_missing_recipient_422` | 通过 |
+| `AC-3` | `tests/integration/test_api_contract.py::test_two_recipients_422` | 通过 |
+| `AC-4` | `tests/integration/test_send_flow.py::test_from_fixed_from_config`、`tests/integration/test_api_contract.py::test_caller_sender_fields_are_ignored` | 通过 |
+| `AC-5` | `tests/integration/test_send_flow.py::test_reply_to_written` | 通过 |
+| `AC-6` | `tests/integration/test_review_outbound_flow.py::test_reject_no_smtp` | 通过 |
+| `AC-7` | `tests/integration/test_send_flow.py::test_outbound_end_to_end` | 通过 |
+| `AC-8` | `tests/integration/test_send_flow.py::test_transient_exhausts_attempts` | 通过 |
+| `AC-9` | `tests/unit/test_retry_policy.py::test_next_attempt_at_first_three_claims_push_backoff`、`tests/integration/test_send_flow.py::test_backoff_written_on_claim` | 通过 |
+| `AC-10` | `tests/integration/test_fetch_inbound_flow.py::test_dsn_sets_failed` | 通过 |
+| `AC-11` | `tests/integration/test_fetch_inbound_flow.py::test_inbound_dedup_by_uid` | 通过 |
+| `AC-12` | `tests/integration/test_review_inbound_flow.py::test_rejected_reply_not_queryable`、`tests/integration/test_fetch_inbound_flow.py::test_rejected_reply_not_queryable` | 通过 |
+| `AC-13` | `tests/integration/test_fetch_inbound_flow.py::test_unmatched_inbound_discarded` | 通过 |
+| `AC-14` | `tests/integration/test_fetch_inbound_flow.py::test_mdn_dropped_reply_kept` | 通过 |
+| `AC-15` | `tests/integration/test_api_contract.py::test_replies_stable` | 通过 |
+| `AC-16` | `tests/integration/test_api_contract.py::test_replies_sorted_asc` | 通过 |
+| `AC-17` | `tests/integration/test_api_contract.py::test_three_phase_states`、`tests/unit/test_schemas.py::test_status_timestamps_serialize_as_utc_rfc3339_six_digits_z` | 通过 |
+| `AC-18` | `tests/integration/test_api_contract.py::test_rejected_state_queryable` | 通过 |
+| `AC-19` | `tests/integration/test_send_flow.py::test_restart_resumes` | 通过 |
+| `AC-20` | 留 `T-45` 本机交付验证回填 | 待补 |
+| `AC-21` | `tests/unit/test_retry_policy.py::test_worst_case_attempts_within_180s`、`tests/integration/test_send_flow.py::test_within_three_minutes` | 通过 |
+| `AC-22` | `tests/integration/test_cleanup_flow.py::test_cleanup_scope_and_not_exists` | 通过 |
+| `AC-23` | `tests/unit/test_scheduler_intervals.py::test_interval_comes_from_config`、`tests/unit/test_scheduler_intervals.py::test_no_interval_literals` | 通过 |
+| `AC-24` | `tests/integration/test_send_flow.py::test_logs_no_content` | 通过 |
+| `AC-25` | `tests/unit/test_review_placeholder.py::test_empty_implementation_annotated`、`tests/unit/test_review_placeholder.py::test_security_boundary_section_mentions_annotation` | 通过 |
+| `AC-26` | `tests/unit/test_repository_statements.py::test_claim_select_compiles_with_for_update_skip_locked`、`tests/unit/test_repository_statements.py::test_claim_builder_uses_with_for_update_skip_locked` | 通过 |
+| `AC-27` | `tests/unit/test_config_hygiene.py::test_only_config_module_reads_environment_variables`、`tests/unit/test_config_hygiene.py::test_only_config_module_reads_dotenv`、`tests/unit/test_config_hygiene.py::test_env_files_are_tracked_correctly` | 通过 |
+| `AC-28` | `tests/integration/test_fetch_inbound_flow.py::test_discard_log_only_counts` | 通过 |
+| `AC-29` | `tests/integration/test_repositories.py::test_concurrent_claim_single_delivery`、`tests/integration/test_send_flow.py::test_concurrent_claim_single_delivery` | 通过 |
+| `AC-30` | `tests/integration/test_send_flow.py::test_error_has_no_free_text` | 通过 |
+| `AC-31` | `tests/integration/test_api_contract.py::test_existing_without_replies` | 通过 |
+| `AC-32` | `tests/unit/test_settings_validation.py::test_imap_address_must_equal_reply_to`、`tests/unit/test_settings_validation.py::test_mail_from_address_must_yield_a_domain`、`tests/unit/test_settings_validation.py::test_reply_to_address_must_be_valid`、`tests/integration/test_startup_validation.py::test_violation_refuses_to_start_and_does_not_listen` | 通过 |
+| `AC-33` | `tests/integration/test_api_contract.py::test_over_limit_422`、`tests/unit/test_request_validation.py::test_submit_subject_over_config_limit_422`、`tests/unit/test_request_validation.py::test_submit_body_over_config_limit_counts_bytes_not_chars` | 通过 |
+| `AC-34` | `tests/integration/test_send_flow.py::test_permanent_fails_immediately` | 通过 |
+| `AC-35` | `tests/integration/test_api_contract.py::test_not_found_vs_no_replies` | 通过 |
+| `AC-36` | `tests/integration/test_api_contract.py::test_state_monotonic` | 通过 |
+| `AC-37` | `tests/integration/test_send_flow.py::test_reaper_after_fourth_attempt` | 通过 |
+| `AC-38` | `tests/integration/test_fetch_inbound_flow.py::test_dsn_target_not_sent` | 通过 |
+| `AC-39` | `tests/integration/test_fetch_inbound_flow.py::test_cursor_rollback_advances`、`tests/integration/test_repositories.py::test_duplicate_insert_does_not_rollback_advance` | 通过 |
+| `AC-40` | `tests/integration/test_send_flow.py::test_timeout_bounded` | 通过 |
+| `AC-41` | `tests/integration/test_repositories.py::test_keyset_250_replies`、`tests/integration/test_api_contract.py::test_reply_paging_with_250_rows` | 通过 |

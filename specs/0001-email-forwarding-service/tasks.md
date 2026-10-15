@@ -73,7 +73,7 @@
 - [x] `T-39` （前置 `T-38`）七份包占位 docstring 与 `plan.md` §6.2 清单的同步（`migrations/README.md`、`tests/{unit,integration}/README.md`、`providers/review/__init__.py` 等）— 无对应 `AC`（文档与占位）
 - [x] `T-40` （前置 `T-39`）文档同步收尾：`docs/README.md` §3 清单、`docs/configuration.md`、`CHANGELOG.md` — 无对应 `AC`（文档）
 - [ ] `T-41` （前置 `T-38`、`T-39`、`T-40`）跑 `bash scripts/check.sh` 五步全绿（`ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut`）— `NFR-4` / `AC-26`
-- [ ] `T-42` （前置 `T-41`）逐条按 `AC-n` 回填 `spec.md` §9 的验收结果 — `AC-1` ~ `AC-19`、`AC-21` ~ `AC-41`（`AC-20` 在 `T-45` 回填）；并补 `design.md` §3.4 的**取回结果类型**条目（T-21 已落地承载形态，正式条目欠账在此收口）
+- [x] `T-42` （前置 `T-41`）逐条按 `AC-n` 回填 `spec.md` §9 的验收结果 — `AC-1` ~ `AC-19`、`AC-21` ~ `AC-41`（`AC-20` 在 `T-45` 回填）；并补 `design.md` §3.4 的**取回结果类型**条目（T-21 已落地承载形态，正式条目欠账在此收口）
 - [ ] `T-43` （前置 `T-41`）交付三件脚本：`deploy/migrate.sh`、`deploy/run.sh`、`deploy/check_archive.py` — `FR-14` / `AC-20`
 - [ ] `T-44` （前置 `T-43`）`deploy/README.md`、`docs/research/01-delivery-and-deploy.md` 与 `docs/open-questions.md` D2 的就地收窄 — `FR-14` / `AC-20`
 - [ ] `T-45` （前置 `T-42`、`T-44`）**交付阶段验证（不入门禁）**：在隔离服务器上完成 `AC-20`——`bash deploy/run.sh` 后 `GET /healthz` 在 60 秒内返回 200，且运行时无任何外部网络依赖；结果回填 `spec.md` §9 — `FR-14` / `NFR-3` / `AC-20`

@@ -318,6 +318,7 @@
 - **每个 tick 处理封数有上限**：区间取 `last_uid + 1` 到 `min(UIDNEXT - 1, last_uid + BATCH_SIZE)`，剩余留到下一个 tick（`NFR-2` 的「每批条数是配置项」对流③ 同样成立）。没有上限时，停机一天后重启的第一次 tick 要在一个 tick 里解析整个积压，会挤占其余四条流的连接池与事件循环。
 - 游标管效率、唯一键管正确性：唯一键仍是 `mailbox` + `UIDVALIDITY` + `UID`（§2.2），只是它只能兜住同一 `UIDVALIDITY` 内的重复；`Message-ID` 不得用作幂等键或去重依据。
 - 分拣的三层落点：`providers/imap/` 只把邮件取回并解析成中性结构（头字段、MIME 部件、UID 三要素），不做任何判定；`core/` 放纯判定函数（DSN 结构判定、MDN 判定、`References` / `In-Reply-To` 的解析与关联匹配）。
+- 取回的结果类型与顺序：承载在 `providers/imap/` 的接口与实现上——`base.py` 的 `ImapFetcher` 接口把取回定成「先读信箱状态、再按区间取回」两步，`read_mailbox_state()` 回报信箱的 `UIDVALIDITY` / `UIDNEXT`；`fetch_messages(after_uid, limit)` 取回 UID 严格大于 `after_uid`（即 `last_uid + 1` 起）、到 `min(UIDNEXT - 1, last_uid + limit)` 为止的封，返回受控结果类型 `FetchResult`：成功时 `messages` 为**按 UID 升序**排列的中性结构 `FetchedMessage` 元组（顶层 content-type、头字段、MIME 部件、`mailbox` / `uidvalidity` / `uid` 三要素），失败收进 `error_class` 受控分类、`messages` 一律为空——故障与「连上了、这轮没拉到新邮件」可分辨；每个被取回的 UID 都有对应记录（漏一封即永远挡住游标）。实现是 `imapclient_fetcher.py` 的 `ImapClientFetcher`（`IMAPClient` 经 `asyncio.to_thread` 调用，按 UID 区间取回、标准库 `email` 解析）。升序正是上文游标规则「逐封处理该封 + 把游标推到该封的 UID」同事务推进的次序依据。
 - `flows/` 的入站步骤编排「取回 → 判定 → 落库 / 置失败 / 计数丢弃」，并靠 `mailbox + uidvalidity + uid` 的唯一约束兜住同一 `UIDVALIDITY` 内的重复；分拣规则因此可脱离真实 IMAP 单测，换 IMAP 客户端也不影响分拣。
 - 退信识别按结构判断，不靠主题或正文猜：DSN 的判定依据至少包含 `multipart/report` 容器与 `message/delivery-status` 部分；`Status: 5.x.x`（永久）与 `4.x.x`（临时）都算失败，置对应出站邮件为发送失败（写列口径见 §3.3 的「退信到达」一行，`FR-6`）。
 - 原邮件靠 DSN 内嵌的 `message/rfc822` 部分取出；取不出原邮件标识的退信被丢弃，调用方因此看不到这次失败——登记为已知缺失。退信检测是尽力而为：部分 SMTP 网关会丢弃或延迟 DSN，临时失败也可能不产生退信，因此退信不得作为「是否送达」的唯一判据。
@@ -576,6 +577,11 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 ### 配置项清单
 | 配置项 | 用途 | 定名状态 |
 |---|---|---|
+| `APP_ENV` | 运行环境标识（`dev` / `test` / `prod`，默认 `dev`） | 已定（仓库已有） |
+| `LOG_LEVEL` | 日志级别，标准库 logging 的级别名（默认 `INFO`） | 已定（仓库已有） |
+| `LOG_FORMAT` | 日志渲染格式（`console` / `json`，默认 `console`；两条渲染分支的口径见 §4.6） | 已定（仓库已有） |
+| `HTTP_HOST` | HTTP 服务监听地址（默认 `0.0.0.0`） | 已定（仓库已有） |
+| `HTTP_PORT` | HTTP 服务监听端口（默认 `8000`） | 已定（仓库已有） |
 | `POLL_REVIEW_OUTBOUND_SECONDS` / `POLL_SEND_SECONDS` / `POLL_FETCH_INBOUND_SECONDS` / `POLL_REVIEW_INBOUND_SECONDS` | 流① / 流② / 流③ / 流④ 的轮询间隔（各默认 10） | 已定（仓库已有） |
 | `POLL_CLEANUP_SECONDS` | 流⑤ 保留期清理的执行间隔（默认 3600） | 已定（仓库已有） |
 | `SMTP_TIMEOUT_SECONDS` / `IMAP_TIMEOUT_SECONDS` / `REVIEW_TIMEOUT_SECONDS` | 单次外部调用的墙钟上界（各默认 10 秒）；`FR-15` 的 3 分钟由它们与退避表共同推出 | 已定（仓库已有） |
@@ -594,6 +600,7 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_STARTTLS` | SMTP 主机、端口、账号、口令、是否 STARTTLS | 已定（仓库已有） |
 | `DATABASE_URL` | 异步驱动连接串，形如 `postgresql+asyncpg://…` | 已定（仓库已有） |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | compose 里 postgres 容器的初始化参数，须与 `DATABASE_URL` 一致 | 已定（仓库已有） |
+| `VS_EMAIL_FORWARDING_IMAGE` | 部署镜像 tag：`compose.yaml` 据它选应用镜像、留空退回 compose 默认 tag，回滚改回旧 tag 再重启；**部署专用**（只在服务器 `.env`），`config.py` 不读 | 已定（仓库已有） |
 
 ## 8. 会话边界与模型转换
 分层与依赖方向见 `docs/architecture.md`；本节只定「ORM 对象到哪儿为止」这一条，落点是 `db/`、`service/` 与 `api/` 的函数签名。
