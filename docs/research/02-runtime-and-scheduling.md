@@ -37,7 +37,7 @@
 - 门禁与测试基线（全绿口径、`ruff` 告警口径、覆盖率与变异测试的判据等）见 `docs/research/03-dependencies-and-toolchain.md`；测试该写什么见 `docs/testing.md`；测试依赖的弃用提示见 `docs/open-questions.md` 的 E2。
 - **业务逻辑尚未实现**：`src/vs_email_forwarding/flows/`、`src/vs_email_forwarding/service/`、`src/vs_email_forwarding/db/`、`src/vs_email_forwarding/providers/` 下只有包占位文件，当前唯一可用的端点是 `/healthz`。
 - **集成测试的依赖与覆盖重点已写明**：`tests/integration/` 需要真实 PostgreSQL（测试库）与本地邮件捕获服务，覆盖状态机转换、单次 tick 幂等、并发抢占不重复发信、回复关联四类最容易出错的路径。
-- **开发库与测试库的初始化方式不同**：`compose.dev.yaml` 里只有开发库会在数据卷首次初始化时自动建出；测试库需要手工创建一次，该说明在文件末尾。
+- **开发库与测试库的初始化方式不同**：`compose.dev.yaml` 里只有开发库会在数据卷首次初始化时自动建出；集成测试**不使用固定的测试库**——夹具每次 pytest 运行自建形如 `vs_email_forwarding_test_<pid>_<随机 8 位>` 的运行级隔离库、跑完即删，开发库从头到尾不被连接（口径见 `tests/integration/README.md` 的「数据库隔离」，编排侧说明见 `compose.dev.yaml` 末尾的「开发库初始化与测试库口径」）。
 - **生产编排里数据库不向宿主机暴露端口**：`compose.yaml` 中应用容器内的数据库连接串被显式覆盖为 compose 服务名（容器内的回环地址指向应用自己），应用与数据库只走内部 bridge 网络。
 
 ## 已否决方向
@@ -57,7 +57,7 @@
 
 - `AGENTS.md` §3（门禁与开发依赖的命令入口）、§7（配置只从配置层读、时间用带时区 `datetime`、SQL 只在仓储层）、§8（四条业务流幂等、间隔不硬编码、发件人与 `Reply-To`、重试语义）；规则与结论的分工见其 §1 的文档导航表。
 - `compose.yaml` —— 生产编排：应用与同机 PostgreSQL 由同一个 compose 管理，应用容器内覆盖数据库连接串，数据库不向宿主机暴露端口。
-- `compose.dev.yaml` —— 开发依赖编排（PostgreSQL；本地邮件捕获服务是否最终采用仍待确认，见 `docs/open-questions.md`），开发库与测试库的初始化说明在文件末尾。
+- `compose.dev.yaml` —— 开发依赖编排（PostgreSQL 17；本地邮件捕获服务用 GreenMail，未定项 `D16` 已关闭，见 `docs/research/05-dev-and-build-environment.md`），开发库初始化与测试库口径（运行级隔离库）见文件末尾。
 - `tests/integration/` —— 真实 PostgreSQL 与邮件回路的集成测试；`tests/unit/` 放不依赖数据库与网络的纯逻辑单测。
 - `deploy/` —— 部署脚本与交付链的落点（新链路「服务器本地构建 + 基础镜像以 tar 带入」的脚本形态见未定项 D2）；`scripts/` 只放本地开发与门禁脚本。
 - 本特性的代码落点（`flows/`、`service/`、`db/`、`providers/`、`api/`、`core/`、`config.py`、`.env.example`、`migrations/`）见 `specs/0001-email-forwarding-service/design.md` 的「落地位置」一节；代码分层与依赖方向见 `docs/architecture.md`。
