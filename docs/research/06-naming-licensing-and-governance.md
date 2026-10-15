@@ -21,7 +21,7 @@
 | Python 导入包与目录 | `vs_email_forwarding` / `src/vs_email_forwarding/` | **机械映射**：连字符 → 下划线（Python 导入名不能含连字符） |
 | 镜像名 | `vs-email-forwarding`（例如 tag `vs-email-forwarding:0.1.0`） | 同发行名 |
 | compose 项目名 | 生产 `vs-email-forwarding`；开发 `vs-email-forwarding-dev` | 同发行名（开发加 `-dev`） |
-| 容器名前缀 | `vs-email-forwarding-app`、`vs-email-forwarding-postgres`；开发 `vs-email-forwarding-dev-postgres`、`vs-email-forwarding-dev-mailpit` | 发行名 + 角色后缀 |
+| 容器名前缀 | `vs-email-forwarding-app`、`vs-email-forwarding-postgres`；开发 `vs-email-forwarding-dev-postgres`、`vs-email-forwarding-dev-greenmail` | 发行名 + 角色后缀 |
 | compose 网络名 | 生产 `vs-email-forwarding-net`；开发 `vs-email-forwarding-dev-net` | 发行名 + `-net` |
 | 带前缀的环境变量 | `VS_EMAIL_FORWARDING_*`，当前实际只有 `VS_EMAIL_FORWARDING_IMAGE` | 发行名大写、连字符 → 下划线 |
 | 数据库用户与默认库名 | 用户 `vs_email_forwarding`；库 `vs_email_forwarding`（开发 `vs_email_forwarding_dev`、测试 `vs_email_forwarding_test`） | 同发行名的下划线形式 |
@@ -73,7 +73,7 @@
 - `.github/` 下只有 `PULL_REQUEST_TEMPLATE.md` 与 `ISSUE_TEMPLATE/feature_request.md`、`ISSUE_TEMPLATE/bug_report.md`，**没有 `workflows/`**。
 - `.pre-commit-config.yaml`：`default_install_hook_types` 含 `commit-msg`；commitizen 钩子 `stages: [commit-msg]`，参数为 `--allow-abort --commit-msg-file`。
 - `compose.yaml`：`name: vs-email-forwarding`；容器名 `vs-email-forwarding-app` / `vs-email-forwarding-postgres`；网络 `vs-email-forwarding-net`；镜像引用 `${VS_EMAIL_FORWARDING_IMAGE:-vs-email-forwarding:latest}`。
-- `compose.dev.yaml`：`name: vs-email-forwarding-dev`；`POSTGRES_USER: vs_email_forwarding`、`POSTGRES_DB: vs_email_forwarding_dev`；容器名 `vs-email-forwarding-dev-postgres` / `vs-email-forwarding-dev-mailpit`；卷与网络均以 `vs-email-forwarding-dev` 为前缀；文件末尾写明测试库 `vs_email_forwarding_test` 只需手工创建一次。
+- `compose.dev.yaml`：`name: vs-email-forwarding-dev`；`POSTGRES_USER: vs_email_forwarding`、`POSTGRES_DB: vs_email_forwarding_dev`；容器名 `vs-email-forwarding-dev-postgres` / `vs-email-forwarding-dev-greenmail`；卷与网络均以 `vs-email-forwarding-dev` 为前缀；文件末尾写明开发库初始化与测试库口径——集成测试**不用固定测试库**，运行级隔离库由夹具每次运行自建并自删。
 - `.env.example`：`DATABASE_URL`、`POSTGRES_USER`、`POSTGRES_DB` 三处默认名都是 `vs_email_forwarding`；**唯一带前缀的键是末尾的 `VS_EMAIL_FORWARDING_IMAGE`**。
 - 在 `src/`、`scripts/`、`deploy/`、`compose.yaml`、`compose.dev.yaml`、`.env.example`、`pyproject.toml` 中检索不到旧名 `mail-relay` / `mail_relay` 作为有效标识符。
 - `CONTRIBUTING.md` 写明 Conventional Commits + 中文描述的格式、常用 type、分支策略与本地门禁；安全策略的**正文**在 `docs/security.md`（报告渠道、威胁清单、禁止做法、空实现标注），仓库根的 `SECURITY.md` 只有 3–5 行，是内容一律指向 `docs/security.md` 的短壳。

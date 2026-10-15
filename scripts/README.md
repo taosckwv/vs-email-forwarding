@@ -14,7 +14,7 @@
 | 脚本 | 用途 | 参数 | 前置条件 |
 |---|---|---|---|
 | `check.sh` | **一键门禁**：依次跑 `ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut run` **+ 逐条复验存活变异体**（第 5 步每次先清 `mutants/` 做全量变异，保证数字可复现） | 无（刻意不接受参数，保证所有人跑的是同一套门禁） | 已安装 **uv**（`uv --version` 可用）。**不需要 Docker**（单测、变异测试与存活复验都不依赖容器）。第 5 步实测总耗时约 30 秒 |
-| `dev-up.sh` | 起开发依赖：PostgreSQL 17 + Mailpit（`compose.dev.yaml`），并打印连接信息 | 无 | 已安装并启动 **Docker**（Linux 上的 Docker 不需要硬件虚拟化） |
+| `dev-up.sh` | 起开发依赖：PostgreSQL 17 + GreenMail（`compose.dev.yaml`），并打印连接信息 | 无 | 已安装并启动 **Docker**（Linux 上的 Docker 不需要硬件虚拟化） |
 
 ---
 
@@ -118,10 +118,10 @@ env MUTANT_UNDER_TEST=<变异体名> PYTHONPATH="$PWD/mutants:$PWD/mutants/src" 
 
 | 服务 | 端口 | 作用 |
 |---|---|---|
-| `postgres:17` | `127.0.0.1:5432` | 开发库 `vs_email_forwarding_dev`（测试库 `vs_email_forwarding_test` 需手工创建，命令见 `compose.dev.yaml` 末尾） |
-| `axllent/mailpit` | `1025`(SMTP) / `8025`(Web UI) / `1110`(POP3，未映射到宿主) | 流②发信侧验证：应用发出去的信被它收下并可在 Web UI 查看。**它不提供 IMAP**，流③入站回路不能用它（见 `docs/open-questions.md` D16） |
+| `postgres:17` | `127.0.0.1:5432` | 开发库 `vs_email_forwarding_dev`（集成测试**不用固定测试库**：夹具每次运行自建运行级隔离库并自删，见 `tests/integration/README.md` 的「数据库隔离」） |
+| `greenmail/standalone:2.1.14` | `127.0.0.1:3025`(SMTP) / `127.0.0.1:3143`(IMAP) / `127.0.0.1:3110`(POP3，本服务不用) | 流②发信侧 + 流③入站回路的本地邮件服务：应用发出去的信被它收下，应用再用 IMAP 按账号信箱拉回。本机邮件服务用 GreenMail 是已拍板结论（`D16` 已关闭），理由与实测见 `docs/research/05-dev-and-build-environment.md` |
 
-Mailpit 的 Web UI：<http://127.0.0.1:8025>。
+GreenMail **没有 Web UI**；它另有一个 HTTP API（`8080`），默认不映射到宿主——需要看/灌邮件时按 `compose.dev.yaml` 里那行注释临时放开。
 
 应用本体**不在容器里跑**，用 uv 在宿主机跑（热重载、调试都方便）：
 
@@ -155,6 +155,6 @@ docker compose -f compose.dev.yaml down -v       # 连命名卷一起删（测�
 | `dev-up.sh` 报「找不到 docker」 | 本机没装 Docker；按 `docs/research/05-dev-and-build-environment.md` 装（Linux 上的 Docker 不需要硬件虚拟化） |
 | `dev-up.*` 报「连不上 Docker 守护进程」 | 两种原因：守护进程没启动（`systemctl start docker`），或**当前用户不在 `docker` 组**——socket 是 `root:docker 660`，且重新登录后组权限才生效 |
 | `dev-up.sh` 报「permission denied ... docker.sock」 | 同上：把用户加进 `docker` 组（`usermod -aG docker <用户>`）后**重新登录** |
-| 端口 5432 / 1025 / 1143 / 8025 被占用 | 先 `docker compose -f compose.dev.yaml down`；仍冲突则改 `compose.dev.yaml` 里的宿主端口映射 |
+| 端口 5432 / 3025 / 3143 / 3110 被占用 | 先 `docker compose -f compose.dev.yaml down`；仍冲突则改 `compose.dev.yaml` 里的宿主端口映射 |
 | `bash scripts/*.sh` 报 `$'\r': command not found` | 脚本被转成了 CRLF。`sed -i 's/\r$//' scripts/*.sh`，并检查 git 的 `core.autocrlf` 设置（这批脚本应以 LF 提交） |
 | 脚本在仓库子目录里执行报路径错 | 不该发生（脚本自己推导仓库根）；若发生请当成 bug 反馈，不要手工 `cd` 绕过 |
