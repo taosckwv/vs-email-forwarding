@@ -17,9 +17,11 @@
 
 **失败只回传受控分类、绝不抛给调用方**：每次调用返回 `base.py` 的 `MailboxStateResult`
 / `FetchResult`（随接口契约一起落在那个模块），故障与「连上了、这轮没拉到新邮件」
-因此可分辨、也不静默（`docs/code-style.md` §2）。这是 `T-19` 的判例（`t36-F1`）
-在拉取侧的泛化：适配器把边界收全，越界或对端异常一律转成受控结果。`design.md`
-§3.4 还**没有**为取回定义结果类型，正式补条目属 `T-42`，现阶段不动文档。
+因此可分辨、也不静默（`docs/code-style.md` §2 的「例外二」）。这条「适配器把边界
+收全、越界与对端异常一律转成受控结果」的口径以 `T-19` 为判例——`providers/smtp/base.py`
+的接口契约就是「I/O 失败全部收进返回值、不把异常抛给调用方」（`FR-2` / `AC-5`）；
+本模块是它在拉取侧的泛化。`design.md` §3.4 的「取回的结果类型与顺序」条目已定：
+承载形态就是 `base.py` 的接口与这两个结果类型。
 
 **只取回、不判定**：报文用标准库 `email` 解析成 `providers/imap/base.py` 的中性
 结构（顶层 content-type、头字段、MIME 部件、`mailbox` / `uidvalidity` / `uid` 三
@@ -115,9 +117,11 @@ class ImapClientFetcher:
     本类不读环境变量、不 import `config`——「装配」发生在阶段 4 的 `flows/`。
     方法名与形参跟 `providers/imap/base.py` 的 `ImapFetcher` 逐项对齐（同一道
     接缝），返回类型就是那一侧的 `MailboxStateResult` / `FetchResult`（两者定义在
-    契约模块 `base.py`）：`design.md` §3.4 没有为取回定义结果类型，而「适配器不抛
-    异常、故障与 0 封可分辨」要求返回里带上受控分类（所有者裁决，泛化 `t36-F1`
-    判例）。每次调用各自建立一次会话：接口就是「先读状态、再按区间取回」两步，
+    契约模块 `base.py`）：`design.md` §3.4 的「取回的结果类型与顺序」条目已定，
+    而「适配器不抛异常、故障与 0 封可分辨」要求返回里带上受控分类（`T-19` 的接口
+    契约如此——`providers/smtp/base.py`：I/O 失败全部收进返回值、不抛给调用方；
+    本类是它在拉取侧的泛化）。每次调用各自建立一次会话：接口就是「先读状态、
+    再按区间取回」两步，
     跨调用复用连接会让超时上界与故障隔离都变复杂；代价是每个 tick 两条连接
     （如实登记）。
     """
@@ -235,7 +239,7 @@ def _fetch(
 
     `UIDVALIDITY` 与 `UIDNEXT` 读不出时给 ``None``：RFC 3501 要求 `SELECT` 必带
     这两个响应码，缺了就是对端协议层异常，按可重试的 transient 记、绝不抛给
-    调用方（`t36-F1` 判例的泛化：适配器的边界是全量的）。
+    调用方（`T-19` 判例在拉取侧的泛化：适配器的边界是全量的）。
     """
     with _session(config, timeout) as client:
         selected = client.select_folder(config.mailbox, readonly=True)

@@ -136,8 +136,8 @@ class MailboxStateResult:
     两个字段恰有一个非空（唯一构造方是 `imapclient_fetcher.py`）：``state`` 非空
     表示 `SELECT` 读到了信箱事实，``error_class`` 非空表示这次调用失败。接口要求
     故障「让调用方看得见、且与「连上了、这轮没拉到新邮件」可分辨」，本类型就是
-    那个承载（`design.md` §3.4 未为取回定义结果类型，承载形态随 `T-20` / `T-21`
-    落在本模块，正式补条目属 `T-42`）。
+    那个承载（`design.md` §3.4 的「取回的结果类型与顺序」条目已定：承载形态就是
+    本模块的 `ImapFetcher` 接口与这两个结果类型）。
     """
 
     #: `SELECT` 之后的信箱事实（`UIDVALIDITY` / `UIDNEXT`）；失败时为 ``None``。
@@ -218,8 +218,8 @@ class ImapFetcher(Protocol):
         「连上了、这轮没拉到新邮件」可分辨（`design.md` §3.4 要求连接失败额外记一条
         受控错误事件，而正常 tick 本就不留记录，两者混同会让排查失去唯一线索），
         但**不得静默吞掉**、也**不得抛给调用方**（`docs/code-style.md` §2）。
-        `design.md` §3.4 没有为取回定义结果类型，承载形态就是本结果类型，正式补
-        条目属 `T-42`。错误信息只描述「发生了什么」（用 UID 引用邮件），不含地址、
+        `design.md` §3.4 的「取回的结果类型与顺序」条目已定：本结果类型就是该条目的
+        承载形态（实现侧是 `imapclient_fetcher.py` 的 `ImapClientFetcher`）。错误信息只描述「发生了什么」（用 UID 引用邮件），不含地址、
         正文、原始 MIME（`AGENTS.md` §8 第 4 条）。
         """
         ...
