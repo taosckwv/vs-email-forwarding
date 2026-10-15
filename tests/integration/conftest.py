@@ -165,12 +165,19 @@ def _connection_kwargs(url: URL, database: str) -> dict[str, object]:
 
 
 async def _probe_database(url: URL, database: str) -> str | None:
-    """试连一个库做一次往返；成功返回 ``None``，失败返回受控的失败描述。"""
+    """试连一个库做一次往返；成功返回 ``None``，失败返回受控的失败描述。
+
+    连接建立后一律经 `try/finally` 关闭（与 `_create_database` / `_drop_database` 同一形状）：
+    `close()` 自己出问题时不留下泄漏的连接，也不会把异常冒泡进收集钩子。
+    """
     try:
         connection = await asyncpg.connect(**_connection_kwargs(url, database))
     except (OSError, TimeoutError, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
         return f"{type(exc).__name__}: {exc}"
-    await connection.close()
+    try:
+        await connection.execute("SELECT 1")  # 一次往返：握手成功不等于这个库真的可用
+    finally:
+        await connection.close()
     return None
 
 
@@ -272,6 +279,18 @@ def test_database() -> Iterator[TestDatabase]:
         asyncio.run(_drop_database(url, status.maintenance_database, name))
 
 
+@pytest.fixture(scope="session")
+def schema(test_database: TestDatabase) -> TestDatabase:
+    """`plan.md` §7.2 夹具表里的具名 `schema`（session 级）：**命名对齐，不建第二套路径**。
+
+    表里给它的职责是「建库后 `alembic upgrade head` + 用例前后清表」。落地版把这三件事拆在
+    `test_database`（会话级：建库 + 迁移 + 结束删库）与 `clean_tables`（autouse：逐用例前后
+    `TRUNCATE`）里——职责全覆盖，只是切分与表名不同。本夹具只把这条既有链路**换个名字**交出去，
+    让下游卡（`T-34`~`T-38`）能按 §7.2 的表名引用它；任何第二套建库 / 迁移路径都是缺陷。
+    """
+    return test_database
+
+
 # ---------------------------------------------------------------------------
 # 二、进程内假 SMTP：真实 SMTP 协议 + 捕获端
 # ---------------------------------------------------------------------------
@@ -285,9 +304,11 @@ _PERMANENT_REPLY = b"550 5.1.1 User unknown\r\n"
 
 @dataclass(frozen=True)
 class CapturedDelivery:
-    """一次被捕获的投递：信封发件人、信封收件人与**线上原始报文**。
+    """一次被捕获的投递：信封发件人、信封收件人与**原始报文**。
 
-    `header()` 读的是线上字节里真实存在的头，因此 `From` / `Reply-To` 这类身份硬约束
+    `raw` 是线上字节经 RFC 5321 §4.5.2 点去填充后的**原始报文**（接收方义务，见
+    `_read_message`），因此对它做正文的字节级断言不需要再自己处理点填充。
+    `header()` 读的是这些字节里真实存在的头，因此 `From` / `Reply-To` 这类身份硬约束
     （`AGENTS.md` §8 第 3 条）是在边界上被验证的，不是从被测实现的对象里取出来的。
     """
 
@@ -443,13 +464,18 @@ def _address_of(command: bytes) -> str:
 
 
 def _read_message(reader: io.BufferedReader) -> bytes:
-    """读一段 DATA 负载，直到单独一行的 `.`（点填充由标准库 `smtplib` 负责）。"""
+    """读一段 DATA 负载，直到单独一行的 `.`（填充由 `smtplib` 负责、去填充由**本函数**负责）。
+
+    接收方按 RFC 5321 §4.5.2 履行点去填充义务：发送方会把正文里以 `.` 开头的行前面再补一个
+    点，这里逐行去掉那一个前导点。因此 `CapturedDelivery.raw` 是**原始报文**，对正文做字节级
+    断言时不需要再自己处理（`T-35` 的正文字节断言依赖这一点）。
+    """
     chunks: list[bytes] = []
     while True:
         line = reader.readline()
         if not line or line in (b".\r\n", b".\n"):
             return b"".join(chunks)
-        chunks.append(line)
+        chunks.append(line[1:] if line.startswith(b".") else line)
 
 
 @pytest.fixture(scope="session")
@@ -492,8 +518,6 @@ class FakeReviewer:
 
     `reviewed` 只是把收到的中性输入留痕，供用例断言**替换真的生效**；用例不应断言调用次数。
     """
-
-    error_type: type[Exception] = FakeReviewError
 
     def __init__(self, mode: _ReviewMode = "pass") -> None:
         self.mode: _ReviewMode = mode
@@ -699,6 +723,12 @@ def _drop_process_engine() -> None:
     上一个用例循环里的 asyncpg 连接，跨循环关闭会抛 `RuntimeError: Event loop is closed`。
     `close=False` 只把旧连接池去引用、不碰旧连接（SQLAlchemy 的语义），这正是「用例之间不共享
     进程级状态」（`docs/testing.md` R12）要的效果。
+
+    ⚠️ 耦合警示：本函数直读 `db/session.py` 的**私有槽位** `_engine`（消费侧的记录在案权衡）。
+    该槽位一旦重命名、`dispose_engine()` 的 `close` 语义一变、或单例改由别的机制持有，**必须
+    同步改这里**——否则夹具会静默失效：隔离性丢失但用例照样绿，缺陷只在并发或跨用例串扰时显形。
+    根治（`db/session.py` 提供测试可用的 `dispose(close=False)` 公共入口）涉及 `src/`，属范围外，
+    **另开任务卡**，不在夹具卡里动。
     """
     engine = db_session._engine
     if engine is None:
