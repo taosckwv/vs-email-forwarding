@@ -52,10 +52,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vs_email_forwarding.config import Settings
 from vs_email_forwarding.constants import (
-    DIRECTIONS,
-    ERROR_CLASSES,
+    DIRECTION_OUTBOUND,
+    ERROR_CLASS_INTERNAL,
     MAX_ATTEMPTS,
-    REJECT_SOURCES,
+    REJECT_SOURCE_REVIEW_ERROR,
+    REJECT_SOURCE_REVIEW_REJECTED,
     BodyFormat,
 )
 from vs_email_forwarding.db.repositories.pending import (
@@ -74,13 +75,13 @@ __all__ = ["ReviewOutboundResult", "review_outbound_tick"]
 
 logger = structlog.get_logger(__name__)
 
-# 受控取值一律从 constants 引用，不在本模块重抄一遍（AGENTS.md §7）：本流只看出站方向；
+# 受控取值一律从 constants 取具名常量，不在本模块重抄一遍（AGENTS.md §7）：本流只看出站方向；
 # 三个拒审来源依次是「判定拒 / 环节出错 / 收割」（design.md §2.1 的 source 列取值）；
 # 审查环节出错的分类是「服务自身内部故障」（design.md §2.4）。
-_OUTBOUND = DIRECTIONS[0]
-_REVIEW_REJECTED = REJECT_SOURCES[0]
-_REVIEW_ERROR = REJECT_SOURCES[1]
-_INTERNAL = ERROR_CLASSES[2]
+_OUTBOUND = DIRECTION_OUTBOUND
+_REVIEW_REJECTED = REJECT_SOURCE_REVIEW_REJECTED
+_REVIEW_ERROR = REJECT_SOURCE_REVIEW_ERROR
+_INTERNAL = ERROR_CLASS_INTERNAL
 
 
 class _Outcome(StrEnum):
@@ -140,8 +141,8 @@ async def review_outbound_tick(
     """执行一次流① tick：认领一批出站待审邮件、逐行审查、把结果落库。
 
     ``now`` 供测试注入（``plan.md`` §7.2：时间推进靠把 ``next_attempt_at`` 设成已到期，不靠
-    sleep）；缺省取一次带时区的当前 UTC 时间，**本次 tick 的三个阶段共用这一个时刻**——
-    「一个 tick 一个时间源」（``plan.md`` §5.2），退避的起算点不会在阶段之间漂移。
+    sleep）；缺省取一次带时区的当前 UTC 时间，**本次 tick 的三个阶段共用这一个时刻**，
+    退避的起算点不会在阶段之间漂移。
 
     认领阶段的数据库异常不在这里处理，交给监督循环（``docs/code-style.md`` §2.1 例外一）：
     这条路的错误文本只有方向、时刻与批量，不含邮件内容，留栈可查且不触日志红线。其余环节的

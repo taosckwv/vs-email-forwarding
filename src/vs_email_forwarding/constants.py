@@ -42,14 +42,24 @@ from typing import Literal
 
 MessageState = Literal["submitted", "reviewing", "rejected", "sending", "sent", "failed"]
 
+#: 六态的具名常量。**具名常量是取值的唯一入口**：消费侧一律取名字，不用位置下标——下标在
+#: 词表中间插入一项时会一起指错，而 `ruff` / `mypy` 都查不出来（守护用例见
+#: `tests/unit/test_constants_hygiene.py`）。
+MESSAGE_STATE_SUBMITTED: MessageState = "submitted"
+MESSAGE_STATE_REVIEWING: MessageState = "reviewing"
+MESSAGE_STATE_REJECTED: MessageState = "rejected"
+MESSAGE_STATE_SENDING: MessageState = "sending"
+MESSAGE_STATE_SENT: MessageState = "sent"
+MESSAGE_STATE_FAILED: MessageState = "failed"
+
 #: 出站邮件的六态取值集合（顺序即对外文档里的推荐展示顺序）。
 MESSAGE_STATES: tuple[MessageState, ...] = (
-    "submitted",
-    "reviewing",
-    "rejected",
-    "sending",
-    "sent",
-    "failed",
+    MESSAGE_STATE_SUBMITTED,
+    MESSAGE_STATE_REVIEWING,
+    MESSAGE_STATE_REJECTED,
+    MESSAGE_STATE_SENDING,
+    MESSAGE_STATE_SENT,
+    MESSAGE_STATE_FAILED,
 )
 
 #: 六态的中文名。对外文档与日志用它，避免各处自行翻译出不同说法。
@@ -73,17 +83,31 @@ MESSAGE_STATE_TRANSITIONS: tuple[tuple[MessageState, MessageState], ...] = (
 #: 入站回复行的状态取值（与出站六态同属一个词汇表，但不参与出站状态机）。
 RECEIVED_STATE: Literal["received"] = "received"
 
-#: `messages.status` 列的 `CHECK` 取值集合：出站三态与入站终态同列共存。
-MESSAGES_STATUS_VALUES: tuple[str, ...] = (*MESSAGE_STATES[3:], RECEIVED_STATE)
+#: 投递三态（`sending` / `sent` / `failed`）：`messages.status` 的列值集合由它拼出，
+#: 顺序即状态机推进顺序。它的存在让「取六态里的后三态」不再写成数字切片。
+MESSAGE_DELIVERY_STATES: tuple[MessageState, ...] = (
+    MESSAGE_STATE_SENDING,
+    MESSAGE_STATE_SENT,
+    MESSAGE_STATE_FAILED,
+)
 
-#: 行方向取值。
+#: `messages.status` 列的 `CHECK` 取值集合：出站三态与入站终态同列共存。
+MESSAGES_STATUS_VALUES: tuple[str, ...] = (*MESSAGE_DELIVERY_STATES, RECEIVED_STATE)
+
+#: 行方向取值。**具名常量是取值的唯一入口**：消费侧一律取名字，不用位置下标——下标在词表
+#: 中间插入一项时会一起指错，而 `ruff` / `mypy` 都查不出来（守护用例见 `tests/unit/
+#: test_constants_hygiene.py`）。
 Direction = Literal["outbound", "inbound"]
-DIRECTIONS: tuple[Direction, ...] = ("outbound", "inbound")
+DIRECTION_OUTBOUND: Direction = "outbound"
+DIRECTION_INBOUND: Direction = "inbound"
+DIRECTIONS: tuple[Direction, ...] = (DIRECTION_OUTBOUND, DIRECTION_INBOUND)
 
 #: 正文格式取值（提交请求与回复响应共用）。
 BodyFormat = Literal["text", "html"]
-BODY_FORMATS: tuple[BodyFormat, ...] = ("text", "html")
-DEFAULT_BODY_FORMAT: BodyFormat = "text"
+BODY_FORMAT_TEXT: BodyFormat = "text"
+BODY_FORMAT_HTML: BodyFormat = "html"
+BODY_FORMATS: tuple[BodyFormat, ...] = (BODY_FORMAT_TEXT, BODY_FORMAT_HTML)
+DEFAULT_BODY_FORMAT: BodyFormat = BODY_FORMAT_TEXT
 
 # ---------------------------------------------------------------------------
 # 丢入站邮件时的受控原因（十一类）
@@ -106,19 +130,31 @@ DiscardReason = Literal[
     "unparsable",
 ]
 
+DISCARD_REASON_NO_REFERENCE: DiscardReason = "no_reference"
+DISCARD_REASON_NO_MATCH: DiscardReason = "no_match"
+DISCARD_REASON_MDN: DiscardReason = "mdn"
+DISCARD_REASON_DSN_WITHOUT_ID: DiscardReason = "dsn_without_id"
+DISCARD_REASON_DSN_TARGET_GONE: DiscardReason = "dsn_target_gone"
+DISCARD_REASON_DSN_TARGET_NOT_SENT: DiscardReason = "dsn_target_not_sent"
+DISCARD_REASON_DUPLICATE: DiscardReason = "duplicate"
+DISCARD_REASON_NO_REPLY_FROM: DiscardReason = "no_reply_from"
+DISCARD_REASON_MALFORMED_REFERENCE: DiscardReason = "malformed_reference"
+DISCARD_REASON_REPLY_TARGET_GONE: DiscardReason = "reply_target_gone"
+DISCARD_REASON_UNPARSABLE: DiscardReason = "unparsable"
+
 #: 十一类丢弃原因，顺序与设计文档的枚举顺序一致。
 DISCARD_REASONS: tuple[DiscardReason, ...] = (
-    "no_reference",
-    "no_match",
-    "mdn",
-    "dsn_without_id",
-    "dsn_target_gone",
-    "dsn_target_not_sent",
-    "duplicate",
-    "no_reply_from",
-    "malformed_reference",
-    "reply_target_gone",
-    "unparsable",
+    DISCARD_REASON_NO_REFERENCE,
+    DISCARD_REASON_NO_MATCH,
+    DISCARD_REASON_MDN,
+    DISCARD_REASON_DSN_WITHOUT_ID,
+    DISCARD_REASON_DSN_TARGET_GONE,
+    DISCARD_REASON_DSN_TARGET_NOT_SENT,
+    DISCARD_REASON_DUPLICATE,
+    DISCARD_REASON_NO_REPLY_FROM,
+    DISCARD_REASON_MALFORMED_REFERENCE,
+    DISCARD_REASON_REPLY_TARGET_GONE,
+    DISCARD_REASON_UNPARSABLE,
 )
 
 # ---------------------------------------------------------------------------
@@ -150,9 +186,16 @@ MAX_BACKOFF_ATTEMPT: int = MAX_ATTEMPTS - 1
 # ---------------------------------------------------------------------------
 
 ErrorClass = Literal["permanent", "transient", "internal"]
+ERROR_CLASS_PERMANENT: ErrorClass = "permanent"
+ERROR_CLASS_TRANSIENT: ErrorClass = "transient"
+ERROR_CLASS_INTERNAL: ErrorClass = "internal"
 
 #: 失败分类取值：`permanent` / `transient` / `internal`（审查环节异常的独立分类）。
-ERROR_CLASSES: tuple[ErrorClass, ...] = ("permanent", "transient", "internal")
+ERROR_CLASSES: tuple[ErrorClass, ...] = (
+    ERROR_CLASS_PERMANENT,
+    ERROR_CLASS_TRANSIENT,
+    ERROR_CLASS_INTERNAL,
+)
 
 #: SMTP 返回码区间：`4xx` 可重试、`5xx` 不可重试（`FR-5` / `FR-6` 共用同一分类）。
 SMTP_TRANSIENT_MIN: int = 400
@@ -165,12 +208,15 @@ SMTP_PERMANENT_MAX: int = 599
 # ---------------------------------------------------------------------------
 
 RejectSource = Literal["review_rejected", "review_error", "review_incomplete"]
+REJECT_SOURCE_REVIEW_REJECTED: RejectSource = "review_rejected"
+REJECT_SOURCE_REVIEW_ERROR: RejectSource = "review_error"
+REJECT_SOURCE_REVIEW_INCOMPLETE: RejectSource = "review_incomplete"
 
 #: `rejected_messages.source` 的取值：判定拒 / 审查出错用尽重试 / 收割支推进终态。
 REJECT_SOURCES: tuple[RejectSource, ...] = (
-    "review_rejected",
-    "review_error",
-    "review_incomplete",
+    REJECT_SOURCE_REVIEW_REJECTED,
+    REJECT_SOURCE_REVIEW_ERROR,
+    REJECT_SOURCE_REVIEW_INCOMPLETE,
 )
 
 # ---------------------------------------------------------------------------
@@ -188,19 +234,47 @@ TIMESTAMP_FORMAT: str = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 __all__ = [
     "BODY_FORMATS",
+    "BODY_FORMAT_HTML",
+    "BODY_FORMAT_TEXT",
     "DEFAULT_BODY_FORMAT",
     "DIRECTIONS",
+    "DIRECTION_INBOUND",
+    "DIRECTION_OUTBOUND",
     "DISCARD_REASONS",
+    "DISCARD_REASON_DSN_TARGET_GONE",
+    "DISCARD_REASON_DSN_TARGET_NOT_SENT",
+    "DISCARD_REASON_DSN_WITHOUT_ID",
+    "DISCARD_REASON_DUPLICATE",
+    "DISCARD_REASON_MALFORMED_REFERENCE",
+    "DISCARD_REASON_MDN",
+    "DISCARD_REASON_NO_MATCH",
+    "DISCARD_REASON_NO_REFERENCE",
+    "DISCARD_REASON_NO_REPLY_FROM",
+    "DISCARD_REASON_REPLY_TARGET_GONE",
+    "DISCARD_REASON_UNPARSABLE",
     "ERROR_CLASSES",
+    "ERROR_CLASS_INTERNAL",
+    "ERROR_CLASS_PERMANENT",
+    "ERROR_CLASS_TRANSIENT",
     "MAX_ATTEMPTS",
     "MAX_BACKOFF_ATTEMPT",
     "MAX_CLAIMABLE_ATTEMPT_COUNT",
     "MESSAGES_STATUS_VALUES",
+    "MESSAGE_DELIVERY_STATES",
     "MESSAGE_STATES",
+    "MESSAGE_STATE_FAILED",
     "MESSAGE_STATE_LABELS",
+    "MESSAGE_STATE_REJECTED",
+    "MESSAGE_STATE_REVIEWING",
+    "MESSAGE_STATE_SENDING",
+    "MESSAGE_STATE_SENT",
+    "MESSAGE_STATE_SUBMITTED",
     "MESSAGE_STATE_TRANSITIONS",
     "RECEIVED_STATE",
     "REJECT_SOURCES",
+    "REJECT_SOURCE_REVIEW_ERROR",
+    "REJECT_SOURCE_REVIEW_INCOMPLETE",
+    "REJECT_SOURCE_REVIEW_REJECTED",
     "RETENTION_DAYS",
     "RETRY_BACKOFF_SECONDS",
     "SMTP_PERMANENT_MAX",

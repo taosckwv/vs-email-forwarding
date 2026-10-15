@@ -87,7 +87,7 @@
 | `uid` | 整型 | 仅入站行：该邮件在信箱内的 UID，入站幂等键之一 |
 | `attempt_count` | 整型 | 该行已被认领处理的次数；`FR-11` 的「审查中」即「待审行且 `attempt_count > 0`」 |
 | `next_attempt_at` | `timestamptz` | 下次可处理时刻；建行即等于当前时刻，认领时被推到 `now + backoff[n]`（§3 阶段①） |
-| `last_error_class` | 文本 + `CHECK`：`permanent` / `transient` / `internal`，可为空 | 最后一次错误的受控分类，取值含义见下面的枚举表 |
+| `last_error_class` | 文本 + `CHECK`：`permanent` / `transient` / `internal`，可为空 | 结构保留列：`pending_messages` 上**当前没有写入路径**（中途失败不写它，终态失败分类写在 `rejected_messages.last_error_class`；清理按 `created_at` 判定）；取值含义见下面的枚举表 |
 | `created_at` | `timestamptz`，**NOT NULL**（不加 DDL 默认值） | **本行产生时刻**：出站行 = 调用方提交时刻，入站行 = 该回复落库时刻；`NFR-8` 的 30 天保留期自它起算，因此不可为空（见 §2.5） |
 
 **邮件表**（`messages`）——审查通过后的出站邮件与已入库的入站回复：
@@ -229,13 +229,13 @@
 |---|---|---|
 | `created_at` | **本行产生时刻**，**NOT NULL 且不加 DDL 默认值** | `NFR-8` 的 30 天保留期自此时起算。出站行 = 调用方提交时刻，跨表搬运时不得被重新取 `now()` 覆盖；**入站回复行 = 该回复落库时刻**（回复没有「调用方提交」这一事件；若沿用父行的提交时刻，出站提交后第 29 天到达的回复只剩 1 天保留期，违反 `NFR-8`） |
 | `sent_at` | 投递被接受的时刻 | 区分「曾经被接受、事后被退信」与「从未被接受」（§3.3） |
-| `received_at` | 回复入库时刻（UTC，写回复行时取） | 回复排序键 |
+| `received_at` | 该回复在流③ 的落库时刻（UTC，跨表搬运不重取，与同行 `created_at` 同源） | 回复排序键 |
 | `reviewed_at` | 审查结束时刻 | 最小审计信息 |
 | `next_attempt_at` | 下次可处理时刻 | 抢占与退避 |
 
 `created_at` 是这四张表里**唯一既 NOT NULL 又不加 DDL 默认值**的时间列，两个约束各治一种病：`NOT NULL` 保证 `NFR-8` 的 30 天保留期（§3.6 的清理判据就是它）对每一行都成立——可空会出现「NULL 的行永不被清理」这种语义不可解释、且违背 `NFR-8` 的行；不加 `now()` 默认值则保证 §3.1 / §3.2 的「跨表搬运不得重新取 `now()` 覆盖」在结构上无法被绕过——漏写这一列是**插入直接失败**，而不是静默把原始提交时刻换成搬运时刻。其余四个时间列（`sent_at` / `received_at` / `reviewed_at` / `updated_at`）表示「某个可能尚未发生的事件发生的时刻」，事件没发生就没有值，因此一律允许 NULL、同样不加 DDL 默认值，由应用在写行的同一事务里显式给出。
 
-`messages` 不设 `updated_at`，也不存邮件 `Date` 头。回复的排序键取服务自己的入库时刻 `received_at`：入站按 UID 升序逐封处理，同批内 `received_at` 的先后即与邮箱内顺序一致；查询用 `received_at ASC, id ASC` 作确定性兜底，`AC-15` 要求的「顺序稳定」由结构保证。
+`messages` 不设 `updated_at`，也不存邮件 `Date` 头。回复的排序键取服务自己的入库时刻 `received_at`：入站按 UID 升序逐封处理，流③ 逐封各取一次落库时刻写进待审行，流④ 过审落库时把该待审行的 `created_at` 原样搬进 `received_at`（两列同源、不重新取 `now()`），因此同批内 `received_at` 的先后即与邮箱内顺序一致、且不受审批顺序与审批批量影响；查询用 `received_at ASC, id ASC` 作确定性兜底，`AC-15` 要求的「顺序稳定」由结构保证。
 
 ### 2.6 内容字段与长度上限
 `recipient`（单个地址）、`subject`、`body` 三列均为 NOT NULL 的文本，另有 `body_format` 受控枚举 `text` / `html`（默认 `text`）。非法格式写不进库；「只有一个收件人」由单值列在结构上表达，接口层再按 `AC-2` / `AC-3` 做 422 校验且不落库。

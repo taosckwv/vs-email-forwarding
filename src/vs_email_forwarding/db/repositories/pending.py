@@ -41,22 +41,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
 from vs_email_forwarding.constants import (
-    DIRECTIONS,
+    DIRECTION_INBOUND,
+    DIRECTION_OUTBOUND,
     ERROR_CLASSES,
     MAX_ATTEMPTS,
     MAX_CLAIMABLE_ATTEMPT_COUNT,
-    MESSAGE_STATES,
+    MESSAGE_STATE_SENDING,
+    REJECT_SOURCE_REVIEW_INCOMPLETE,
     REJECT_SOURCES,
     RETRY_BACKOFF_SECONDS,
 )
 from vs_email_forwarding.db.models import Message, PendingMessage, RejectedMessage
 
-# 受控取值一律从 constants 引用，不在本模块重复字面量：
-# 出站 / 入站各取方向集合的一项（DIRECTIONS 即 (outbound, inbound)），
-# sending 是出站六态中 messages.status 的第一个取值。
-_OUTBOUND: Final = DIRECTIONS[0]
-_INBOUND: Final = DIRECTIONS[1]
-_SENDING: Final = MESSAGE_STATES[3]
+# 受控取值一律从 constants 取具名常量，不在本模块重复字面量：
+# 出站 / 入站各取方向的名字（`DIRECTIONS` 即 (outbound, inbound)），
+# sending 取出站投递三态的具名常量（messages.status 的第一个取值）。
+_OUTBOUND: Final = DIRECTION_OUTBOUND
+_INBOUND: Final = DIRECTION_INBOUND
+_SENDING: Final = MESSAGE_STATE_SENDING
 
 #: 一次认领返回的一行与它的分流标志。``is_harvest`` 为 ``True`` 表示这一行是
 #: 「第 4 次尝试已认领、结果事务未提交」的收割遗留行（本次认领**未**递增计数）：
@@ -289,7 +291,9 @@ async def harvest_pending_message(
     显式可见、可审计。收割是崩溃窗口、不存在「最后一次错误」，故不传
     ``error_class``（该列保持空）。
     """
-    return await reject_pending_message(session, pending_id, source=REJECT_SOURCES[2], now=now)
+    return await reject_pending_message(
+        session, pending_id, source=REJECT_SOURCE_REVIEW_INCOMPLETE, now=now
+    )
 
 
 # ---------------------------------------------------------------------------

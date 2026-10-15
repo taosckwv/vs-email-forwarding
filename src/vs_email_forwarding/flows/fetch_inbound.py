@@ -45,7 +45,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -57,9 +57,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vs_email_forwarding.config import Settings
 from vs_email_forwarding.constants import (
-    BODY_FORMATS,
+    BODY_FORMAT_HTML,
+    BODY_FORMAT_TEXT,
+    DISCARD_REASON_DSN_TARGET_GONE,
+    DISCARD_REASON_DSN_TARGET_NOT_SENT,
+    DISCARD_REASON_DSN_WITHOUT_ID,
+    DISCARD_REASON_DUPLICATE,
+    DISCARD_REASON_MDN,
+    DISCARD_REASON_NO_MATCH,
+    DISCARD_REASON_NO_REPLY_FROM,
+    DISCARD_REASON_UNPARSABLE,
     DISCARD_REASONS,
-    ERROR_CLASSES,
+    ERROR_CLASS_INTERNAL,
     DiscardReason,
     ErrorClass,
 )
@@ -93,24 +102,31 @@ __all__ = ["FetchInboundResult", "fetch_inbound_tick"]
 
 logger = structlog.get_logger(__name__)
 
-# 受控取值一律从 constants 引用，不在本模块重抄一遍（AGENTS.md §7）。丢弃原因按下标取自
-# DISCARD_REASONS（顺序即 design.md §3.4 的枚举顺序）：no_reference / malformed_reference 与
-# no_match 由 core/inbound 的判定函数给出，本模块只再取回它的返回值比较，不重造。
-_NO_MATCH = DISCARD_REASONS[1]
-_MDN = DISCARD_REASONS[2]
-_DSN_WITHOUT_ID = DISCARD_REASONS[3]
-_DSN_TARGET_GONE = DISCARD_REASONS[4]
-_DSN_TARGET_NOT_SENT = DISCARD_REASONS[5]
-_DUPLICATE = DISCARD_REASONS[6]
-_NO_REPLY_FROM = DISCARD_REASONS[7]
-# ``unparsable`` 是枚举的最后一项：这里用**负下标**取，好让本模块不出现整数字面量 10——它与四条
-# 业务流的默认间隔撞值，会被「``flows/`` 源码零字面量」的静态门禁拦下（`NFR-2` / `AC-23`，
-# 判据见 ``tests/unit/test_scheduler_intervals.py``）。下标式取值沿用本仓库既有的写法。
-_UNPARSABLE = DISCARD_REASONS[-1]
+#: 取时源：无参可调用、返回带时区的当前 UTC 时间。默认真时钟（:func:`_utc_now`）；
+#: 测试注入步进时钟，即可让「逐封各取自己的写库时刻」成为确定性断言（`plan.md` §5.2）。
+Clock = Callable[[], datetime]
 
-# 服务自身内部故障（`ERROR_CLASSES` 的第三项）：DSN 的 `Status` 取不出 4 / 5 子类时复用它
+
+def _utc_now() -> datetime:
+    """默认真时钟：带时区的 UTC 当前时刻（`AGENTS.md` §7 的时间口径）。"""
+    return datetime.now(UTC)
+
+
+# 受控取值一律从 constants 取具名常量，不在本模块重抄一遍（AGENTS.md §7）：丢弃原因按**名字**
+# 取自具名常量（顺序即 design.md §3.4 的枚举顺序）；no_reference / malformed_reference 与
+# no_match 由 core/inbound 的判定函数给出，本模块只再取回它的返回值比较，不重造。
+_NO_MATCH = DISCARD_REASON_NO_MATCH
+_MDN = DISCARD_REASON_MDN
+_DSN_WITHOUT_ID = DISCARD_REASON_DSN_WITHOUT_ID
+_DSN_TARGET_GONE = DISCARD_REASON_DSN_TARGET_GONE
+_DSN_TARGET_NOT_SENT = DISCARD_REASON_DSN_TARGET_NOT_SENT
+_DUPLICATE = DISCARD_REASON_DUPLICATE
+_NO_REPLY_FROM = DISCARD_REASON_NO_REPLY_FROM
+_UNPARSABLE = DISCARD_REASON_UNPARSABLE
+
+# 服务自身内部故障（`ERROR_CLASS_INTERNAL`）：DSN 的 `Status` 取不出 4 / 5 子类时复用它
 # （所有者裁决，`design.md` §3.3「退信到达」与 §2.2 的枚举表）——不写 NULL、不新造第四类。
-_INTERNAL = ERROR_CLASSES[2]
+_INTERNAL = ERROR_CLASS_INTERNAL
 
 #: 中性结构的头名契约是小写（`providers/imap/base.py`）：判定输入按小写键取值。
 _FROM_HEADER: Final = "from"
@@ -123,8 +139,8 @@ _TEXT_PLAIN: Final = "text/plain"
 _TEXT_HTML: Final = "text/html"
 
 # 正文格式取值取自 constants（受控枚举，写错会被 mypy 与库里的 CHECK 拦下）。
-_TEXT_FORMAT = BODY_FORMATS[0]
-_HTML_FORMAT = BODY_FORMATS[1]
+_TEXT_FORMAT = BODY_FORMAT_TEXT
+_HTML_FORMAT = BODY_FORMAT_HTML
 
 
 class _Outcome(StrEnum):
@@ -159,20 +175,23 @@ async def fetch_inbound_tick(
     session_factory: SessionFactory,
     settings: Settings,
     *,
-    now: datetime | None = None,
+    clock: Clock | None = None,
 ) -> FetchInboundResult:
     """执行一次流③ tick：读信箱状态 → 增量取回一批 → 逐封分拣并同事务推进游标。
 
-    ``now`` 供测试注入（``plan.md`` §7.2：时间推进靠把 ``next_attempt_at`` 置成已到期，不靠
-    sleep）；缺省取一次带时区的当前 UTC 时间，**本次 tick 的所有写入共用这一个时刻**——
-    「一个 tick 一个时间源」（``plan.md`` §5.2），入站行的 ``created_at`` / ``next_attempt_at``
-    与游标的 ``updated_at`` 因此不会在封与封之间漂移。
+    ``clock`` 是**取时源**（缺省真时钟 :func:`_utc_now`），供测试注入步进时钟（``plan.md``
+    §7.2：集成用例直接改列值造态，不靠 sleep）。时间分**两个层级**（``plan.md`` §5.2）：
+
+    * **tick 级时刻**：本函数开头取一次，只用于游标初始化 / 推进与认领、退避的 ``t0``；
+    * **行自身的写库时刻**：tick 循环里**每封各取一次**，用于该封自己的时间列——同一批内因此
+      严格递增、批内先后即邮箱内顺序（``design.md`` §2.5「回复入库时刻」）。整 tick 取一次
+      灌给全批会把同批行的时刻压成同一个值，让「按时刻排序」退化成按 ``id`` 决胜。
 
     连接失败不抛异常：适配器把失败收进返回值（``providers/imap/base.py`` 的接口契约），本层记一条
     受控错误事件后返回零计数；单封落库失败按 §3.4「只吞掉该封」处理（见模块 docstring 的
     【异常口径】）。
     """
-    tick_now = now if now is not None else datetime.now(UTC)
+    tick_now = clock() if clock is not None else _utc_now()
     fetcher = _build_fetcher(settings)
     state_result = await fetcher.read_mailbox_state(timeout_seconds=settings.imap_timeout_seconds)
     if state_result.state is None:
@@ -196,7 +215,8 @@ async def fetch_inbound_tick(
     return await _process_all(
         session_factory,
         fetched.messages,
-        now=tick_now,
+        tick_now=tick_now,
+        clock=clock if clock is not None else _utc_now,
         max_recipient_chars=settings.max_recipient_chars,
     )
 
@@ -225,7 +245,8 @@ async def _process_all(
     session_factory: SessionFactory,
     messages: Sequence[FetchedMessage],
     *,
-    now: datetime,
+    tick_now: datetime,
+    clock: Clock,
     max_recipient_chars: int,
 ) -> FetchInboundResult:
     """逐封独立短事务：分拣落库 + 同事务推进游标；单封失败只吞掉该封。
@@ -236,18 +257,23 @@ async def _process_all(
 
     ``FetchedMessage.mailbox`` / ``uidvalidity`` / ``uid`` 就是该封的入站幂等键（§2.2 的三列唯一
     索引），逐封自带：即使取回期间信箱轮换，落库用的仍是这一封自己的三要素。
+
+    ``tick_now`` 只用于游标推进；每封自己的时间列取**进入循环时的那次 ``clock()``**（同一批内
+    逐封取时，先后即邮箱内顺序，`design.md` §2.5）。
     """
     counts: Counter[DiscardReason] = Counter()
     stored = 0
     dsn_failed = 0
     errored = 0
     for message in messages:
+        # 该封自己的写库时刻：同一批内每封各取一次，批内先后即邮箱内顺序（`design.md` §2.5）。
+        message_now = clock()
         try:
             async with session_factory() as session:
                 outcome = await _sort_and_land(
                     session,
                     message,
-                    now=now,
+                    now=message_now,
                     max_recipient_chars=max_recipient_chars,
                 )
                 await advance_cursor(
@@ -255,7 +281,7 @@ async def _process_all(
                     message.mailbox,
                     uidvalidity=message.uidvalidity,
                     uid=message.uid,
-                    now=now,
+                    now=tick_now,
                 )
                 # 「处理完再推」：推进与分拣同事务提交，中途不再开第二个事务（§3.4）。
                 await session.commit()

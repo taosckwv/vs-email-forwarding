@@ -10,6 +10,15 @@
 ## 1. 函数与结构
 
 1. 单个函数是否 ≤ 50 行、只做一件事？（超出通常意味着该拆——优先按「业务步骤」拆，不按「代码行数」拆。）
+   - **「行数」的口径 = 只数函数体里的代码行**：`def` 签名行（含跨行参数表）、docstring、空行与纯注释行都**不算**；一条跨多行的语句按它占用的代码行算（3 行写完的调用算 3 行），同一行里写多条语句算 1 行。数法可复现（`ast` 取函数体、逐行剔掉空行与注释行）：
+
+     ```bash
+     uv run python -c 'import ast,sys;s=open(sys.argv[1],encoding="utf-8").read();f=[n for n in ast.walk(ast.parse(s)) if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name==sys.argv[2]][0];b=f.body[1:] if (isinstance(f.body[0],ast.Expr) and isinstance(f.body[0].value,ast.Constant) and isinstance(f.body[0].value.value,str)) else f.body;print(sum(1 for i in range(b[0].lineno,f.end_lineno+1) if (t:=s.splitlines()[i-1].strip()) and not t.startswith("#")))' <文件> <函数名>
+     ```
+
+     例：`... src/vs_email_forwarding/db/repositories/inbound.py approve_inbound_pending` → `29`。
+   - **口径写在这里是为了可判定**：不含签名与 docstring 的 50 行，和把说明文字也算进去的 50 行，对「要不要拆」是两个结论。判定按上面的口径做，不按编辑器的总行数。
+   - 超出口径时**按业务步骤拆**（提纯函数、把一条职责单独成函数），**不得**靠删注释、挪行、合并语句凑数——那些只是把行数搬走，函数仍然做那么多事。
 2. 单个函数的分支复杂度是否可控（圈复杂度不超过 10）？嵌套超过 3 层就是信号。
 3. `try` 块是否只包住会抛异常的那一句？（包住整个函数体会把不相关的错误也吞进同一个处理器。）
 4. 文件、连接、锁、session 是否都用 `with` / `async with` 管理，保证任何退出路径都释放？

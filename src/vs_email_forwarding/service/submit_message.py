@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from vs_email_forwarding.config import get_settings
-from vs_email_forwarding.constants import MESSAGE_STATES, MessageState
+from vs_email_forwarding.constants import MESSAGE_STATE_SUBMITTED, MessageState
 from vs_email_forwarding.core.message_id import build_message_id
 from vs_email_forwarding.db.repositories.pending import insert_outbound_pending
 from vs_email_forwarding.db.session import session_factory
@@ -44,9 +44,9 @@ __all__ = ["submit_message"]
 
 #: 提交成功后的初始态。契约写死「提交成功时恒为 ``submitted``」（``docs/api-contract.yaml``
 #: 的 ``SubmitMessageResponse.status``）；设计侧依据是 ``design.md`` §2.1 落点表首行——行刚落进
-#: ``pending_messages``、``attempt_count = 0`` 即 ``submitted``。取值从 ``constants`` 取（六态
-#: 的第一项），不在本模块重复字面量。
-_SUBMITTED: Final[MessageState] = MESSAGE_STATES[0]
+#: ``pending_messages``、``attempt_count = 0`` 即 ``submitted``。取值从 ``constants`` 取具名
+#: 常量，不在本模块重复字面量。
+_SUBMITTED: Final[MessageState] = MESSAGE_STATE_SUBMITTED
 
 
 async def submit_message(

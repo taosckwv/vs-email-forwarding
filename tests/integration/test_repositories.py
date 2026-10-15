@@ -466,7 +466,9 @@ class TestClaimHarvestFlag:
 
 from vs_email_forwarding.constants import (  # noqa: E402  # 用例按任务分节排布
     ERROR_CLASSES,
-    MESSAGE_STATES,
+    MESSAGE_STATE_FAILED,
+    MESSAGE_STATE_SENDING,
+    MESSAGE_STATE_SENT,
 )
 from vs_email_forwarding.db.repositories.messages import (  # noqa: E402
     claim_due_send_messages,
@@ -475,9 +477,9 @@ from vs_email_forwarding.db.repositories.messages import (  # noqa: E402
     mark_sent,
 )
 
-_SENDING: str = MESSAGE_STATES[3]
-_SENT: str = MESSAGE_STATES[4]
-_FAILED: str = MESSAGE_STATES[5]
+_SENDING: str = MESSAGE_STATE_SENDING
+_SENT: str = MESSAGE_STATE_SENT
+_FAILED: str = MESSAGE_STATE_FAILED
 
 
 async def _insert_message(
@@ -1641,8 +1643,10 @@ class TestInboundReceivedInsertIdempotency:
                 )
             ).all()
             pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
-        # 跨表 ID 同值一行 received；created_at 原样搬运（§2.5：不得重新取 now 覆盖），
-        # received_at / reviewed_at / next_attempt_at 取绑定的 now，attempt_count 重置 0。
+        # 跨表 ID 同值一行 received；created_at / received_at 都原样搬运（所有者裁决 A：
+        # received_at 取该待审行的 created_at，即该回复在流③ 的落库时刻；跨表搬运不重取，
+        # 这是行为变更、不是为绿而改），reviewed_at / next_attempt_at 取绑定的 now，
+        # attempt_count 重置 0。
         assert len(rows) == 1
         (
             status,
@@ -1657,7 +1661,10 @@ class TestInboundReceivedInsertIdempotency:
         ) = rows[0]
         assert status == RECEIVED_STATE
         assert created_at == _NOW - timedelta(hours=1)
-        assert received_at == _NOW
+        # 期望值来自夹具：待审行落库时刻 = _NOW - 1h（_insert_inbound_pending_row），
+        # 不是从被测代码反推出来的值。
+        assert received_at == _NOW - timedelta(hours=1)
+        assert received_at == created_at
         assert reviewed_at == _NOW
         assert attempt_count == 0
         assert next_attempt_at == _NOW
@@ -1731,6 +1738,99 @@ class TestInboundReceivedInsertIdempotency:
             pending_count = len((await conn.execute(sa.select(PendingMessage.id))).all())
         assert message_count == 0
         assert pending_count == 0
+
+
+class TestInboundReceivedArrivalOrder:
+    """流④ 过审落库的到达顺序（所有者裁决 A，FR-10）：``received_at`` 取该回复在流③ 的落库时刻。"""
+
+    async def test_received_at_order_follows_arrival_not_approval(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        # 所有者裁决 A 带来的行为变更（不是为绿而改）：received_at 不再取审批时的绑定 now，
+        # 而是原样搬运待审行的 created_at（该回复在流③ 的逐封落库时刻）。于是 design §2.5 的
+        # 「同批内 received_at 的先后即与邮箱内顺序一致」在库内侧成立，且与审批顺序无关。
+        parent_id = await _insert_message_full(db_engine, created_at=_NOW - timedelta(hours=3))
+        arrived_first = _NOW - timedelta(hours=2)
+        arrived_second = _NOW - timedelta(minutes=15)
+        session = AsyncSession(bind=db_engine, expire_on_commit=False)
+        try:
+            # 走真实入库路径（流③ 的 insert_inbound_pending）：created_at 就是逐封传入的 now，
+            # 期望值因此来自本用例给的到达时刻，而不是从被测的过审代码反推。
+            assert (
+                await insert_inbound_pending(
+                    session,
+                    recipient="reply@example.com",
+                    subject="先到的回复",
+                    body="夹具回复正文",
+                    body_format="text",
+                    parent_id=parent_id,
+                    mailbox="reply@example.com",
+                    uidvalidity=_UIDVALIDITY,
+                    uid=3011,
+                    now=arrived_first,
+                )
+                is True
+            )
+            assert (
+                await insert_inbound_pending(
+                    session,
+                    recipient="reply@example.com",
+                    subject="后到的回复",
+                    body="夹具回复正文",
+                    body_format="text",
+                    parent_id=parent_id,
+                    mailbox="reply@example.com",
+                    uidvalidity=_UIDVALIDITY,
+                    uid=3012,
+                    now=arrived_second,
+                )
+                is True
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        async with db_engine.connect() as conn:
+            by_uid = {
+                uid: row_id
+                for row_id, uid in (
+                    await conn.execute(sa.select(PendingMessage.id, PendingMessage.uid))
+                ).all()
+            }
+        # 故意「后到先审」：若 received_at 来自审批时刻（两次过审都传同一个 _NOW），下面的
+        # 顺序断言必红——排序只能来自待审行自己的落库时刻。
+        for pending_id in (by_uid[3012], by_uid[3011]):
+            session = AsyncSession(bind=db_engine, expire_on_commit=False)
+            try:
+                assert (
+                    await approve_inbound_pending(session, pending_id, now=_NOW)
+                    is ApproveInboundOutcome.APPROVED
+                )
+                await session.commit()
+            finally:
+                await session.close()
+
+        async with db_engine.connect() as conn:
+            replies = (
+                await conn.execute(
+                    sa.select(
+                        Message.id,
+                        Message.created_at,
+                        Message.received_at,
+                        Message.reviewed_at,
+                    )
+                    .where(Message.parent_id == parent_id)
+                    .order_by(Message.received_at.asc(), Message.id.asc())
+                )
+            ).all()
+
+        # 排序键（received_at）的先后 = 到达先后，与过审顺序（后到先审）无关。
+        assert [row.received_at for row in replies] == [arrived_first, arrived_second]
+        assert [row.id for row in replies] == [by_uid[3011], by_uid[3012]]
+        # received_at 与同一行的 created_at 同源（跨表搬运同一个待审行值，不重取）。
+        assert [row.received_at for row in replies] == [row.created_at for row in replies]
+        # reviewed_at 仍取绑定的审批时刻：裁决 A 只动 received_at。
+        assert [row.reviewed_at for row in replies] == [_NOW, _NOW]
 
 
 class TestInboundReplyParentGoneDiscard:

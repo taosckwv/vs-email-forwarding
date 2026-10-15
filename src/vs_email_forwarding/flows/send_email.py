@@ -56,7 +56,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vs_email_forwarding.config import Settings
 from vs_email_forwarding.constants import (
-    ERROR_CLASSES,
+    ERROR_CLASS_INTERNAL,
+    ERROR_CLASS_PERMANENT,
     MAX_ATTEMPTS,
     BodyFormat,
     ErrorClass,
@@ -74,11 +75,11 @@ __all__ = ["SendEmailResult", "send_email_tick"]
 
 logger = structlog.get_logger(__name__)
 
-# 受控取值一律从 constants 引用，不在本模块重抄一遍（AGENTS.md §7）：对端永久拒绝是三类里的
-# 第一项（permanent，SMTP 侧只在 5xx 出现，design.md §3.3 处置表）；服务自身内部故障是第三项
-# （internal，收割支无对端结论可记时用它——见 _write_one 的注释）。
-_PERMANENT = ERROR_CLASSES[0]
-_INTERNAL = ERROR_CLASSES[2]
+# 受控取值一律从 constants 取具名常量，不在本模块重抄一遍（AGENTS.md §7）：对端永久拒绝取
+# `permanent`（SMTP 侧只在 5xx 出现，design.md §3.3 处置表）；服务自身内部故障取 `internal`
+# （收割支无对端结论可记时用它——见 _write_one 的注释）。
+_PERMANENT = ERROR_CLASS_PERMANENT
+_INTERNAL = ERROR_CLASS_INTERNAL
 
 
 class _Outcome(StrEnum):
@@ -141,8 +142,8 @@ async def send_email_tick(
     """执行一次流② tick：认领一批待发行、逐行投递、把结果条件更新落库。
 
     ``now`` 供测试注入（``plan.md`` §7.2：时间推进靠把 ``next_attempt_at`` 设成已到期，不靠
-    sleep）；缺省取一次带时区的当前 UTC 时间，**本次 tick 的三个阶段共用这一个时刻**——
-    「一个 tick 一个时间源」（``plan.md`` §5.2），谓词比较与 ``sent_at`` 因此不会漂移。
+    sleep）；缺省取一次带时区的当前 UTC 时间，**本次 tick 的三个阶段共用这一个时刻**，
+    谓词比较与 ``sent_at`` 因此不会漂移。
 
     认领阶段的数据库异常不在这里处理，交给监督循环（``docs/code-style.md`` §2.1 例外一）：这条路
     的错误文本只有方向、时刻与批量，不含邮件内容，留栈可查且不触日志红线。投递阶段的故障由适配器

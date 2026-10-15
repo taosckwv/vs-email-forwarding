@@ -41,7 +41,12 @@ from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vs_email_forwarding.constants import DIRECTIONS, RECEIVED_STATE, Direction, MessageState
+from vs_email_forwarding.constants import (
+    DIRECTION_OUTBOUND,
+    RECEIVED_STATE,
+    Direction,
+    MessageState,
+)
 from vs_email_forwarding.core.states import RowFacts, determine_state
 from vs_email_forwarding.db.repositories.messages import message_row
 from vs_email_forwarding.db.repositories.pending import pending_row
@@ -62,8 +67,8 @@ __all__ = [
 #: ``session_factory(isolation_level=...)`` 支持（其 docstring 写明只读路径专用）。
 REPEATABLE_READ: Final = "REPEATABLE READ"
 
-#: 本端点的 ID 空间方向：出站邮件（``constants.DIRECTIONS`` 即 ``(outbound, inbound)``）。
-_OUTBOUND: Final[Direction] = DIRECTIONS[0]
+#: 本端点的 ID 空间方向：出站邮件（取 `constants` 的 `outbound` 具名常量）。
+_OUTBOUND: Final[Direction] = DIRECTION_OUTBOUND
 
 
 @dataclass(frozen=True, kw_only=True)

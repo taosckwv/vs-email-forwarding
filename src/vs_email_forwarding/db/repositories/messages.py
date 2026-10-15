@@ -37,21 +37,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
 from vs_email_forwarding.constants import (
-    DIRECTIONS,
+    DIRECTION_OUTBOUND,
     MAX_ATTEMPTS,
     MAX_CLAIMABLE_ATTEMPT_COUNT,
-    MESSAGE_STATES,
+    MESSAGE_STATE_FAILED,
+    MESSAGE_STATE_SENDING,
+    MESSAGE_STATE_SENT,
     RETRY_BACKOFF_SECONDS,
 )
 from vs_email_forwarding.db.models import Message, PendingMessage
 
-# 受控取值一律从 constants 引用，不在本模块重复字面量：
-# 方向取集合首项（DIRECTIONS 即 (outbound, inbound)）；
-# 出站三态依次是六态的第 4 ~ 6 项（sending / sent / failed）。
-_OUTBOUND: Final = DIRECTIONS[0]
-_SENDING: Final = MESSAGE_STATES[3]
-_SENT: Final = MESSAGE_STATES[4]
-_FAILED: Final = MESSAGE_STATES[5]
+# 受控取值一律从 constants 取具名常量，不在本模块重复字面量：
+# 方向取出站的名字（`DIRECTIONS` 即 (outbound, inbound)）；
+# 出站三态取 `MESSAGE_DELIVERY_STATES` 的具名常量（sending / sent / failed）。
+_OUTBOUND: Final = DIRECTION_OUTBOUND
+_SENDING: Final = MESSAGE_STATE_SENDING
+_SENT: Final = MESSAGE_STATE_SENT
+_FAILED: Final = MESSAGE_STATE_FAILED
 
 #: 一次认领返回的一行与它的分流标志。``is_harvest`` 为 ``True`` 表示这一行是
 #: 「第 4 次尝试已认领、结果事务未提交」的收割遗留行（本次认领**未**递增计数）：

@@ -15,7 +15,8 @@
   三列必同值，故冲突目标只需声明三列入站键，主键重放场景已被它覆盖。
 * 取时一律用流程层绑定进来的 ``now`` 参数，不用 ``func.now()``（`plan.md` §5.2）：
   ``created_at`` 是该回复的落库时刻（§2.5），流④ 搬运时**原样搬运**、不得重新
-  取 now 覆盖；``received_at`` / ``reviewed_at`` 在写回复行时取绑定的 now。
+  取 now 覆盖；``received_at`` 是回复排序键，同样搬运该待审行的 ``created_at``
+  （与 ``created_at`` 同源、跨表不重取），``reviewed_at`` 取绑定的 now。
 * **过审落库是三态**（``approve_inbound_pending`` 的返回值）：写 ``received`` 行成功 /
   待审行不存在 / **父行已被保留期清理**。第三态按 `design.md` §3.5 的 ``reply_target_gone``
   与 §6「分拣与丢弃」处理——**同事务删除待审行、不写任何目标行**（既不写 ``messages``，
@@ -43,11 +44,11 @@ from sqlalchemy.dialects.postgresql import Insert as PGInsert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vs_email_forwarding.constants import DIRECTIONS, RECEIVED_STATE
+from vs_email_forwarding.constants import DIRECTION_INBOUND, RECEIVED_STATE
 from vs_email_forwarding.db.models import Message, PendingMessage
 
-# 受控取值一律从 constants 引用：入站方向取集合第二项（(outbound, inbound)）。
-_INBOUND: Final = DIRECTIONS[1]
+# 受控取值一律从 constants 取具名常量：入站方向取名字（(`outbound`, `inbound`) 的第二项）。
+_INBOUND: Final = DIRECTION_INBOUND
 
 __all__ = [
     "ApproveInboundOutcome",
@@ -155,11 +156,13 @@ async def approve_inbound_pending(
 ) -> ApproveInboundOutcome:
     """流④ 过审落库：写 ``messages`` 一行 ``received`` + 删待审行；三态见返回值类型。
 
-    同一事务内「写目标行 → 删待审行」；``created_at`` 原样搬运（保持该回复的
-    落库时刻），``received_at`` / ``reviewed_at`` 取绑定的 now，``attempt_count``
-    与 ``next_attempt_at`` 建行即重置（§2.4）。撞 ``messages`` 侧入站唯一键
-    （这一封已入库过）时只删待审行、返回 ``APPROVED``；待审行不存在返回
-    ``PENDING_GONE``。
+    同一事务内「写目标行 → 删待审行」；``created_at`` 与 ``received_at`` 都原样搬运
+    待审行的 ``created_at``（同一 INSERT 两列同源：``received_at`` 是回复排序键
+    ``ORDER BY received_at ASC, id ASC``，必须等于该回复在流③ 的落库时刻，
+    跨表搬运不重取——否则同批一次过审会全部同值、批内顺序退化成 id 决胜），
+    ``reviewed_at`` 取绑定的 now，``attempt_count`` 与 ``next_attempt_at`` 建行即
+    重置（§2.4）。撞 ``messages`` 侧入站唯一键（这一封已入库过）时只删待审行、
+    返回 ``APPROVED``；待审行不存在返回 ``PENDING_GONE``。
 
     父行（``parent_id`` 指向的出站邮件）已被保留期清理时返回 ``PARENT_GONE``：
     同一事务内删掉这条待审行，**不写 ``messages``、也不写 ``rejected_messages``**
@@ -193,7 +196,7 @@ async def approve_inbound_pending(
             attempt_count=0,
             next_attempt_at=now,
             created_at=row.created_at,
-            received_at=now,
+            received_at=row.created_at,
             reviewed_at=now,
         )
     )
