@@ -71,7 +71,7 @@
 - [x] `T-37` （前置 `T-33`、`T-6`、`T-10`）`tests/integration/test_cleanup_flow.py` 与 `test_repositories.py`（并发抢占、条件 UPDATE、收割支、`NOT EXISTS`、keyset 翻页）— `NFR-8` / `AC-22` / `AC-26` / `AC-29` / `AC-41`
 - [x] `T-38` （前置 `T-33`、`T-31`、`T-32`）`tests/integration/test_api_contract.py` 与 `test_startup_validation.py`、`tests/unit/test_openapi_contract.py`、`tests/unit/test_constants_consistency.py` — `FR-10` / `NFR-4` / `AC-1` ~ `AC-5` / `AC-15` ~ `AC-18` / `AC-26` / `AC-31` ~ `AC-33` / `AC-35` / `AC-36`
 - [x] `T-39` （前置 `T-38`）七份包占位 docstring 与 `plan.md` §6.2 清单的同步（`migrations/README.md`、`tests/{unit,integration}/README.md`、`providers/review/__init__.py` 等）— 无对应 `AC`（文档与占位）
-- [ ] `T-40` （前置 `T-39`）文档同步收尾：`docs/README.md` §3 清单、`docs/configuration.md`、`CHANGELOG.md` — 无对应 `AC`（文档）
+- [x] `T-40` （前置 `T-39`）文档同步收尾：`docs/README.md` §3 清单、`docs/configuration.md`、`CHANGELOG.md` — 无对应 `AC`（文档）
 - [ ] `T-41` （前置 `T-38`、`T-39`、`T-40`）跑 `bash scripts/check.sh` 五步全绿（`ruff format --check` → `ruff check` → `mypy src` → `pytest`（带覆盖率）→ `mutmut`）— `NFR-4` / `AC-26`
 - [ ] `T-42` （前置 `T-41`）逐条按 `AC-n` 回填 `spec.md` §9 的验收结果 — `AC-1` ~ `AC-19`、`AC-21` ~ `AC-41`（`AC-20` 在 `T-45` 回填）；并补 `design.md` §3.4 的**取回结果类型**条目（T-21 已落地承载形态，正式条目欠账在此收口）
 - [ ] `T-43` （前置 `T-41`）交付三件脚本：`deploy/migrate.sh`、`deploy/run.sh`、`deploy/check_archive.py` — `FR-14` / `AC-20`

@@ -392,16 +392,16 @@
 **前置（每条集成用例都假定已就绪）**
 
 1. `bash scripts/dev-up.sh` —— 起 `compose.dev.yaml` 里的 PostgreSQL 17 与 GreenMail（SMTP 3025 / IMAP 3143）。假 SMTP / 假 IMAP 用进程内的轻量替身（见下），GreenMail 只作为「真回路」的兜底验证。
-2. 测试库 `vs_email_forwarding_test` **手工建一次**（`compose.dev.yaml` 末尾给了两条命令；官方 postgres 镜像不会自动建第二个库）。开发库 `vs_email_forwarding_dev` 与测试库**严格分离**，集成测试只允许清测试库。
-3. 连接串通过环境变量覆盖 `DATABASE_URL` 为测试库（`docs/research/02-runtime-and-scheduling.md` 的「库隔离」），**不改仓库里的配置文件**。
+2. 测试库**不再手工建**：`T-33` 的夹具在每次 pytest 运行自建一个**运行级隔离库**（库名形如 `vs_email_forwarding_test_<pid>_<hex8>`，进程号 + 随机后缀，并行不撞），建库后跑 `alembic -c migrations/alembic.ini upgrade head` 建表，运行结束 `DROP DATABASE ... WITH (FORCE)` 删库。开发库 `vs_email_forwarding_dev` 从头到尾**不被连接**（`tests/integration/conftest.py` 的 `test_database` 夹具）。
+3. 连接串来源：显式的 `VS_EMAIL_FORWARDING_TEST_DATABASE_URL`（若设置）优先，否则用配置层的 `DATABASE_URL`——两种来源都**只当服务器坐标用**（host / port / 用户 / 口令），库名一律由夹具生成，**不改仓库里的配置文件**（`docs/research/02-runtime-and-scheduling.md` 的「库隔离」）。
 
 **夹具（`tests/integration/conftest.py`）**
 
 | 夹具 | 形态 | 职责 |
 |---|---|---|
 | `settings_override` | fixture | 把配置指向测试库与假服务；必要时覆盖 `POLL_*` / `BATCH_SIZE` / `REPLIES_PAGE_SIZE` 这类与用例规模有关的项 |
-| `engine` / `session_factory` | fixture | 每个用例一套异步引擎与会话工厂，用例结束 `dispose()`；引擎与会话的生命周期按 `docs/architecture.md` §5（进程级单例、按阶段开短会话） |
-| `schema` | fixture（session 级） | 对测试库执行 `alembic -c migrations/alembic.ini upgrade head`；每条用例前后清表。**清表用真实 DDL 级操作，不用 mock** |
+| `engine` / `session_factory` | fixture | 每个用例自建一套异步引擎并在结束 `dispose()`；`session_factory` 是绑定该引擎的短会话工厂（`expire_on_commit=False`）。另有 autouse 夹具在每个用例前后丢弃 `db/session.py` 的进程级单例引擎（跨用例不共享进程级状态），并由清表夹具对隔离库做 TRUNCATE 前后清表 |
+| `schema` | fixture（session 级） | `test_database` 的具名别名：本次运行独占的隔离测试库（建库 → `alembic -c migrations/alembic.ini upgrade head` → 运行结束 `DROP DATABASE ... WITH (FORCE)`）；逐用例的前后清表由 autouse 的 `clean_tables` 承担。**清表用真实 DDL 级操作（TRUNCATE，表名取自 ORM 元数据），不用 mock** |
 | `fake_review` | 可替换实现 | 三种模式：恒 `pass`（默认，等价空实现）、恒 `reject`、抛异常；通过 `providers/review/factory.py` 的依赖覆盖 / monkeypatch 注入，用于 `AC-6` / `AC-12` |
 | `smtp_capture` | 进程内假 SMTP + 捕获端 | 记录每次投递的**次数**、`From` / `Reply-To` / 收件人与原始报文；可脚本化为「连续 `4xx`」「持续 `5xx`」「接受连接后挂起不返回」 |
 | `imap_fake` | 进程内假 IMAP | 支持注入任意邮件样本、按 `UIDVALIDITY` / `UIDNEXT` 给出增量、支持把游标回退（`AC-39`） |
@@ -450,7 +450,7 @@
 | `AC-31` | `FR-10` | `tests/integration/test_api_contract.py` | `design.md` §4.1 的 `found` 语义（存在但无回复 = 成功 + 空集合） | `test_existing_without_replies`：对存在但无回复的邮件调用 `GET .../replies` → HTTP 成功、`found: true`、`replies` 为空集合 |
 | `AC-32` | `FR-2`、`NFR-4` | `tests/unit/test_settings_validation.py` + `tests/integration/test_startup_validation.py` | `design.md` §4.4 的三条判据（校验信息只出现配置项名） | 单测三条判据各自单独制造一次违规；集成测试用子进程启动应用（`subprocess` 跑 uvicorn / 直接调用 `validate_startup()` + 断言进程非零退出），断言**非零退出且不监听端口** |
 | `AC-33` | `FR-1` | `tests/integration/test_api_contract.py` | `MAX_SUBJECT_CHARS` / `MAX_BODY_BYTES` 配置值（改配置后上限随之变） | `test_over_limit_422`：主题超 `MAX_SUBJECT_CHARS`、正文超 `MAX_BODY_BYTES` 各一例 → 422 且不落库；断言上限取自配置项（改配置后上限随之变） |
-| `AC-34` | `FR-5` | `tests/integration/test_send_flow.py` | `design.md` §3.3 的 `5xx` 例外（直接终态、`attempt_count == 1`） | `test_permanent_fails_immediately`：假 SMTP 持续 `5xx` → 第一次尝试后即 `failed`，`attempt_count == 1`，`last_error_class == "permanent"`，`next_attempt_at` 未被推后 |
+| `AC-34` | `FR-5` | `tests/integration/test_send_flow.py` | `design.md` §3.3 的 `5xx` 例外（直接终态、`attempt_count == 1`） | `test_permanent_fails_immediately`：假 SMTP 持续 `5xx` → 第一次尝试后即 `failed`，`attempt_count == 1`，`last_error_class == "permanent"`；「无退避等待」判作**终态在同一次 tick 内到达、之后无退避等待与再次尝试**（`next_attempt_at` 由认领事务无条件推 `now + 退避`、结果事务不碰该两列——`design.md` §2.4 / §3.3；与 `spec.md` `AC-34` 原文口径一致，`T-35` 的用例已按此落地并在用例内注明） |
 | `AC-35` | `FR-10`、`NFR-8` | `tests/integration/test_api_contract.py` | `design.md` §4.1 的 `found: false`，与 `AC-31` 的 `found: true` + 空集合可区分 | `test_not_found_vs_no_replies`：不存在的 ID 调两个查询端点 → 都是成功状态码，响应体 `found: false`；与 `AC-31` 的 `found: true` + 空集合**可区分** |
 | `AC-36` | `FR-11` | `tests/integration/test_api_contract.py` | `design.md` §2.3 的合法迁移图（不得出现向后步骤） | `test_state_monotonic`：**由测试显式推进**——`await` 一次流① tick 后查询、再 `await` 一次流② tick 后查询，记录取值序列 → 不出现向后步骤，且至少观测到 `reviewing` 与 `sending`（不依赖后台高频轮询，`docs/testing.md` R12 要求确定性） |
 | `AC-37` | `FR-5`、`NFR-1` | `tests/integration/test_send_flow.py` | `design.md` §3 的收割支定义（`attempt_count == 4` 且 `sending`）+「不产生第 5 次调用」 | `test_reaper_after_fourth_attempt`：**确定性造态**——假 SMTP 持续 `4xx`，跑到第 4 次尝试被认领后，直接构造遗留行（`attempt_count == 4`、`status == "sending"`、`sent_at` 为空），`await` 一次流② tick → 该行进终态 `failed`，且 `smtp_capture` 投递次数**没有**增加。完整口径见 §7.4；`spec.md` 的 `AC-37` 已就地改写为同一口径 |
@@ -509,7 +509,7 @@
 | **游标推进与冲突处理写反**：撞入站唯一键时把「游标推进」一起回滚 | 每轮重撞同一封、入站永久停摆（`AC-39` 的考点） | 单封的分拣落库与「把 `last_uid` 推到该封 UID」在**同一个事务**里完成（`design.md` §3.4）；`AC-39` 专门断言「冲突不挡推进」 |
 | **契约两处漂移**：`docs/api-contract.yaml` 与 FastAPI 生成的 OpenAPI 各说一套 | 字段 / 枚举悄悄不一致，调用方按错的那份实现 | `tests/unit/test_openapi_contract.py` 逐字段比对；`tests/unit/test_constants_consistency.py` 断言契约枚举 == `constants.py` == 迁移与 ORM 的 `CHECK` 三方一致 |
 | **`constants.py` 被当成便利模块，开始 import 项目内模块** | 破坏 `docs/architecture.md` 硬规则第 4 条（共享叶子层），`db/` 的反向依赖会随之出现 | `test_constants_consistency.py` 静态断言该文件零项目内 import；`db/` 的 `CHECK` 文本由迁移与 ORM 各持一份，**不**去 import 该模块 |
-| **集成测试依赖外部环境（Docker 起得来 + 测试库已建）** | 换机器后集成用例直接失败，容易被误判成代码问题 | §7.2 的三步前置写进 `tests/integration/README.md`；测试库连接串通过环境变量覆盖（不改仓库配置）；清表只清测试库 |
+| **集成测试依赖外部环境（Docker 起得来 + PostgreSQL 可达——隔离测试库由夹具自建）** | 换机器后集成用例直接失败，容易被误判成代码问题 | §7.2 的三步前置写进 `tests/integration/README.md`；测试库连接串通过环境变量覆盖（不改仓库配置）；清表只清测试库 |
 | **测试用库与开发库串号**：跑集成测试时 `.env` 恰好指向开发库 | 洗掉开发数据 | 集成夹具**不读** `.env` 的 `DATABASE_URL`，只认显式的测试库环境变量；库名以 `_test` 结尾做一次断言兜底（`docs/research/02-runtime-and-scheduling.md` 的「库隔离」） |
 | **异步引擎 / 会话在用例之间泄漏** | 用例随机挂起或连接池耗尽，表现为「偶尔失败」 | 每个用例自建引擎并在结束时 `dispose()`；夹具按 `docs/architecture.md` §5 的口径收发会话，不在用例之间传递会话 |
 | **审查空实现在测试里替换不干净**（`AC-6` / `AC-12` 依赖它） | 假审查漏进别的用例，或反例用例其实跑的是空实现 | 替换点固定在 `providers/review/factory.py`（`design.md` §4.2 已定工厂选取实现）；夹具显式选择「恒 `pass` / 恒 `reject` / 抛异常」三种模式，反例用例在断言前先断言替换已生效 |

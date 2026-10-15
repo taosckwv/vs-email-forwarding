@@ -30,6 +30,8 @@
 | 知道代码怎么分层、哪一层能调哪一层 | `architecture.md` |
 | 看代码风格怎么写（函数结构、异常、异步、接口层；评审与自查逐条对照的清单） | `code-style.md` |
 | 写测试要守什么规则（该写什么、期望值从哪来、怎么评审、pytest 标记怎么打） | `testing.md` |
+| 改配置项（查 `.env` 键的用途 / 默认值 / 必填） | `configuration.md` |
+| 查接口契约 | `api-contract.yaml` |
 | 看某个特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `../specs/<特性>/design.md` |
 | 写一个新特性 | `../specs/README.md` 与 `../specs/_template/` |
 | 看版本历史 | `../CHANGELOG.md` |
@@ -65,6 +67,7 @@
 | `architecture.md` | **代码分层与依赖方向的唯一出处** | 层怎么切、依赖方向、两条触发路径、运行时形态 | 规则正文（属 `AGENTS.md` §4）与设计结论的复述 |
 | `code-style.md` | **代码风格与自查/评审清单的唯一出处** | 机器查不出的风格约束（函数结构、异常、异步、接口层、AI 生成代码自查），逐条可判定 | 机器已强制的规则（ruff / mypy）、分层规则（属 `architecture.md`）、测试规则（属 `testing.md`） |
 | `testing.md` | **测试规范与测试说明的唯一出处** | 单测 / 集成测试规则、AI 写测试的作业流程、评审检查表、pytest 标记约定 | 需求与验收标准（属 `specs/`）、逐条 `AC-n` 的测试落点（属该特性 `plan.md`）、门禁命令与判据（属 `scripts/README.md` 与 `research/03`） |
+| `configuration.md` | **配置项的导航与口径文档** | `.env` 全部键的逐项用途 / 默认值 / 必填 / 归属（`.env` 可变项 vs `constants.py` 固定语义）、启动校验三判据、集成测试连接串口径 | 取值结论正文（取值以 `../specs/<特性>/design.md` 的配置项清单为唯一真源） |
 | `open-questions.md` | **未定项唯一清单** | 尚未决定的条目，及每条阻塞了什么 | 已决定的结论（决定后移入对应册或 `design.md`） |
 | `contributing.md` / `security.md` | 贡献指南与安全政策的**正文** | 流程、报告方式、责任边界 | 规则与结论复述 |
 | `../specs/` | 规格驱动开发的载体 | 每个特性一个目录：`spec.md` / `design.md` / `plan.md` / `tasks.md` | 实现代码 |
@@ -74,7 +77,7 @@
 
 ### 尚未创建的文档
 
-`data-model.md`、`api.md`、`configuration.md`、`deployment.md` **尚不存在**，它们随对应特性的规格一起落地。**不要假装它们已经存在**，也不要在没有内容时先建空文件（空目录/空文件不携带信息，见 `AGENTS.md` §4）。
+`data-model.md`、`api.md`、`deployment.md` **尚不存在**，它们随对应特性的规格一起落地。**不要假装它们已经存在**，也不要在没有内容时先建空文件（空目录/空文件不携带信息，见 `AGENTS.md` §4）。
 
 ## 4. 写作规范（`docs/` 下所有文件）
 
