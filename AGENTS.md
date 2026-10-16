@@ -30,7 +30,7 @@
 
 ## 2. 当前阶段与产出边界
 
-**预研、需求与设计阶段已收口，`specs/0001-email-forwarding-service/` 已实现到阶段 5**：四条业务流、保留期清理流、仓储层、API 契约与集成测试均已落地并通过本地门禁（`505 passed`、覆盖率 90%）；交付链的迁移 / 启动 / 归档自检三件脚本已落地，**仍待实现的是镜像构建、基础镜像 tar 带入与 sha256 旁路文件**（见 `docs/open-questions.md` D2）。**设计结论写在各特性的 `specs/<特性>/design.md`，跨特性底座写在 `docs/research/` 各册，都不在 `spec.md` 里**——`spec.md` 只写需求与验收标准，其 §8 指向已拍板的设计条目。
+**预研、需求与设计阶段已收口，`specs/0001-email-forwarding-service/` 已实现到阶段 5**：四条业务流、保留期清理流、仓储层、API 契约与集成测试均已落地并通过本地门禁（`505 passed`、覆盖率 90%）；交付链五件脚本已落地（产出侧构建与打包、消费侧迁移 / 启动 / 归档自检），**带入服务器与 `docker load` 仍是手动步骤**（刻意不脚本化）。**设计结论写在各特性的 `specs/<特性>/design.md`，跨特性底座写在 `docs/research/` 各册，都不在 `spec.md` 里**——`spec.md` 只写需求与验收标准，其 §8 指向已拍板的设计条目。
 
 **未定项不允许 AI 自行决定。** 完整清单以 `docs/open-questions.md` 为准（**本文件不复述那份清单**——两处各写一份，必然产生分歧）。写代码时若发现「必须现在选一个」，就**停下来问所有者**，不要用「合理的默认值」糊过去——这类默认值一旦落到表结构或接口上，改回来的代价极高。
 
@@ -38,7 +38,7 @@
 
 **不得在未确认前实现仍属未定的条目**——未定项的完整清单只在 `docs/open-questions.md`，**本文件不复述它**。设计阶段那一批条目（数据模型字段、依赖选型、重试分类、审查接口形态等）**已经拍板并落入 `specs/0001-email-forwarding-service/design.md` 与 `docs/research/` 各册**，不再是未定项。
 
-**环境硬事实（会直接阻塞工作，故在此保留一句）**：开发机是 **CentOS 8 Linux 虚拟机，跑得了 Docker**——项目命令一律**以 root 身份**执行，`uv` 需显式引入 PATH（装在 `/home/tao/.local/bin/`）；旧 Windows 开发机**已弃用**。镜像**当前仍在生产服务器上本地构建**，是否改到开发机留到开发完成后再定。详见 `docs/research/05-dev-and-build-environment.md` 与 `docs/research/01-delivery-and-deploy.md`。
+**环境硬事实（会直接阻塞工作，故在此保留一句）**：开发机是 **CentOS 8 Linux 虚拟机，跑得了 Docker**——项目命令一律**以 root 身份**执行，`uv` 需显式引入 PATH（装在 `/home/tao/.local/bin/`）；旧 Windows 开发机**已弃用**。开发机是交付链的**产出方**：镜像**在开发机上构建**（`deploy/build.sh`），应用镜像以 tar 带入服务器，**服务器不执行构建**。详见 `docs/research/05-dev-and-build-environment.md` 与 `docs/research/01-delivery-and-deploy.md`。
 
 ---
 
@@ -60,7 +60,7 @@ bash scripts/dev-up.sh
 
 项目命令一律**以 root 身份**执行；`uv` 装在 `/home/tao/.local/bin/`，**该目录不在 root 的 PATH 上**，需要时先 `export PATH=/home/tao/.local/bin:$PATH`。
 
-交付脚本已落地三件（`deploy/migrate.sh` 迁移入口、`deploy/run.sh` 起服务 + `/healthz` 探活、`deploy/check_archive.py` 交付前归档自检），但**交付链整体仍未落地**（镜像构建、基础镜像 tar 带入、sha256 旁路文件等）。**不要擅自新建部署脚本**：新链路（在 CentOS 8 生产服务器上本地构建 + 基础镜像以 tar 带入）的脚本形态仍是未定项，见 `docs/open-questions.md` D2。
+交付脚本已落地五件（产出侧 `deploy/build.sh` 构建应用镜像、`deploy/package.sh` 导出 + 归档自检 + sha256 旁路文件 + 交付清单；消费侧 `deploy/migrate.sh` 迁移入口、`deploy/run.sh` 起服务 + `/healthz` 探活、`deploy/check_archive.py` 交付前归档自检），交付链的**产出侧与消费侧都已就位**；**带入服务器与 `docker load` 仍是手动步骤**（刻意不脚本化：脚本里不写服务器地址与凭据）。**不要擅自新建部署脚本**：形态与判据以 `docs/research/01-delivery-and-deploy.md` 为准。
 
 ---
 
@@ -86,7 +86,7 @@ bash scripts/dev-up.sh
 | `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`code-style.md`（**代码风格与自查/评审清单的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署说明 | 需求与验收标准（那属于 `specs/`） |
 | `specs/` | **每个特性一个目录**的需求、设计、计划、任务（`spec.md` / `design.md` / `plan.md` / `tasks.md`，见 §5） | 实现代码 |
 | `skills/` | 可复用的固定流程（见 `skills/README.md`） | 一次性任务说明 |
-| `deploy/` | 部署脚本与交付链的落点（迁移 / 启动 / 归档自检三件已落地，构建与打包仍待实现，见 `docs/open-questions.md` D2） | 应用代码 |
+| `deploy/` | 部署脚本与交付链的落点（**五件已落地**：产出侧 `build.sh` 构建、`package.sh` 打包 + 归档自检 + sha256 旁路文件；消费侧 `migrate.sh` / `run.sh` / `check_archive.py`。带入与 `docker load` 是手动步骤） | 应用代码 |
 | `scripts/` | 本地开发与门禁脚本 | 部署与交付脚本（放 `deploy/`） |
 | `migrations/` | Alembic 迁移 | 手工 DDL |
 

@@ -11,7 +11,7 @@
 
 - 任务**按依赖顺序**排列，不要跳序执行。
 - 每个任务行的「前置」**就是任务图的边**：前置未完成，该任务不能开工。阶段划分只是可读性分组。
-- **一条任务 = 一个垂直片**：能在实现之前先红的单测与该实现合并在同一条任务里（理由与清单见 `plan.md` §9.1），因此任务总数与阶段区间保持 `T-1` ~ `T-46`；其中 `T-46` 是阶段 4 收口 code-review 的派生物，无前置，排在阶段 5 首位。
+- **一条任务 = 一个垂直片**：能在实现之前先红的单测与该实现合并在同一条任务里（理由与清单见 `plan.md` §9.1），因此阶段 1～5 的任务总数与区间保持 `T-1` ~ `T-46`；其中 `T-46` 是阶段 4 收口 code-review 的派生物，无前置，排在阶段 5 首位。**阶段 6 的 `T-47` ~ `T-50` 是交付形态裁决后的派生物**（构建改到开发机、新增产出侧脚本），排在最后，不改变前五个阶段的编号。
 - 集成测试与跨层静态检查集中在阶段 5，因为它们要等迁移、夹具、真实库与五条流全部到位才写得出。
 - 完成一项就改成 `[x]`，提交信息里引用 spec 编号与本任务编号。
 
@@ -77,6 +77,13 @@
 - [x] `T-43` （前置 `T-41`）交付三件脚本：`deploy/migrate.sh`、`deploy/run.sh`、`deploy/check_archive.py` — `FR-14` / `AC-20`
 - [x] `T-44` （前置 `T-43`）`deploy/README.md`、`docs/research/01-delivery-and-deploy.md` 与 `docs/open-questions.md` D2 的就地收窄 — `FR-14` / `AC-20`
 - [x] `T-45` （前置 `T-42`、`T-44`）**交付阶段验证（不入门禁）**：在隔离服务器上完成 `AC-20`——`bash deploy/run.sh` 后 `GET /healthz` 在 60 秒内返回 200，且运行时无任何外部网络依赖；结果回填 `spec.md` §9 — `FR-14` / `NFR-3` / `AC-20`
+
+## 阶段 6：交付链产出侧（交付形态裁决后的派生物）
+
+- [x] `T-47` （前置 `T-43`）产出侧构建脚本 `deploy/build.sh`：在开发机上 `docker build --platform linux/amd64`、构建后复检架构必须 `linux/amd64`、显式拒绝 `DOCKER_BUILDKIT=0`（判据 `docs/research/03` 的「构建环境事实」段）；`Dockerfile` 两个构建期基础镜像改按 digest 钉死，并就地改掉「在服务器上构建」的失真陈述 — `FR-14` / `AC-20`
+- [x] `T-48` （前置 `T-47`）产出侧打包脚本 `deploy/package.sh`：逐件「`docker save` → `deploy/check_archive.py` 自检 → 生成 sha256 旁路文件（两个空格 + LF）→ 自校验」，并写 `dist/delivery-manifest.txt` 交付清单；`check_archive.py` 的期望镜像个数默认值随新链路改为 1 — `FR-14` / `AC-20`
+- [x] `T-49` （前置 `T-48`）**交付链切换的端到端实测（不入门禁）**：`bash deploy/build.sh` → `bash deploy/package.sh` → `sha256sum -c` → 删本地镜像后 `docker load -i` 往返 → `bash deploy/migrate.sh` → `bash deploy/run.sh` 后 `GET /healthz` 200；明细读数回填 `docs/research/01-delivery-and-deploy.md` 的「实测证据」段 — `FR-14` / `NFR-3` / `AC-20`
+- [x] `T-50` （前置 `T-49`）决策落点收口（`AGENTS.md` §6）：`docs/research/01-delivery-and-deploy.md`（结论 / 已否决方向 / 已知风险 / 方法性结论 / 落地位置 / 实测证据 / 未定项）、`docs/open-questions.md`（移除已决的 D1 / D2 / D13，改写 D14）、`docs/research/03`、`docs/research/05`、`docs/research/02`、`design.md`、`README.md`、`AGENTS.md`、`deploy/README.md`、`.env.example`、`skills/README.md`、`CHANGELOG.md` 就地改写 — `FR-14`
 
 ---
 

@@ -223,10 +223,10 @@ fi
 check_image_arch "${IMAGE_REF}"
 
 # --- 2b. 复检 compose 依赖的镜像（含基础镜像 postgres:17） ---------------------
-# 为什么不止查应用镜像：运行期还依赖 `postgres:17`（基础镜像三件之一，随基础镜像 tar
-# 带入）。离线服务器上它缺了/架构不对，compose 会去远端拉而失败——那是最难判读的
-# 一类失败。这里让依赖镜像与应用镜像走**同一强度**的检查，也就把 research 01 要求的
-# 「load 之后逐 tag inspect 复检架构」在 T-43 范围内落到了实处（收窄时不得删除）。
+# 为什么不止查应用镜像：运行期还依赖 `postgres:17`（它不参与构建，随 `deploy/package.sh`
+# 打出的 `postgres-17.tar` 带入）。离线服务器上它缺了/架构不对，compose 会去远端拉而失败——
+# 那是最难判读的一类失败。这里让依赖镜像与应用镜像走**同一强度**的检查，也就把 research 01
+# 要求的「载入之后逐 tag inspect 复检架构」在消费侧落到了实处（收窄时不得删除）。
 COMPOSE_IMAGES="$(TARGET_PLATFORM="${TARGET_PLATFORM}" docker compose -f "${COMPOSE_FILE}" config --images 2>/dev/null | sort -u || true)"
 COMPOSE_IMAGES="$(printf '%s\n' "${COMPOSE_IMAGES}" | grep -v '^$' | grep -v '^docker build' || true)"
 if [ -n "${COMPOSE_IMAGES}" ]; then

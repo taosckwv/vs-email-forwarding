@@ -126,12 +126,12 @@
 | `docs/api-contract.yaml` | `新增` | **对外 HTTP 接口契约的唯一真源**（OpenAPI 3.1）：三个端点的路径、请求 / 响应字段、类型、必填、取值枚举与取值约束（长度上限、地址格式、UUID 格式）、错误响应。**字段定义只此一份**，`design.md` §4.1 只留设计理由 |
 | `docs/configuration.md` | `新增` | 配置项清单文档：逐项写用途、默认值、是否必填、启动即校验的三条判据；`docs/README.md` §3 的「尚未创建的文档」清单要**同时移除它** |
 | `docs/README.md` | `修改` | ① §2 导航表加两行「改配置项 → `configuration.md`」「查接口契约 → `api-contract.yaml`」；② §3 的「尚未创建的文档」清单移除 `configuration.md` |
-| `docs/research/01-delivery-and-deploy.md` | `修改` | 按本轮裁决记两件事：**D2-甲** 三件脚本的落地位置与判据、**D2-乙 随 D13 推迟**；「落地位置」段的「待实现」列表相应收窄 |
-| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那一侧的脚本（镜像构建 / tar 的导出与带入含 sha256 旁路 / 产出方打包脚本），与 D13 同题一并推迟」；已定的 D2-甲 从该条移除。**依据**：产出方未定（D13：由哪台机器、用什么工具产出）就意味着「构建输入怎么送、由谁送」同属那一侧、随之推迟——D2 的现行标题与范围即按此写；输入传输的**方式**已由 `docs/research/01-delivery-and-deploy.md` 的「结论」段定为 `rsync` / 归档，不再列为未定项 |
+| `docs/research/01-delivery-and-deploy.md` | `修改` | 按本轮裁决记两件事：**D2-甲** 三件脚本的落地位置与判据、**D2-乙 随 D13 推迟**（**后由阶段 6 的 `T-47` ~ `T-50` 收口：D2 / D13 已裁决，构建改到开发机、产出侧脚本 `build.sh` / `package.sh` 已落地；本行对 D2-乙 的推迟已失效**）；「落地位置」段的「待实现」列表相应收窄 |
+| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那一侧的脚本（镜像构建 / tar 的导出与带入含 sha256 旁路 / 产出方打包脚本），与 D13 同题一并推迟」；已定的 D2-甲 从该条移除。**依据**：产出方未定（D13：由哪台机器、用什么工具产出）就意味着「构建输入怎么送、由谁送」同属那一侧、随之推迟——D2 的现行标题与范围即按此写（**后由阶段 6 的 `T-50` 收口：D1 / D2 / D13 三条均已裁决并整条移除，现行未定项见 `docs/open-questions.md`**）；输入传输的**方式**已由 `docs/research/01-delivery-and-deploy.md` 的「结论」段定为 `rsync` / 归档，不再列为未定项 |
 | `deploy/migrate.sh` | `新增` | 迁移入口（**唯一入口**）：容器内 `docker compose run --rm app uv run alembic -c migrations/alembic.ini upgrade head`，不加 `--no-deps`、不用 `exec`，并打印「无版本时的失败属预期」这条判别法。**LF、无 BOM**（`AGENTS.md` §7） |
 | `deploy/run.sh` | `新增` | 起服务 + 冒烟：`docker compose up -d` 后轮询 `/healthz`（默认 30 次 × 2s，可用环境变量覆盖）；从 `.env` 解析端口要容忍 CR、引号与行尾注释；宿主无 `curl` 时降级为容器内 Python 标准库探测。**`compose.yaml` 的注释已经引用了这个名字** |
-| `deploy/check_archive.py` | `新增` | 交付前单平台归档自检：**不依赖 Docker、只用 Python 标准库**；支持 OCI（`index.json`）与 legacy docker-archive（`manifest.json`）两种布局；显式指定期望基础镜像个数（新链路 = 3）；退出码固定 `0` / `1` / `2`；**必须在生成 `.sha256` 旁路文件之前执行** |
-| `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：三件脚本各自的用途、入口、判据出处，并写明 D2-乙 那侧脚本**本期不在范围**、随 D13 推迟 |
+| `deploy/check_archive.py` | `新增` | 交付前单平台归档自检：**不依赖 Docker、只用 Python 标准库**；支持 OCI（`index.json`）与 legacy docker-archive（`manifest.json`）两种布局；显式指定期望基础镜像个数（当时的期望值 = 3；**阶段 6 起每个 tar 恰好一件镜像、默认值 1**）；退出码固定 `0` / `1` / `2`；**必须在生成 `.sha256` 旁路文件之前执行** |
+| `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：三件脚本各自的用途、入口、判据出处，并写明 D2-乙 那侧脚本**本期不在范围**、随 D13 推迟（**后由阶段 6 收口：README 已改为五件脚本 + 手动四步，D2-乙 那侧已落地**） |
 | `tests/unit/test_message_id.py` | `新增` | 纯逻辑：`Message-ID` 生成与带显示名时取域的解析（随 `T-13` 先红，§7.3） |
 | `tests/unit/test_retry_policy.py` | `新增` | 纯逻辑：退避表、`4xx` / `5xx` 分类、终态判据，以及 `AC-21` 的最坏路径算术（随 `T-14` 先红，§7.3） |
 | `tests/unit/test_states.py` | `新增` | 纯逻辑：六态判定的优先级与库内落点（随 `T-15` 先红，§7.3） |
@@ -354,9 +354,9 @@
 | `docs/api-contract.yaml` | `新增` | 对外契约唯一真源（§2.8 已列）；本次与 `tests/unit/test_openapi_contract.py` 互为校验对象 |
 | `.env.example` | `修改` | 一致性复核（§6.1），不新增键 |
 | `migrations/README.md` | `修改` | 三处就地改写：① 「约定」清单的第 3 条文件名约定（计划正文里也写成「第 23 条」，指的就是这一条）改为**序号前缀 + 下划线**（例 `0001_create_mail_tables.py`），删掉「保留 Alembic 自动生成的 revision 哈希前缀」；② 删掉「不要提前 `alembic init`」这段指引与「当前状态：尚未初始化」段，改为已初始化的现状；③ 「约定」清单的第 6 条迁移入口确认为 `deploy/migrate.sh` |
-| `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：`migrate.sh` / `run.sh` / `check_archive.py` 各自的用途、入口、判据出处；写明 **D2-乙（产出方那一侧的打包脚本）本期不在范围、随 D13 推迟** |
-| `docs/research/01-delivery-and-deploy.md` | `修改` | 按本轮裁决记两件事：**D2-甲** 三件脚本的落地位置与判据；**D2-乙 随 D13 推迟**。「落地位置」段的「待实现」列表相应收窄 |
-| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那一侧的脚本（镜像构建 / tar 的导出与带入含 sha256 旁路 / 产出方打包脚本），与 D13 同题一并推迟」；已定的 D2-甲从该条移除。**依据**同 §4.2：产出方（D13）未定即含「构建输入怎么送上去」，输入传输的方式已定为 `rsync` / 归档（`docs/research/01-delivery-and-deploy.md` 的「结论」段）。**不要新增条目** |
+| `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：`migrate.sh` / `run.sh` / `check_archive.py` 各自的用途、入口、判据出处；写明 **D2-乙（产出方那一侧的打包脚本）本期不在范围、随 D13 推迟**（**后由阶段 6 收口：现已包含 `build.sh` / `package.sh` 与手动四步，D2-乙 与 D13 均已裁决**） |
+| `docs/research/01-delivery-and-deploy.md` | `修改` | 按本轮裁决记两件事：**D2-甲** 三件脚本的落地位置与判据；**D2-乙 随 D13 推迟**（**后由阶段 6 的 `T-47` ~ `T-50` 收口：两件产出侧脚本已落地**）。「落地位置」段的「待实现」列表相应收窄 |
+| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那一侧的脚本（镜像构建 / tar 的导出与带入含 sha256 旁路 / 产出方打包脚本），与 D13 同题一并推迟」；已定的 D2-甲从该条移除。**依据**同 §4.2：产出方（D13）未定即含「构建输入怎么送上去」（**后由阶段 6 的 `T-50` 收口：D1 / D2 / D13 三条已整条移除**），输入传输的方式已定为 `rsync` / 归档（`docs/research/01-delivery-and-deploy.md` 的「结论」段）。**不要新增条目** |
 | `README.md` | `修改` | ① 「当前状态」段的「需求阶段」表述改为「设计阶段已收口、进入实现」；② 「生产部署（现状）」段的「`deploy/` 目前只有一份职责 `README.md`」改为三件脚本已落地；③ 目录结构块补 `constants.py` 一行 |
 | `src/vs_email_forwarding/**/__init__.py` | `修改` | §2.10 列出的 **7 个包占位文件**的过时 docstring（逐个指向当前真源）；`providers/review/__init__.py` 里「真实审查能力何时补上仍未定」这半句**保留** |
 | `tests/integration/README.md` | `修改` | 「覆盖重点」第 1 条仍写着旧词「待审 → 已排队 → 已发送 → 已收到 / 拒审 / 终态失败」——与本特性已拍板的六态取值（`constants.MESSAGE_STATES`）不一致，按 `docs/README.md` §4 的「文档与代码不一致时以代码为准」就地改写；同时补上集成夹具的实际落点（`tests/integration/conftest.py`）与测试库准备命令 |
@@ -513,7 +513,7 @@
 | **测试用库与开发库串号**：跑集成测试时 `.env` 恰好指向开发库 | 洗掉开发数据 | 集成夹具把连接串只当**服务器坐标**用（优先显式环境变量 `VS_EMAIL_FORWARDING_TEST_DATABASE_URL`，否则取配置层 `DATABASE_URL`），库名一律自建为运行级隔离库；建库 / 删库前按命名约定复核，只允许操作 `vs_email_forwarding_test_*` 形状的库（`tests/integration/conftest.py` 的 `_checked_test_database_name` 与「库隔离」口径，见 `docs/research/02-runtime-and-scheduling.md`） |
 | **异步引擎 / 会话在用例之间泄漏** | 用例随机挂起或连接池耗尽，表现为「偶尔失败」 | 每个用例自建引擎并在结束时 `dispose()`；夹具按 `docs/architecture.md` §5 的口径收发会话，不在用例之间传递会话 |
 | **审查空实现在测试里替换不干净**（`AC-6` / `AC-12` 依赖它） | 假审查漏进别的用例，或反例用例其实跑的是空实现 | 替换点固定在 `providers/review/factory.py`（`design.md` §4.2 已定工厂选取实现）；夹具显式选择「恒 `pass` / 恒 `reject` / 抛异常」三种模式，反例用例在断言前先断言替换已生效 |
-| **`deploy/` 三件脚本触碰未定项**（D2-乙 / D13） | 写出按「产出方已定」假设的脚本，做完就得返工 | 本期只写 **D2-甲**（`migrate.sh` / `run.sh` / `check_archive.py`）；产出方那一侧的打包脚本**不写**，并在 `deploy/README.md` 与 `docs/research/01-delivery-and-deploy.md` 写明随 D13 推迟 |
+| **`deploy/` 三件脚本触碰未定项**（D2-乙 / D13） | 写出按「产出方已定」假设的脚本，做完就得返工 | 本期只写 **D2-甲**（`migrate.sh` / `run.sh` / `check_archive.py`）；产出方那一侧的打包脚本**不写**，并在 `deploy/README.md` 与 `docs/research/01-delivery-and-deploy.md` 写明随 D13 推迟。**该风险已由阶段 6 解除**：D2 / D13 经所有者裁决后落地为 `build.sh` / `package.sh` |
 | **`pyproject.toml` 的 mypy 放行被顺手扩大** | 类型检查形同虚设（`AGENTS.md` §10） | 只按 module 精确放行 `asyncpg` / `imapclient` 两个（理由已在 `docs/research/03-dependencies-and-toolchain.md` 登记），不放宽任何其他开关；放行与第一个真正 import 该库的模块同一次改动落地 |
 
 ### 8.2 已如实登记的代价（不缓解，只跟踪）

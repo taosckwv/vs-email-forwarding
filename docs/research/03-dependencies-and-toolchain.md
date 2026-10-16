@@ -98,7 +98,7 @@
 **构建环境事实**
 
 - `docker build --platform` 的平台语义由 **BuildKit** 保证；把 `DOCKER_BUILDKIT` 设为 `0` 会关掉 BuildKit，`--platform` 的语义随之失效，可能静默产出错架构镜像。
-- 因此**构建脚本必须显式拦住 `DOCKER_BUILDKIT=0`**：检测到就立即失败并说明原因，**不得静默降级或继续构建**。（构建脚本尚未实现，见未定项 D2。）
+- 因此**构建脚本必须显式拦住 `DOCKER_BUILDKIT=0`**：检测到就立即失败并说明原因，**不得静默降级或继续构建**。（已实现于 `deploy/build.sh`。）
 
 **生产环境的依赖前提**
 
@@ -172,7 +172,7 @@
 - `docs/testing.md` —— **测试规范与测试说明的唯一出处**：单测 / 集成测试规则、AI 写测试的作业流程、评审检查表、pytest 标记约定。门禁的「怎么跑」在 `scripts/README.md`，「什么算合格」在本文件与 `docs/testing.md`。
 - `pyproject.toml` 的 `[tool.mutmut]` 与 `[tool.coverage.*]` —— 变异与覆盖率的**配置**（变异范围、只变异被覆盖的行、覆盖率 source 与排除项）。**门禁的判据不写在这里**（配置能改，判据必须只有一处），判据在 `scripts/check.sh`。
 - `.gitignore` —— `mutants/`（变异测试的工作目录：源码副本与运行缓存）；覆盖率产物 `.coverage` / `coverage.xml` / `htmlcov/` 此前已在忽略清单里。
-- `deploy/` —— 构建与交付脚本的落点；`DOCKER_BUILDKIT=0` 的显式拦截必须落在其中的构建脚本里（**构建脚本尚未实现**，见未定项 D2）。
+- `deploy/` —— 构建与交付脚本的落点；`DOCKER_BUILDKIT=0` 的显式拦截落在产出侧构建脚本 `deploy/build.sh` 里（已实现：检测到就立即失败、不降级继续构建）。
 - `AGENTS.md` —— §3 命令入口、§7 编码约定、§9 提交与 PR、§10 不要做的事，与本册互为规则与结论的分工。
 
 ## 未定项
@@ -180,5 +180,3 @@
 以下问题**尚未决定**，详见 `docs/open-questions.md`；实现时**不得替它们挑一个「合理的默认值」**：
 
 - E2 `httpx` 与 `httpx2` 的迁移时机（当前测试会打 StarletteDeprecationWarning，提示改用 httpx2）
-- D1 各基础镜像 tag 的 digest 需在写进脚本前复核
-- D2 产出方一侧的构建与打包脚本（消费侧三件已落地；仍未定的是镜像构建脚本、基础镜像 tar 的打包与带入含 sha256 旁路文件、产出方打包脚本，与 D13 同题）——**此处为摘要，完整未定项以 `docs/open-questions.md` D2 全文为准**

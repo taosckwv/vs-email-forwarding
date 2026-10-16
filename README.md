@@ -9,7 +9,7 @@
 **预研、需求、设计与实现阶段已推进到阶段 5：四条业务流、保留期清理流、仓储层、API 契约与集成测试均已落地，本地门禁五步全绿（`505 passed`、覆盖率 90%）。**
 
 - 已实现：目录分层与工程配置、PostgreSQL 表结构与 Alembic 迁移、`/healthz` 与投递 / 回复查询 API（契约真源 `docs/api-contract.yaml`）、四条轮询流与保留期清理流、仓储层，以及 SMTP 与 IMAP 两处适配器。
-- 交付链：迁移（`deploy/migrate.sh`）、启动（`deploy/run.sh`）与归档自检（`deploy/check_archive.py`）三件脚本已落地；**仍待实现的是镜像构建、基础镜像 tar 的带入与 sha256 旁路文件**（见 `docs/open-questions.md` D2）。
+- 交付链：产出侧构建（`deploy/build.sh`）与打包（`deploy/package.sh`：导出 → 归档自检 → sha256 旁路文件 → 交付清单）、消费侧迁移（`deploy/migrate.sh`）、启动（`deploy/run.sh`）与归档自检（`deploy/check_archive.py`）五件脚本已落地；**带入服务器与 `docker load` 仍是手动步骤**。
 - **安全审查目前是「永远通过」的空实现占位**——在真实审查接入之前，不得把本服务当作内容安全边界。
 - 实现进度与逐条验收结论见 `specs/0001-email-forwarding-service/spec.md` §9；未定项以 `docs/open-questions.md` 为准。
 
@@ -36,11 +36,11 @@ bash scripts/dev-up.sh                                # 起开发依赖（Postgr
 
 ## 生产部署（现状）
 
-生产是 **CentOS 8**；镜像**在服务器上本地构建**，**基础镜像以 tar 带入**。环境前提是**与公网隔离、可达内网镜像源**，且**运行时不得依赖任何外部网络**。
+生产是 **CentOS 8**；镜像**在开发机上构建**、**以 tar 带入服务器**（构建期基础镜像按 digest 钉在 `Dockerfile` 里），服务器**不执行构建**。环境前提是**与公网隔离、可达内网镜像源**，且**运行时不得依赖任何外部网络**。
 
-**交付脚本已落地三件**——`deploy/migrate.sh`（数据库迁移的唯一入口）、`deploy/run.sh`（起服务并以 `/healthz` 探活）、`deploy/check_archive.py`（交付前归档自检）；判据与约束仍以 `docs/research/01-delivery-and-deploy.md` 为准，不要擅自另起第二套脚本。
+**交付脚本已落地五件**——产出侧 `deploy/build.sh`（构建应用镜像）、`deploy/package.sh`（导出 → 归档自检 → sha256 旁路文件 → 交付清单）；消费侧 `deploy/migrate.sh`（数据库迁移的唯一入口）、`deploy/run.sh`（起服务并以 `/healthz` 探活）、`deploy/check_archive.py`（交付前归档自检）。带入与 `docker load` 是**手动步骤**；判据与约束以 `docs/research/01-delivery-and-deploy.md` 为准，不要擅自另起第二套脚本。
 
-新交付形态的未定项与形态见 `docs/open-questions.md` D2，当前结论见 `docs/research/01-delivery-and-deploy.md`。
+交付链的当前结论（在哪构建、带哪些镜像、产物怎么命名）见 `docs/research/01-delivery-and-deploy.md`。
 
 ---
 
@@ -75,7 +75,7 @@ scripts/                   本地开发与门禁脚本
 docs/                      文档唯一入口、跨特性底座结论真源、未定项清单
 specs/                     每个特性一个目录（spec.md / design.md / plan.md / tasks.md）
 skills/                    可复用的固定流程
-deploy/                    交付脚本：migrate.sh / run.sh / check_archive.py
+deploy/                    交付脚本：build.sh / package.sh / migrate.sh / run.sh / check_archive.py
 ```
 
 各目录「放什么 / 不放什么」以 `AGENTS.md` §4 的目录职责表为准；**代码分层与依赖方向**见 `docs/architecture.md`。
@@ -105,7 +105,7 @@ deploy/                    交付脚本：migrate.sh / run.sh / check_archive.py
 - **一期不支持附件。**
 - **审查是空实现**：一期审查逻辑必定通过，在真实审查接入前不构成安全边界。
 - **无鉴权**：服务仅内网可达，一期不做鉴权，但 API 层已预留鉴权位置。
-- **交付链尚未全部落地**：迁移、启动与归档自检三件脚本已就位，但镜像构建、基础镜像 tar 的带入与 sha256 旁路文件等仍待实现，见 `docs/open-questions.md` D2。
+- **带入与 `docker load` 仍是手动步骤**：脚本只产出 tar 与 sha256 旁路文件，传输、载入与载入后逐 tag 复检由人按 `deploy/README.md` 执行（刻意不脚本化，因为脚本里不写服务器地址与凭据）。
 
 ---
 

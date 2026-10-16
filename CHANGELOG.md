@@ -18,6 +18,7 @@
   - 数据模型与首版迁移：出站 / 入站共用的邮件表、待审表、拒审表、IMAP 游标表四张表，经 Alembic 首版迁移一次建齐（含索引与 `CHECK`）。
   - 真实依赖集成测试族：每次运行自建运行级隔离 PostgreSQL 测试库并跑真实迁移，配进程内假 SMTP（捕获线上字节）、假 IMAP 与可替换假审查；数据库语义不用 mock。
   - 本地门禁配套：启动即校验三判据、跨层静态检查（接口契约一致、三方取值一致、抢占写法唯一、配置只经配置层读）、`docs/api-contract.yaml` 作为对外契约唯一真源。
+  - 交付链（产出侧）：应用镜像改在**开发机**上构建（`deploy/build.sh`，`docker build --platform linux/amd64`，并显式拒绝 `DOCKER_BUILDKIT=0`），构建期基础镜像按 digest 钉死在 `Dockerfile` 里；`deploy/package.sh` 负责导出、归档自检、生成 sha256 旁路文件与交付清单（`dist/`，不进版本库）。带入与 `docker load` 仍是手动步骤（刻意不脚本化）。
 
 ### 变更
 

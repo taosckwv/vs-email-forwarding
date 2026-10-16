@@ -75,7 +75,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 - 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 **`greenmail/standalone:2.1.14`**；两者都**只绑回环**。GreenMail 同时提供 **SMTP（3025）与 IMAP（3143）**，因此流②的发信侧与**流③的入站回路都能在本地离线跑通**（另有 POP3 3110、SMTP API 8080；SMTPS 3465 / IMAPS 3993 未映射）。
 - 一键起依赖：`scripts/dev-up.sh`（Linux）。应用本体**不在容器里跑**，用 `uv run uvicorn vs_email_forwarding.main:app --reload` 在宿主机跑。
 - **两个镜像均已在开发机上实测拉取成功**（`postgres:17` 与 `greenmail/standalone:2.1.14`）。
-- 交付链需要的三个基础镜像**也都能在本机拉到**：`python:3.13-slim-trixie`（经 mirror）、`ghcr.io/astral-sh/uv:0.12.20`（直连 ghcr.io）、`postgres:17`（经 mirror）。**但这不等于「本机应承担构建」**——那条属未定项，见下。
+- 交付链需要的三个基础镜像**也都能在本机拉到**：`python:3.13-slim-trixie`（经 mirror）、`ghcr.io/astral-sh/uv:0.12.20`（直连 ghcr.io）、`postgres:17`（经 mirror）。**本机就是产出方**（所有者裁决，2026-10）：镜像在开发机构建（`deploy/build.sh`，`docker build --platform linux/amd64`），构建期基础镜像按 digest 钉在 `Dockerfile` 里；服务器只消费 tar。
 - **邮件服务用 GreenMail，不用 Mailpit**（所有者拍板，2026-10；`D16` 由此关闭，`D6`「是否采用 Mailpit」被取代并移除）。**Mailpit 不提供 IMAP**（只有 SMTP + Web UI + POP3，上游把 IMAP 的 issue 以 `not_planned` 关闭）⇒ 它**不可能**同时覆盖收发两个协议，用它就跑不通「发出去 → 被拉回来 → 关联上原邮件」。**被否决方向：用 Mailpit 做本地回路验证**（证据见「实测证据」）。
 - GreenMail 的三个实测行为要记住：① **按账号分信箱**——投给 `reply@example.com` 的信要用该账号登录才看得到（正好贴合 `IMAP_USERNAME` 的用法）；② **消息只活在容器生命周期里**（没挂卷，`down` 即清空，集成测试不必担心上一轮残留）；③ **端口与 Mailpit 完全不同**（SMTP 3025 / IMAP 3143），`.env` 与文档里的 `1025/1143` 一律作废。
 - GreenMail 官方镜像**没有 healthcheck 命令**（镜像里只有 JRE 与一个启动脚本），所以 `compose.dev.yaml` 里不给它写 healthcheck；判断它好了没有看容器日志里的 `Starting GreenMail standalone v2.1.14 ... protocol='imap'`。
@@ -99,7 +99,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 ### 与生产服务器有关的一句
 
 - 本机侧不承担**生产**部署；服务器侧环境事实（宿主规格、Docker 版本、内网源覆盖等）属 `docs/research/01-delivery-and-deploy.md`，**本册不重复**。
-- 本机具备参与镜像构建的能力（见上），但**镜像在哪一侧构建与基础镜像 tar 由谁产出，一律留到开发完成后再定**；当前按 `docs/research/01-delivery-and-deploy.md` 的口径执行。
+- 本机是交付链的**产出方**（见上）：镜像在本机构建、打包，服务器只消费 tar；本机侧不承担**生产**部署。
 
 ## 实测证据
 
@@ -165,7 +165,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 | `.gitattributes` | 换行符强制规则（一切文本文件 LF） |
 | `.pre-commit-config.yaml` | pre-commit 钩子定义（钩子已 `install`，见上文） |
 | `pyproject.toml` | dev 依赖组与工具链配置；依赖清单与门禁配置的结论见 `docs/research/03-dependencies-and-toolchain.md` |
-| `deploy/` | 部署脚本与交付链的落点：消费侧三件脚本（`migrate.sh` / `run.sh` / `check_archive.py`）与职责 `README` 已落地；产出方一侧（镜像构建 / tar 打包带入 / 打包脚本）仍属未定项，见 `docs/open-questions.md` D2 与 D13（**此处为摘要，完整未定项以 `docs/open-questions.md` D2 全文为准**） |
+| `deploy/` | 部署脚本与交付链的落点：产出侧 `build.sh`（在开发机构建）/ `package.sh`（导出 + 归档自检 + sha256 旁路文件 + 交付清单）与消费侧 `migrate.sh` / `run.sh` / `check_archive.py` 五件脚本，外加职责 `README`，均已落地；判据与约束见 `docs/research/01-delivery-and-deploy.md`（本行只是摘要） |
 | `docs/research/01-delivery-and-deploy.md` | 生产服务器与交付链事实（本册不重复） |
 | `docs/open-questions.md` | 未定项的唯一清单 |
 
@@ -173,6 +173,4 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 
 详见 `docs/open-questions.md`：
 
-- D13 基础镜像 tar 由哪台机器、用什么工具产出
-
-**已关闭、不再列为未定项**：D3（开发机的 Docker 能力——跑得了 Docker）；D16（本地 IMAP 捕获服务——结论为改用 GreenMail，实测证据见上）；Mailpit 的 `MP_*` 变量名与 IMAP 能力（已对容器实跑核对完毕）。
+**已关闭、不再列为未定项**：D3（开发机的 Docker 能力——跑得了 Docker）；**D13（产出方与构建位置——裁决为「在开发机构建、应用镜像以 tar 带入」；本机也因此成为产出方）**；D16（本地 IMAP 捕获服务——结论为改用 GreenMail，实测证据见上）；Mailpit 的 `MP_*` 变量名与 IMAP 能力（已对容器实跑核对完毕）。

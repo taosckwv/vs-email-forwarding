@@ -192,7 +192,7 @@
 | `AC-17` | `tests/integration/test_api_contract.py::test_three_phase_states`、`tests/unit/test_schemas.py::test_status_timestamps_serialize_as_utc_rfc3339_six_digits_z` | 通过 |
 | `AC-18` | `tests/integration/test_api_contract.py::test_rejected_state_queryable` | 通过 |
 | `AC-19` | `tests/integration/test_send_flow.py::test_restart_resumes` | 通过 |
-| `AC-20` | `bash deploy/run.sh` → `GET /healthz` 返回 200（实测 14.65 秒 ≤ 60 秒，隔离形态：镜像架构复检 → 迁移到 head → 起服务 → 探活；运行时零外部网络依赖：观察窗口内已建立出站连接 0） | 通过 |
+| `AC-20` | `bash deploy/run.sh` → `GET /healthz` 返回 200（实测 14.65 秒 ≤ 60 秒，隔离形态：镜像架构复检 → 迁移到 head → 起服务 → 探活；运行时零外部网络依赖：观察窗口内已建立出站连接 0）。**阶段 6 复测补充**：本机 host 级 `ss` 计数会被 harness 自身的连接污染（实测 16 条全部属于 agent/sshd，与容器无关），故「零外部网络」改以**容器内 `/proc/net/tcp`** 为准——应用容器的已建立连接只有到 PostgreSQL 的 `192.168.0.2:5432`，以及自身的 `8000` 与 Docker 内嵌 DNS `127.0.0.11`，无任何公网/内网源连接（读数见 `docs/research/01-delivery-and-deploy.md` 的「实测证据」段；`AC-20` 的隔离环境前提仍只能在服务器上成立） | 通过 |
 | `AC-21` | `tests/unit/test_retry_policy.py::test_worst_case_attempts_within_180s`、`tests/integration/test_send_flow.py::test_within_three_minutes` | 通过 |
 | `AC-22` | `tests/integration/test_cleanup_flow.py::test_cleanup_scope_and_not_exists` | 通过 |
 | `AC-23` | `tests/unit/test_scheduler_intervals.py::test_interval_comes_from_config`、`tests/unit/test_scheduler_intervals.py::test_no_interval_literals` | 通过 |

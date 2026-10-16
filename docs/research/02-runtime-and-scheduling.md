@@ -59,11 +59,11 @@
 - `compose.yaml` —— 生产编排：应用与同机 PostgreSQL 由同一个 compose 管理，应用容器内覆盖数据库连接串，数据库不向宿主机暴露端口。
 - `compose.dev.yaml` —— 开发依赖编排（PostgreSQL 17；本地邮件捕获服务用 GreenMail，未定项 `D16` 已关闭，见 `docs/research/05-dev-and-build-environment.md`），开发库初始化与测试库口径（运行级隔离库）见文件末尾。
 - `tests/integration/` —— 真实 PostgreSQL 与邮件回路的集成测试；`tests/unit/` 放不依赖数据库与网络的纯逻辑单测。
-- `deploy/` —— 部署脚本与交付链的落点：消费侧三件脚本（`migrate.sh` / `run.sh` / `check_archive.py`）与职责 `README` 已落地；新链路「服务器本地构建 + 基础镜像以 tar 带入」里**产出方那一侧**的脚本形态见未定项 D2（与 D13 同题）；`scripts/` 只放本地开发与门禁脚本。
+- `deploy/` —— 部署脚本与交付链的落点：产出侧 `build.sh`（在开发机构建）/ `package.sh`（导出 + 归档自检 + sha256 旁路文件 + 交付清单）与消费侧 `migrate.sh` / `run.sh` / `check_archive.py` 五件脚本均已落地；带入与 `docker load` 仍是手动步骤。形态与约束见 `docs/research/01-delivery-and-deploy.md`（本行只是摘要）；`scripts/` 只放本地开发与门禁脚本。
 - 本特性的代码落点（`flows/`、`service/`、`db/`、`providers/`、`api/`、`core/`、`config.py`、`.env.example`、`migrations/`）见 `specs/0001-email-forwarding-service/design.md` 的「落地位置」一节；代码分层与依赖方向见 `docs/architecture.md`。
 
 ## 未定项
 
 以下问题**尚未决定**，详见 `docs/open-questions.md`；实现时**不得替它们挑一个「合理的默认值」**：
 
-- D2 产出方一侧的构建与打包脚本（消费侧三件已落地；仍未定的是镜像构建脚本、基础镜像 tar 的打包与带入含 sha256 旁路文件、产出方打包脚本，与 D13 同题）——**此处为摘要，完整未定项以 `docs/open-questions.md` D2 全文为准**
+- 与调度相关的一条都没有：调度间隔、幂等抢占、重试语义均已拍板，见本册「结论」段

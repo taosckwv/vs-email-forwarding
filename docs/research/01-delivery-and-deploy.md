@@ -15,12 +15,13 @@
 
 **交付链**
 
-- **镜像在 CentOS 8 生产服务器上本地构建**，构建与生产运行共用同一台机器，构建峰值资源占用**未实测**。**开发机也具备构建能力**（Docker 26.1.3，与生产同版本、同 image store 模式；三个基础镜像都能在它上面拉到，读数见 `docs/research/05-dev-and-build-environment.md`），**但要不要改成开发机构建，留到开发完成后再定**——这是刻意的推迟，不是遗漏。
-- **平台只在 `docker build` 阶段钉死**：`docker build --platform linux/amd64`。这是唯一真正决定镜像架构的环节。
+- **镜像在开发机上构建**（CentOS 8 开发机，Docker 26.1.3，与生产**同版本、同 image store 模式**；读数见 `docs/research/05-dev-and-build-environment.md`）：产出侧构建脚本 `deploy/build.sh` 传 `docker build --platform linux/amd64`。**服务器不执行任何构建**——它与公网隔离，而构建期 `uv sync` 需要包源，仓库里没有任何内网源配置；把构建留在服务器，等于把「装依赖」这一步的失败面留在生产，而生产机同时还要跑服务（8 vCPU / 7.6 GiB，构建峰值资源**未实测**）。
+- **必须物理抵达服务器的镜像共两个**：应用镜像（`vs-email-forwarding:<版本>`，**每次发版都要传**）与 `postgres:17`（运行期，一次性介质）。两个构建期基础镜像——`python:3.13-slim-trixie`、`ghcr.io/astral-sh/uv:0.12.20`——**不再外传**（构建不在服务器发生，带进去只会多传约 174MB 且无人消费）。
+- 交付物落在**产出目录 `dist/`**（`deploy/package.sh` 生成）：`<镜像名>-<版本>.tar` + 同名 `.tar.sha256` 旁路文件，ASCII 文件名；再加一份 `delivery-manifest.txt` 交付清单。`dist/` 与 `*.tar` 已在 `.gitignore` 里。
+- **平台只在 `docker build` 阶段钉死**：`docker build --platform linux/amd64`（由 `deploy/build.sh` 调用）。这是唯一真正决定镜像架构的环节；`compose.yaml` 里的 `platform` 只是运行期保险。
 - **`docker save` / `docker load` 一律不传 `--platform`**：该参数需要 API 1.48（Engine v28），服务器 API 实测 1.45，传了会因未知参数直接失败。
-- **基础镜像以镜像 tar 形式从外部带入服务器并 `docker load`**；介质传输对象由「应用镜像 + 依赖镜像」收缩为「基础镜像 tar」。
-- 必须物理抵达服务器的镜像共**三个**：`python:3.13-slim-trixie`（构建期）、`ghcr.io/astral-sh/uv:0.12.20`（构建期）、`postgres:17`（运行期）。
-- 构建输入（`Dockerfile`、`pyproject.toml`、`uv.lock`、`src/`、`migrations/`、`compose.yaml`、`.env`）必须送上服务器（以及交付脚本自身：`deploy/migrate.sh`、`deploy/run.sh`、`deploy/check_archive.py`、`deploy/README.md`）；`migrations/` 必须在内——应用镜像要带迁移定义（`Dockerfile` 的 builder 与 runtime 两阶段各一处 `COPY`）；宿主**没有 `git`**，只能靠 `rsync` / 归档传输。
+- **构建期基础镜像按 digest 钉死在 `Dockerfile` 的 `FROM` ARG 里**（所有者裁决）：tag 会漂——`python:3.13-slim` 一个月内 glibc 从 2.36 跳到 2.41，codename tag 同样会漂；钉 digest 才能让重建结果可复现。代价是基础镜像的安全更新**必须人工复核新 digest、改 Dockerfile、重建镜像**才会进入（本来也要人工评估）。`postgres:17` 不在 Dockerfile 里，它的字节由 tar 固定，digest 只记进交付清单——compose 里**不**按 digest 写，因为本地构建的镜像没有 RepoDigest，载入后按 digest 解析有落空风险。
+- 必须送上服务器的是：**应用镜像 tar + `postgres:17` tar（各带 `.sha256` 旁路文件）、`compose.yaml`、`.env`、`deploy/` 下的脚本与 `deploy/README.md`**。`Dockerfile` / `src/` / `migrations/` / `pyproject.toml` / `uv.lock` **不必送上服务器**：它们已烘进应用镜像（`migrations/` 在镜像内，迁移用 `docker compose run --rm app` 跑）。宿主**没有 `git`**，只能靠 `rsync` / 归档传输。
 - 交付前必须做**单平台归档自检**：tar 必须是单平台 `linux/amd64`、**不含 image index / manifest list、不含 attestation**。自检**不依赖 Docker、只用 Python 标准库**，在 tar 进入服务器之前执行。
 - sha256 旁路文件格式固定为 `"<hash>  <name>"`（**两个空格**）+ **LF 换行**；CRLF 会让 `sha256sum -c` 失败。
 - **运行期禁止 uv 同步，由镜像 `ENV UV_NO_SYNC=1` 单点保障**：runtime 的 `.venv` 是构建期 `uv sync --frozen --no-dev` 装好的，而 `uv run` 默认会同步**含 dev 组**的项目环境——离线 / 隔离环境里必然去外网取包而失败（撞 `AGENTS.md` §8 第 5 条「运行时不得依赖任何外部网络」）。故镜像 runtime 阶段设 `ENV UV_NO_SYNC=1`，靠它单点覆盖「迁移命令」（`deploy/migrate.sh`）与「镜像默认 `CMD`」两条路径；交付脚本**刻意不重复写 `--no-sync`**，迁移命令保持本册方法性结论段已记录的字面形状。反面提醒：`UV_NO_DEV=1` **不是**修法——它只少装 dev 组，uv 仍会去外网解析构建后端。`.venv` 不完整时的报错（`Failed to spawn` / `Failed to download` + dns error）由 `deploy/migrate.sh` 的失败分类④判读，修复方向是回有网构建机重建镜像，不是在服务器上补装。
@@ -28,12 +29,12 @@
 
 **镜像选型**
 
-- 生产基础层锁定 **`python:3.13-slim-trixie`**：**必须锁 codename tag，不用浮动的 `python:3.13-slim`**——它已经在一个月内从 bookworm（glibc 2.36）漂到 trixie（glibc 2.41），两次构建可能产出不同 ABI 的镜像。
-- 锁 codename 的代价：基础镜像的安全更新**不会自动进入**，需要人工定期评估并重建。
+- 应用镜像基础层锁定 **`python:3.13-slim-trixie`**：**必须锁 codename tag，不用浮动的 `python:3.13-slim`**——它已经在一个月内从 bookworm（glibc 2.36）漂到 trixie（glibc 2.41），两次构建可能产出不同 ABI 的镜像。
+- 锁 codename、并进一步**按 digest 钉死**的代价：基础镜像的安全更新**不会自动进入**，需要人工定期评估、复核新 digest、改 Dockerfile 再重建。
 - 构建阶段使用 uv 官方镜像 **`ghcr.io/astral-sh/uv:0.12.20`**，只从中取 `/uv` 与 `/uvx` 两个二进制。
 - 运行镜像**保留 uv**：数据库迁移要在服务器上以 `uv run alembic` 执行，服务器上不能临时安装工具。
 - 镜像架构固定 `linux/amd64`；`compose.yaml` 里的 `platform: linux/amd64` 只是**运行期保险**，不决定架构。
-- **各基础镜像 tag 的 digest 会随时间漂移，写进脚本前必须重新复核**（当前观测值见「实测证据」；见「未定项」D1）。
+- **基础镜像 tag 的 digest 仍会随时间漂移**：`Dockerfile` 里钉的是**冻结值**，升级基础层时必须重新复核新 digest 再改那一行（当前观测值见「实测证据」；读数取自经 registry mirror 的拉取，见「已知风险」）。
 - **预演的边界（保留的有效结论）**：预演**不能**证明镜像自身的 glibc 兼容性（容器自带 glibc，与宿主 glibc 2.28 无关）；RHEL 8 用户态 ABI 只需确认交付脚本用到的工具链与目标同代。
 
 **服务器侧硬约束**
@@ -48,21 +49,23 @@
 
 - 备份：停机后打包数据目录 `./data/postgres`；**热备必须用 `pg_dump`，不要直接拷正在写入的数据目录**。
 - 回滚 = 改 `VS_EMAIL_FORWARDING_IMAGE` 成上一个版本 tag 再重启，**不需要重新构建**；若新版本含破坏性迁移，需**单独**执行 `alembic downgrade`，不能只回滚镜像。
+- 回滚**刻意不脚本化**（所有者裁决）：动作只有两步，而第二步是否执行取决于「本次是否含破坏性迁移」——脚本判错会把库降级到与镜像不匹配的版本，代价高于省下的那两条命令。回滚步骤由交付时逐次说明，不落 `deploy/rollback.sh`。
 - 镜像 tag 是版本化的：服务器上建议至少保留最近两个版本的镜像与交付 tar。
 
 **已知风险（登记，不在本册解决）**
 
 - 宿主配置的 yum 源版本与宿主发行版（8.2）不匹配，安装宿主包时可能造成**未授权的局部升级**（见「未定项」）。
-- 基础镜像 tar「由哪台机器、用什么工具产出」**未定**（见「未定项」）。
+- 基础镜像 digest 的读数取自**经 registry mirror 的拉取**（开发机 `registry-1.docker.io` 被 DNS 污染，Docker Hub 的镜像必须走 mirror；`ghcr.io` 直连可达）：mirror 只保证传输完整性，**不提供来源担保**。钉进 `Dockerfile` 的 digest 若要当作供应链依据，需另找一条能直达官方源的路径复核。
 - 服务器上那一版 Docker 处于**无官方支持状态**，且是否存在可升级路径未确认（见「未定项」）。
 
-**待实现脚本必须保留的方法性结论（原 deploy/ 脚本的有效部分）**
+**脚本必须保留的方法性结论（交付链脚本的判据出处）**
 
 - **`docker load` 之后必须逐 tag `inspect` 复检架构**：预期 tag 从 `docker load` 输出的 `Loaded image: ` 前缀枚举，任一 tag 不是 `linux/amd64` 即判定失败并以非 0 退出。
 - **归档自检必须同时支持两种 tar 布局**：OCI 布局（归档内有 `index.json`）与 legacy docker-archive 布局（归档内有 `manifest.json`）。
-- **校验完整性时先 `cd` 到 tar 所在目录再 `sha256sum -c --status`**；旁路文件缺失时打印实算 hash 供人工比对——这是**降级路径，不是直接失败**。
-- **归档自检必须在生成 `.sha256` 旁路文件之前执行**；自检工具的退出码语义固定为 `0` 通过 / `1` 归档不合格 / `2` 用法或读取错误。
-- **归档自检必须显式指定期望的基础镜像个数**（新链路下是 **3 个**）；旧的「默认 3 / 含预演按 4 计」那套参数语义已随预演环境一起作废，不得沿用。
+- **校验完整性时先 `cd` 到 tar 所在目录再 `sha256sum -c --status`**；旁路文件缺失时打印实算 hash 供人工比对——这是**降级路径，不是直接失败**。旁路文件里必须是**文件名**而不是路径（先 `cd` 再 `sha256sum`），否则服务器会按产出机的绝对路径去找文件。
+- **归档自检必须在生成 `.sha256` 旁路文件之前执行**；自检工具的退出码语义固定为 `0` 通过 / `1` 归档不合格 / `2` 用法或读取错误。`deploy/package.sh` 已把这条顺序固化成代码：自检不通过就删掉 tar、且不生成旁路文件。
+- **归档自检必须显式指定期望的镜像个数**：新链路下**每个 tar 恰好一件**（应用镜像 tar 与 `postgres:17` tar 各一次调用，`--expected-images 1`），件数由 `deploy/package.sh` 控制，不做成可传错的入参；旧的「默认 3 / 含预演按 4 计」那套参数语义已随预演环境一起作废，不得沿用。
+- **交付物命名与落点固定**：产出目录 `dist/`；`<镜像名>-<版本>.tar` 与其 `.tar.sha256`，文件名一律 ASCII；每件交付物在生成后必须立刻 `sha256sum -c --status` 自校验一次；`dist/` 与 `*.tar` 不进版本库。
 - **迁移用 `docker compose run --rm app uv run alembic -c migrations/alembic.ini upgrade head`**：用 `run --rm` 而**不是**对跑着的容器 `exec`；**不要加 `--no-deps`**，让 compose 先把数据库等到 healthy；`migrations/` 里还没有版本时首次迁移**必然失败、属预期**，脚本必须把这条判别法打印出来。
 - **`docker compose up -d` 返回 0 不等于服务可用**：启动要同时做 `docker compose up -d` 与 `/healthz` 轮询才算成功（默认 **30 次 × 2s**，可用环境变量覆盖）；从 `.env` 解析端口时要容忍 CR、引号与行尾注释；宿主没有 `curl` 时降级为在容器内用 Python 标准库探测。
 - **介质传输渠道要求**：**可续传、不得改动二进制内容、文件名一律 ASCII、`.env` 单独传输**。
@@ -79,13 +82,17 @@
 - **由上述实测直接推出**：`--platform` 不可用（1.45 < 1.48）；**Engine ≥ 25 才能读 OCI 归档**（moby v25.0.0 起 `docker save` 产出 OCI 格式），26.1.3 满足；**classic image store 载不动 image index / manifest list**。
 - **服务器宿主支持状态**：Docker 官方安装文档只列 CentOS Stream 9 / 10，**已不再支持 CentOS 8 作为宿主**；该 Engine 构建于 2024-05-16，容器运行时的安全补丁停在该时点。
 - **内网源三类覆盖**（生产环境实测）：yum / RPM 源**可用**——`makecache` 成功、实际安装过包，覆盖 CentOS vault、EPEL 8、Rocky 9、Alma 9 等 **30+ 仓库**；PyPI 源**可用且覆盖完整**——代理公共 PyPI、真实安装过 wheel 成功；Docker 镜像**内容完整但客户端无法直连消费**——多个官方镜像的 manifest 可访问，但该源以路径形式暴露、无独立端点，不符合 registry 协议，直连报 **content-type 解析错误**（已知限制，未解决）。
-- **开发机（CentOS 8 Linux 虚拟机）能跑 Docker**，版本与生产对齐（26.1.3 / overlay2 / cgroup v1），交付链需要的三个基础镜像均已实测拉取成功 ⇒ **两侧都具备构建能力**；本机侧读数见 `docs/research/05-dev-and-build-environment.md`。
+- **开发机（CentOS 8 Linux 虚拟机）能跑 Docker**，版本与生产对齐（26.1.3 / overlay2 / cgroup v1），交付链需要的三个基础镜像均已实测拉取成功；**它因此被定为交付链的产出方**（镜像在本机构建与打包，服务器只消费 tar）。本机侧读数见 `docs/research/05-dev-and-build-environment.md`。
 - **浮动 tag 漂移**（registry 实测）：`3.13.5-slim` = Debian 12 bookworm / glibc 2.36，`3.13.6-slim` = Debian 13 trixie / glibc 2.41，tag 名一个字没变。
-- **已观测 digest（写进脚本前必须重新复核）**：`ghcr.io/astral-sh/uv:0.12.20` = `sha256:100047e74f30778ab704942321a09750d6158739573ff58bf3924085cc6cd2d8`（开发机实测）。
-- **`python:3.13-slim-trixie` 的当前 digest = `sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f`（开发机实测）**。锁 codename 的 tag 同样会漂，**写进交付脚本前一律重新复核**；任何册里的 digest 都不是可直接引用的现值。
+- **已钉进 `Dockerfile` 的基础镜像 digest（2026-10-16 在开发机复核，三处 `docker pull` 均报 up to date）**：`python:3.13-slim-trixie` = `sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f`；`ghcr.io/astral-sh/uv:0.12.20` = `sha256:100047e74f30778ab704942321a09750d6158739573ff58bf3924085cc6cd2d8`；`postgres:17` = `sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3`（postgres 不钉进 Dockerfile，只记进交付清单）。**升级基础层时必须重新复核**——这些读数会漂，册里的值不是现值。
+- **应用镜像在开发机构建成功、且能完成 tar 往返**（2026-10-16，阶段 6 `T-49` 的端到端实测，全部在开发机上跑完）：`deploy/build.sh` 6.8 秒（全缓存）产出 `vs-email-forwarding:0.1.0`（image id `sha256:4516b19d…`，251 MB，`linux/amd64`）；`deploy/package.sh` 5.4 秒产出 `vs-email-forwarding-0.1.0.tar`（269,160,448 字节，sha256 `087105cc11b7…`）与 `postgres-17.tar`（461,118,464 字节，sha256 `3aa421468dbf…`），两件都通过了 `check_archive.py` 的单平台自检，`sha256sum -c --status` 也两件都过。**删掉本地镜像后**用 `docker load -i` 从 tar 恢复，逐 tag `inspect` 仍是 `linux/amd64`，且应用镜像 image id 与构建时**完全一致**。随后 `deploy/migrate.sh`（已到 head，幂等复跑无副作用）+ `deploy/run.sh` 起服务，`GET /healthz` 返回 200（约 2 秒）。
+- **运行期零外部网络：开发机上的实测形态**（同上一次实测）：观察窗口内应用容器 `/proc/net/tcp` 里**只有到 PostgreSQL 的连接**（对端 `192.168.0.2:5432`）与自身的 `8000`、Docker 内嵌 DNS `127.0.0.11`，**没有任何公网或内网源连接**。注意这不能替代服务器上的验证——开发机本身有公网，能证明的是「服务不主动往外连」；「隔离环境里第一次启动会不会去找源」由 `AC-20` 在服务器上验。
 
 ## 已否决方向
 
+- **在 CentOS 8 生产服务器上本地构建应用镜像** —— 原因：构建期 `uv sync` 需要包源，而服务器与公网隔离、仓库里没有任何内网源配置，该路径**从未跑通**（服务器 `docker images` 至今为空）；且生产机要同时跑服务，构建峰值资源未实测。已由**开发机构建 + 应用镜像 tar 带入**取代。
+- **把 `python` / `uv` 两个构建期基础镜像也以 tar 带入服务器** —— 原因：构建不在服务器发生，这两个镜像只在构建机用得到，带进去只是多传约 174MB 且无人消费。
+- **把回滚步骤脚本化（`deploy/rollback.sh`）** —— 原因：回滚动作只有两条命令，而第二条是否执行取决于「本次是否含破坏性迁移」；脚本判错会把库降级到与镜像不匹配的版本，代价高于省下的两条命令。维持文档手动两步。
 - 「生产环境不接触任何网络源」这一旧前提 —— 原因：生产环境实测可达内网 yum / PyPI 源；真实约束是**运行时不得依赖任何外部网络**，把它写成「接触不到任何源」会掩盖构建期可用内网源这一事实。
 - 给旧 Windows 开发机开启嵌套虚拟化 —— 原因：需改宿主 hypervisor 配置，不可控、不在项目权限内。**该机器已弃用。**
 - 服务器直接从内网 Docker 源 `pull` 基础镜像 —— 原因：该源路径式暴露、无独立端点，与 registry 协议不符，直连报 content-type 解析错误（已知限制，未解决）。
@@ -103,20 +110,14 @@
 - `compose.yaml`：生产编排——`app` 与 `postgres:17` 两个服务、应用镜像由 `${VS_EMAIL_FORWARDING_IMAGE}` 指定（回滚改这里）、`platform: linux/amd64`（运行期保险）、数据卷 `./data/postgres:/var/lib/postgresql/data`、postgres 健康检查、自定义 bridge 网络、不映射 5432。
 - `.env.example`：全部可变配置的占位，含 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `VS_EMAIL_FORWARDING_IMAGE` / `HTTP_PORT`；真实 `.env` 永不进版本库。
 - `docs/open-questions.md`：**未定项的唯一清单**（本册只列指针）。
-- `deploy/`：职责 README 与三件脚本**已落地**——`deploy/README.md`（职责与用法要点、判据出处指针）、`deploy/migrate.sh`（迁移入口）、`deploy/run.sh`（起服务 + `/healthz` 探活）、`deploy/check_archive.py`（交付前单平台归档自检，不依赖 Docker、只用 Python 标准库）。以下落地位置**待实现**，判读标准与约束以本册为准：
-  - 镜像构建脚本（`docker build --platform linux/amd64`，在服务器上执行；**要不要改到开发机构建留到开发完成后定**）——**待实现**。
-  - 基础镜像 tar 的导出与带入（含 `docker load` 流程与 sha256 旁路文件的生成与校验，两个空格 + LF）——**待实现**。
-  - 产出方打包脚本——**待实现**，与 D13 同题（「哪台机器、什么工具产出」未定），随 D13 推迟。
+- `deploy/`：职责 README 与**五件脚本已落地**——`deploy/README.md`（职责与用法要点、判据出处指针）、`deploy/build.sh`（**产出侧**：在开发机构建应用镜像 + 架构复检）、`deploy/package.sh`（**产出侧**：`docker save` → 归档自检 → 生成 sha256 旁路文件 → 交付清单）、`deploy/check_archive.py`（交付前单平台归档自检，不依赖 Docker、只用 Python 标准库）、`deploy/migrate.sh`（迁移入口）、`deploy/run.sh`（起服务 + `/healthz` 探活）。产出物落 `dist/`（不进版本库）。
+- **带入与 `docker load` 仍是手动步骤**（`deploy/package.sh` 只打印命令与自检结论），刻意不脚本化：介质渠道与交付时机由所有者掌握，脚本里不写服务器地址、账号或凭据。
 
 ## 未定项
 
 详见 `docs/open-questions.md`：
 
-- D1 各基础镜像 tag 的 digest 需在写进脚本前复核
-- D2 部署脚本的具体形态（消费侧三件已落地；仍未定的是镜像构建脚本 / 基础镜像 tar 的打包与带入（含 sha256 旁路文件）/ 产出方打包脚本，与 D13 同题）
 - D4 备份与日志采集、保留期
 - D8 服务器侧 Docker 是否有可升级路径
 - D12 宿主 yum 源版本与发行版错配的风险
-- D13 基础镜像 tar 由哪台机器、用什么工具产出（与「镜像在哪一侧构建」同题，留到开发完成后再定）
-- D14 产出方 CLI ≥ 28 时 `docker save` 是否可放宽使用 `--platform`（现行结论仍是「一律不传」）
-- 镜像构建改到开发机的可能性 —— **留到开发完成后再定**（本册不列为当前待决项，以免交付链在开发期反复改写）
+- D14 `docker save` 是否可放宽使用 `--platform`（现行口径仍是「一律不传」；两侧 Engine 都是 26.1.3 / API 1.45，**当前不构成真实选择**——要让这条有意义，先得有 Engine ≥ 28 的一侧，那要回到 D8）

@@ -76,7 +76,7 @@ skills/
 | `add-review-provider` | 新增一个安全审查供应商实现（本地规则 / 外部审查服务），接入到审查出站流与审查回复流 | "审查供应商接入" |
 | `add-smtp-provider` | 新增一个发信通道适配器（企业邮箱 / 自建 MTA / 第三方 API） | "发信通道适配器" |
 | `add-db-migration` | 新增一次 Alembic 迁移并配套测试与文档 | "数据模型" |
-| `offline-release-and-deploy` | 完整走一遍交付：在 CentOS 8 生产服务器上**本地构建镜像** → 基础镜像以 **tar 带入并 `docker load`** → 迁移 → 启动。注意：`deploy/` 现有 4 件（`migrate.sh` / `run.sh` / `check_archive.py` + 职责 `README`），**交付链整体仍未落地**（镜像构建脚本、基础镜像 tar 的导出与带入含 sha256 旁路、产出方打包脚本），其形态见 `docs/open-questions.md` D2 与 D13（**此处为摘要，完整未定项以 `docs/open-questions.md` D2 全文为准**） | "交付与部署" |
+| `offline-release-and-deploy` | 完整走一遍交付：在**开发机**上构建应用镜像（`deploy/build.sh`）→ 打包（`deploy/package.sh`：导出 + 归档自检 + sha256 旁路文件）→ **tar 手动带入并 `docker load`** → 迁移 → 启动。注意：`deploy/` 现有 6 件（`build.sh` / `package.sh` / `migrate.sh` / `run.sh` / `check_archive.py` + 职责 `README`），带入与 `docker load` **刻意不脚本化**（脚本里不写服务器地址与凭据）；结论与约束见 `docs/research/01-delivery-and-deploy.md`（**此处为摘要**） | "交付与部署" |
 
 **注意**：上表的 spec 名称只是计划占位，实际编号与 slug 以 `specs/` 下真实创建的目录为准。落地每个 skill 时，必须先把上表更新为真实路径。
 

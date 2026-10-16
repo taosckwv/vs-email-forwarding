@@ -2,16 +2,16 @@
 # =============================================================================
 # vs-email-forwarding 生产镜像
 #
-# 用途（见 docs/research/01-delivery-and-deploy.md）：镜像**在目标服务器（CentOS 8）上本地构建** ->
-#       docker compose up -d；基础镜像以镜像 tar 形式从外部带入并 `docker load`。
-# 环境前提：**与公网隔离、可达内网镜像源**——构建期可达内网 PyPI 源（装 wheel）、
-#       宿主可达内网 yum 源；**运行时不得依赖任何外部网络**。
+# 用途（见 docs/research/01-delivery-and-deploy.md）：镜像**在开发机上构建**（deploy/build.sh）
+#       -> 应用镜像以 tar 形式带入服务器并 `docker load`（deploy/package.sh）-> docker compose up -d。
+#       **服务器不执行任何构建。**
+# 环境前提：服务器**与公网隔离、可达内网镜像源**——宿主可达内网 yum 源；**运行时不得依赖
+#       任何外部网络**。构建机是开发机，它**有公网**，构建期从 PyPI 装 wheel。
 # 构建产物里 **不含** 任何需要联网才能启动的东西（见 AGENTS.md §8.5）。
 #
 # 需要 BuildKit（本文件用了 --mount=type=cache 与多阶段 ARG）：
-#   构建在目标服务器（CentOS 8 / Docker 26.1.3）上进行，BuildKit 是该版本 Docker
-#   的默认构建器，无需额外开关；本机的开发机装不了 Docker Desktop（见 docs/research/01-delivery-and-deploy.md），
-#   也不在开发机构建。
+#   构建在开发机（CentOS 8 / Docker 26.1.3）上进行，与生产**同版本、同 image store 模式**；
+#   BuildKit 是该版本 Docker 的默认构建器，无需额外开关。
 # =============================================================================
 
 # --- 基础镜像 tag 的取法（两处都锁死，不用 latest、不用裸 slim） --------------
@@ -22,14 +22,15 @@
 #       2025-07-23 的 3.13.5-slim = Debian 12 bookworm（glibc 2.36）
 #       2025-08-14 的 3.13.6-slim = Debian 13 trixie  （glibc 2.41）
 #     tag 名字一个字没变，glibc 从 2.36 跳到 2.41。
-#   * 本项目是「镜像在目标服务器上本地构建，基础镜像以 tar 带入」（见
-#     `docs/research/01-delivery-and-deploy.md`）：基础镜像 tar 由外部机器产出后带入，浮动 tag 意味着
-#     今天带入的与下次带入的可能是两套 ABI，而现场无法判断差异从哪来、
-#     更无法回退重建。所以 codename 必须钉死。
+#   * 本项目在**开发机**上构建、应用镜像以 tar 带入（见
+#     `docs/research/01-delivery-and-deploy.md`）：基础层在构建机上是浮动的——今天构建的与下次
+#     构建的可能是两套 ABI，而现场无法判断差异从哪来、更无法回退重建。
+#     所以 codename 必须钉死，并进一步按 digest 钉死（见下方 ARG）。
 #   * 为什么不用 latest：latest 会在无通知的情况下升级 Python 小版本，
 #     门禁跑过的解释器与生产跑的可能不是同一个。
-#   * digest 需在固化前自行复核（2026-09-29 抓到的 amd64 digest 为
-#     sha256:37134a49d21d2120e4c4d73bb76f8a4ab9aef31f096f7ec2ead48c2feead4332）
+#   * digest **按所有者裁决钉死**（见下方 ARG），2026-10-16 复核过一次读数：
+#     amd64 的 manifest list digest = sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f。
+#     代价：基础镜像的安全更新**不会自动进入**——升级时要人工复核新 digest、改这一行、重建镜像。
 #   * 保守备选：python:3.13-slim-bookworm（Debian 12 / glibc 2.36）。若担心 trixie
 #     上某些二进制轮子覆盖不全，用它是更稳的选择，但要在 `docs/research/01-delivery-and-deploy.md` 里写明这是**有意的
 #     保守选择**，而不是随手写的一个 tag。
@@ -38,23 +39,24 @@
 #     真正的理由是两条：一是 musl 与生产宿主的 glibc 是两套 libc ABI，出问题时
 #     排查面翻倍；二是 psycopg 官方明确说二进制包是 best-effort
 #     （"Binary packages are produced on a best-effort basis"），离线环境里
-#     一旦某个版本缺轮子就要临时处置（服务器可达内网源、可在现场构建，但缺轮子
-#     仍意味着要么换版本、要么就地编译，排查面会变大）。
+#     一旦某个版本缺轮子就要临时处置（构建机有公网、可随时重建镜像，但缺轮子仍意味着
+#     要么换版本、要么就地编译，排查面会变大）。
 #
-# 镜像架构固定 linux/amd64，且**只在构建期钉死**：由服务器侧构建脚本传
-# `docker build --platform linux/amd64`（构建脚本尚未实现，见 docs/open-questions.md D2），
-# compose 服务里的 platform 字段只是运行期保险。
+# 镜像架构固定 linux/amd64，且**只在构建期钉死**：由产出侧构建脚本传
+# `docker build --platform linux/amd64`（`deploy/build.sh`），compose 服务里的 platform
+# 字段只是运行期保险。
 #   * `docker save` / `docker load` **不带** `--platform`：该参数需要 API 1.48
 #     （Engine v28），而生产服务器实测为 **26.1.3 / API 1.45**，传了会因未知参数直接失败。
 #   * 平台改由「保存前校验 + 载入后校验」保证：镜像归档在进入服务器之前，必须先用**不依赖 Docker**
-#     的工具自检（单平台 linux/amd64、不含 image index / manifest list、不含 attestation）。
+#     的工具自检（`deploy/check_archive.py`，由 `deploy/package.sh` 自动调用）——
+#     单平台 linux/amd64、不含 image index / manifest list、不含 attestation。
 #     理由与被否决方案见 docs/research/01-delivery-and-deploy.md。
 #
 # ghcr.io/astral-sh/uv:0.12.20
 #   * uv 官方容器镜像，0.12.20 是正式发布版本（非 pre-release），已核实该 tag
 #     在 ghcr 上存在。这里只用它拷 /uv 与 /uvx 两个二进制，不把它当基础层。
-ARG PYTHON_IMAGE=python:3.13-slim-trixie
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.20
+ARG PYTHON_IMAGE=python:3.13-slim-trixie@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.20@sha256:100047e74f30778ab704942321a09750d6158739573ff58bf3924085cc6cd2d8
 
 # =============================================================================
 # 阶段 0：uv 二进制来源（只提供 /uv 与 /uvx）
@@ -65,8 +67,9 @@ FROM ${UV_IMAGE} AS uv-source
 # 阶段 1：builder —— 只负责把依赖装进 /app/.venv
 # 为什么要多阶段：编译期产物与缓存（编译器、头文件、uv 下载缓存、wheel 构建中间
 # 文件）都不该进运行镜像。运行镜像只保留 .venv + src，镜像更小、攻击面更小。
-# 注意：应用镜像已不再以 tar 形式外传（现在外传的是**基础镜像** tar，见
-# docs/research/01-delivery-and-deploy.md），所以「镜像更小」的理由只剩攻击面与构建/加载耗时，与传输介质无关。
+# 注意：应用镜像**就是外传介质**（每次发版都以 tar 带入服务器，见
+# docs/research/01-delivery-and-deploy.md），而 python / uv 两个构建期基础镜像不再外传
+# （构建发生在开发机）。因此「镜像更小」的理由包含**传输体积**与攻击面两项。
 # =============================================================================
 FROM ${PYTHON_IMAGE} AS builder
 
@@ -93,8 +96,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # --frozen：严格按 uv.lock 安装，绝不解析/改写 lock。
-#   构建与运行同在目标服务器上，lock 一旦被就地改写，
-#   实际安装的依赖与门禁跑过的那一份就不是同一份了。
+#   构建在开发机上、依赖由版本库的 uv.lock 固定；lock 一旦被就地改写，
+#   构建产出与门禁跑过的那一份依赖就不是同一份了。
 # --no-install-project：本层还不拷 src，装不了项目本体，先只装第三方依赖。
 # --no-dev：运行镜像不装 dev 依赖（ruff/mypy/pytest 等）。
 RUN --mount=type=cache,target=/root/.cache/uv \

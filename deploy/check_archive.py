@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""交付前归档自检：只读 tar，判断基础镜像归档是不是「单平台 linux/amd64」。
+"""交付前归档自检：只读 tar，判断交付镜像归档是不是「单平台 linux/amd64」。
 
 为什么需要这一步（结论真源：docs/research/01-delivery-and-deploy.md 的「结论」段）：
   * 生产服务器实测 CLI / Engine 均为 26.1.3、**API 1.45**，而 `docker save` / `docker load`
@@ -7,8 +7,8 @@
     所以平台改由「构建期钉死 + 归档进服务器之前自检 + 载入之后逐 tag 复检」保证；
   * Engine 26 默认 **classic image store**，它**载不动 image index / manifest list**：
     归档里一旦带了 manifest list 或 attestation，服务器 `docker load` 就会失败；
-  * 本脚本**不依赖 Docker、只用 Python 标准库**，因此可以在产出方（哪台机器尚未定，
-    D13）与服务器之外的任意一台装了 Python 的机器上执行，且不联网。
+  * 本脚本**不依赖 Docker、只用 Python 标准库**，因此可以在产出方（开发机，
+    见 docs/research/01-delivery-and-deploy.md）执行，且不联网。
 
 与相邻脚本的分工（**不要在本脚本里重复它们**）：
   * 本脚本 = 归档**进服务器之前**的结构自检。**必须在生成 `<tar>.sha256` 旁路文件之前执行**——
@@ -16,18 +16,19 @@
   * `deploy/run.sh` = 落地的**服务器侧**执行：`up -d` 前对应用镜像**与 compose 依赖的
     镜像（含基础镜像 postgres:17）**逐个复检存在性与架构（`docker image inspect`）、
     解析 `.env`，`up -d` 后轮询 `/healthz`；它不读 tar、也不做本自检。
-  * **tar 的导出、带入与 `docker load` 流程本期不在范围**（属 D2-乙，随 D13 推迟；
-    见 docs/open-questions.md）。所以本脚本不读旁路文件、不校验传输完整性——
-    那是载入链路一侧的事。
+  * `deploy/package.sh` = 产出方的**导出与打包**：`docker save` 产出 tar、跑本自检、
+    再生成 `<tar>.sha256` 旁路文件（**顺序固定：自检在前、旁路文件在后**），并写交付清单。
+    带入与 `docker load` 仍是手动步骤（脚本只打印命令）；载入之后的逐 tag 复检由
+    `deploy/run.sh` 在服务器侧做。本脚本不读旁路文件、不校验传输完整性——那是载入链路一侧的事。
 
 判读标准：
   通过 = 两种布局都支持（OCI 的 `index.json` / legacy 的 `manifest.json`）；归档内没有
          image index / manifest list 条目、没有 attestation 条目、**每个条目都能判定出
          平台且都是 linux/amd64**（index 无 `platform` 时以配置 blob 的 `os/architecture`
          为准；两者都读不出即「平台不可判定」，判失败——**不核对任何架构不许放行**），
-         且镜像条目数**恰好等于** `--expected-images`（默认 3）。
-  失败 = 出现上面任意一种情况。条目数少了也判失败：归档本该装满本次要带的基础镜像，
-         缺一个就是漏带，不能只当成警告。
+         且镜像条目数**恰好等于** `--expected-images`（默认 1：一个 tar 一件镜像）。
+  失败 = 出现上面任意一种情况。条目数少了也判失败：归档本该装满本次要带的那一件镜像，
+         缺了就是漏带，不能只当成警告。
 
 退出码（语义固定，不要改）：
     0 = 通过
@@ -35,12 +36,12 @@
     2 = 用法或读取错误
 
 用法：
-    python3 deploy/check_archive.py dist/base-images.tar
-    python3 deploy/check_archive.py dist/base-images.tar --expected-images 3
+    python3 deploy/check_archive.py dist/vs-email-forwarding-0.1.0.tar --expected-images 1
+    python3 deploy/check_archive.py dist/postgres-17.tar --expected-images 1
 
-⚠️ 本脚本**不内嵌任何基础镜像 tag 的 digest**：digest 会随时间漂移，册里记的观测值
-   一律不是现值，写进脚本就等于埋一个必然过期且无人复核的常量。需要核对 digest 时，
-   请按 docs/research/01-delivery-and-deploy.md 的要求在写进交付记录**之前重新复核**。
+⚠️ 本脚本**不内嵌任何镜像的 digest**：它只判平台与条目数。digest 的**冻结**发生在两处——
+   `Dockerfile` 的 `FROM`（按 digest 钉死基础层）与交付清单（交付时实测记录，见
+   `deploy/package.sh`）；任何册里记的观测值都不是现值，不要拿它当常量用。
 """
 
 from __future__ import annotations
@@ -57,8 +58,9 @@ from typing import Any
 #: 本自检只做「确认」，不会把镜像变成 amd64。
 TARGET_PLATFORM = "linux/amd64"
 
-#: 本次交付必须装满的基础镜像个数：python（构建期）+ uv（构建期）+ postgres:17（运行期）。
-EXPECTED_IMAGES = 3
+#: 每个交付 tar 里必须装满的镜像个数：一个 tar 一件（应用镜像 / postgres:17 各一件）。
+#: 件数由 `deploy/package.sh` 控制，这里只是**默认值**；调用方仍应显式传 `--expected-images`。
+EXPECTED_IMAGES = 1
 
 #: 退出码语义固定（见模块 docstring）。
 EXIT_OK = 0
@@ -433,7 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="check_archive.py",
         description=(
-            "交付前归档自检：确认基础镜像 tar 是单平台 linux/amd64"
+            "交付前归档自检：确认交付镜像 tar 是单平台 linux/amd64"
             "（不依赖 Docker，只用 Python 标准库）。"
         ),
         epilog=(
