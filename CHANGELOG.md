@@ -19,6 +19,7 @@
   - 真实依赖集成测试族：每次运行自建运行级隔离 PostgreSQL 测试库并跑真实迁移，配进程内假 SMTP（捕获线上字节）、假 IMAP 与可替换假审查；数据库语义不用 mock。
   - 本地门禁配套：启动即校验三判据、跨层静态检查（接口契约一致、三方取值一致、抢占写法唯一、配置只经配置层读）、`docs/api-contract.yaml` 作为对外契约唯一真源。
   - 交付链（产出侧）：应用镜像改在**开发机**上构建（`deploy/build.sh`，`docker build --platform linux/amd64`，并显式拒绝 `DOCKER_BUILDKIT=0`），构建期基础镜像按 digest 钉死在 `Dockerfile` 里；`deploy/package.sh` 负责导出、归档自检、生成 sha256 旁路文件与交付清单（`dist/`，不进版本库）。带入与 `docker load` 仍是手动步骤（刻意不脚本化）。
+  - 文档三册：`docs/packaging.md`（产出侧怎么打包）、`docs/deployment.md`（介质到手后怎么部署安装、发版、回滚、排障）、`docs/api.md`（对外接口有哪些、怎么调、怎么判读）。
 
 ### 变更
 

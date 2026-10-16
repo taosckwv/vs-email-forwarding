@@ -22,6 +22,9 @@
 | 代码分层与依赖方向（哪一层能调哪一层、两条触发路径怎么走） | `docs/architecture.md` |
 | 代码风格（函数结构、异常、异步、接口层写法的自查与评审清单） | `docs/code-style.md` |
 | 写测试要守什么规则（该写什么、期望值从哪来、怎么评审、pytest 标记约定） | `docs/testing.md` |
+| 对外接口有哪些、怎么调（端点、调用顺序、示例、判读口径） | `docs/api.md`（字段与状态码的逐条定义真源是 `docs/api-contract.yaml`） |
+| 交付物怎么产出（在开发机上构建镜像与打包） | `docs/packaging.md` |
+| 介质到手后怎么装（首次部署、日常发版、回滚、备份、排障） | `docs/deployment.md` |
 | 某特性的设计结论（数据模型、流水线、集成契约、依赖选型） | `specs/<特性>/design.md` |
 
 文档总入口是 `docs/README.md`；**未定项的唯一清单**是 `docs/open-questions.md`。
@@ -83,7 +86,7 @@ bash scripts/dev-up.sh
 | `docs/research/` | **跨特性底座的结论真源**：一册一主题，只写当前结论、实测证据、已否决方向、落地位置、未定项指针 | 决策过程、时间线、被取代的旧结论、派生快照 |
 | `docs/open-questions.md` | **未定项的唯一清单** | 已决定的结论（决定后移入对应主题册或该特性的 `design.md`） |
 | `docs/testing.md` | **测试规范与测试说明的唯一出处**：单测 / 集成测试规则、AI 写测试的作业流程、评审检查表、pytest 标记约定 | 需求与验收标准（属 `specs/`）、逐条 `AC-n` 的测试落点（属该特性的 `plan.md`） |
-| `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`code-style.md`（**代码风格与自查/评审清单的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署说明 | 需求与验收标准（那属于 `specs/`） |
+| `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`code-style.md`（**代码风格与自查/评审清单的唯一出处**）、`configuration.md`（配置项导航）、`api.md`（**接口使用说明**）、`packaging.md`（**产出侧操作说明**）、`deployment.md`（**消费侧操作说明**）、`contributing.md`、`security.md` 的正文 | 需求与验收标准（那属于 `specs/`） |
 | `specs/` | **每个特性一个目录**的需求、设计、计划、任务（`spec.md` / `design.md` / `plan.md` / `tasks.md`，见 §5） | 实现代码 |
 | `skills/` | 可复用的固定流程（见 `skills/README.md`） | 一次性任务说明 |
 | `deploy/` | 部署脚本与交付链的落点（**五件已落地**：产出侧 `build.sh` 构建、`package.sh` 打包 + 归档自检 + sha256 旁路文件；消费侧 `migrate.sh` / `run.sh` / `check_archive.py`。带入与 `docker load` 是手动步骤） | 应用代码 |

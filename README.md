@@ -40,7 +40,7 @@ bash scripts/dev-up.sh                                # 起开发依赖（Postgr
 
 **交付脚本已落地五件**——产出侧 `deploy/build.sh`（构建应用镜像）、`deploy/package.sh`（导出 → 归档自检 → sha256 旁路文件 → 交付清单）；消费侧 `deploy/migrate.sh`（数据库迁移的唯一入口）、`deploy/run.sh`（起服务并以 `/healthz` 探活）、`deploy/check_archive.py`（交付前归档自检）。带入与 `docker load` 是**手动步骤**；判据与约束以 `docs/research/01-delivery-and-deploy.md` 为准，不要擅自另起第二套脚本。
 
-交付链的当前结论（在哪构建、带哪些镜像、产物怎么命名）见 `docs/research/01-delivery-and-deploy.md`。
+交付链的当前结论（在哪构建、带哪些镜像、产物怎么命名）见 `docs/research/01-delivery-and-deploy.md`；**逐步操作说明**见 [`docs/packaging.md`](docs/packaging.md)（打包）与 [`docs/deployment.md`](docs/deployment.md)（带入与部署、发版、回滚）。接口怎么调见 [`docs/api.md`](docs/api.md)。
 
 ---
 

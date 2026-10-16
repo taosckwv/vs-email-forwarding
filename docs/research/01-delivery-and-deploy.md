@@ -111,6 +111,7 @@
 - `.env.example`：全部可变配置的占位，含 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `VS_EMAIL_FORWARDING_IMAGE` / `HTTP_PORT`；真实 `.env` 永不进版本库。
 - `docs/open-questions.md`：**未定项的唯一清单**（本册只列指针）。
 - `deploy/`：职责 README 与**五件脚本已落地**——`deploy/README.md`（职责与用法要点、判据出处指针）、`deploy/build.sh`（**产出侧**：在开发机构建应用镜像 + 架构复检）、`deploy/package.sh`（**产出侧**：`docker save` → 归档自检 → 生成 sha256 旁路文件 → 交付清单）、`deploy/check_archive.py`（交付前单平台归档自检，不依赖 Docker、只用 Python 标准库）、`deploy/migrate.sh`（迁移入口）、`deploy/run.sh`（起服务 + `/healthz` 探活）。产出物落 `dist/`（不进版本库）。
+- `docs/`：**逐步操作说明**两册——`docs/packaging.md`（产出侧：构建与打包的命令顺序、产出物、何时重打、失败判读）与 `docs/deployment.md`（消费侧：首次部署、日常发版、回滚、备份、排障）。两册只写操作与验收口径，判据一律指回本册。
 - **带入与 `docker load` 仍是手动步骤**（`deploy/package.sh` 只打印命令与自检结论），刻意不脚本化：介质渠道与交付时机由所有者掌握，脚本里不写服务器地址、账号或凭据。
 
 ## 未定项
