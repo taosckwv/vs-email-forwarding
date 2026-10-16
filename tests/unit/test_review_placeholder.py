@@ -37,7 +37,7 @@ def _repo_root() -> Path:
     **一级**（``parents[3]``）同样落回真根，标注断言因此读的是**未变异**的
     真文件，不被变异运行误伤。找不到即说明测试脱离了仓库检出，直接失败。
 
-    本函数**有意自包含**、不抽公共 helper：三处同名函数的取根需求不同——本函数锤
+    本函数**有意自包含**、不抽公共 helper：三处同名函数的**锚一处不同、两处相同**——本函数锤
     ``docs/security.md``，`tests/unit/test_openapi_contract.py` 与
     `tests/unit/test_constants_consistency.py` 锤 ``docs/api-contract.yaml``（后者还另需
     `migrations/`）；三处都为在 mutmut 沙箱内**零导入耦合**而各自实现（只用标准库
