@@ -48,12 +48,12 @@
 
 ## 实测证据
 
-- `src/vs_email_forwarding/providers/review/` 目录已建、只有包占位文件；其模块说明已写明「一期审查是**永远通过的空实现**（占位）」。**接口协议已定案**（见 `specs/0001-email-forwarding-service/design.md`），**实现尚未落地**；真实审查将来采用本地规则还是外部审查服务仍未定案——那是一次**替换供应商实现**，不影响调用方。
+- `src/vs_email_forwarding/providers/review/` 的接口协议已定案（见 `specs/0001-email-forwarding-service/design.md`）并已有一期**占位实现**（`always_pass.py`，经 `factory.py` 装配、永远通过）；其模块说明已写明「一期审查是**永远通过的空实现**（占位）」。**真实审查尚未落地**；将来采用本地规则还是外部审查服务仍未定案——那是一次**替换供应商实现**，不影响调用方。
 - `src/vs_email_forwarding/config.py` 已含 `mail_from_address` 与 `reply_to_address` 两个字段（默认值为明显的假值），并保留 SMTP / IMAP 参数与四条业务流间隔字段；配置只从该模块读取。
 - `.env.example` 已含 `MAIL_FROM_ADDRESS` 与 `REPLY_TO_ADDRESS` 两个键，并注明回复将被路由到专用回复邮箱、再由 IMAP 流拉回本服务。
-- `src/vs_email_forwarding/api/v1/` 当前只挂载健康检查路由；投递与回复查询路由的契约见 `spec.md` 与 `specs/0001-email-forwarding-service/design.md`，代码尚未实现，**API 层当前没有任何鉴权依赖项**（这正是「位置已预留、实现未接入」的现状）。
+- `src/vs_email_forwarding/api/v1/` 已挂载健康检查与投递 / 回复查询路由（契约真源 `docs/api-contract.yaml`）；**API 层已按设计预留鉴权位置：`api_router` 上挂着一个当前为空的 `require_auth` 依赖（调用即通过），真实校验尚未接入**（现状真源：`src/vs_email_forwarding/api/v1/dependencies.py` 的模块说明与 `api/v1/__init__.py` 的挂载处）——服务仅内网可达，一期不做鉴权。
 - `docs/security.md` 已把「日志泄露、凭据硬编码、审查绕过、未授权投递、审查结果不可信、隔离约束被破坏、注入类问题」列为威胁类型，并写明一期审查是空实现占位、不要在真实审查接入前把本服务当作内容安全边界。
-- 业务逻辑尚未实现：`providers/`、`flows/`、`service/`、`db/` 下只有包占位文件，当前唯一可用端点是 `/healthz`。
+- 业务逻辑面已实现（阶段 5）：`providers/`、`flows/`、`service/`、`db/` 均已落地并通过门禁；**业务逻辑面的空实现只剩「审查」一处**（见上一条；**鉴权同样是一期刻意不做、只预留位置的占位**，见前一条与 `docs/research/03-dependencies-and-toolchain.md` 的口径——**全仓空实现不止「审查」一处**）。
 - 门禁全绿（`ruff format --check`、`ruff check`、`mypy src`、`pytest`、`mutmut`），即「空实现未接入」的现状并不表现为任何失败——这也印证了空实现的标注只能靠纪律维持；门禁定义与判据见 `docs/research/03-dependencies-and-toolchain.md`。
 
 ## 已否决方向

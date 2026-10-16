@@ -30,7 +30,7 @@
 
 ## 2. 当前阶段与产出边界
 
-**预研与需求阶段已收口，设计阶段已完成，`specs/0001-email-forwarding-service/spec.md` 已确认。** 已经落地的是目录分层、工程配置、规则文件与一个能返回 `/healthz` 的最小 FastAPI 入口；**业务逻辑尚未实现**。**设计结论写在各特性的 `specs/<特性>/design.md`，跨特性底座写在 `docs/research/` 各册，都不在 `spec.md` 里**——`spec.md` 只写需求与验收标准，其 §8 指向已拍板的设计条目。下一步按 §5 顺序写 `plan.md` 与 `tasks.md`。
+**预研、需求与设计阶段已收口，`specs/0001-email-forwarding-service/` 已实现到阶段 5**：四条业务流、保留期清理流、仓储层、API 契约与集成测试均已落地并通过本地门禁（`505 passed`、覆盖率 90%）；交付链的迁移 / 启动 / 归档自检三件脚本已落地，**仍待实现的是镜像构建、基础镜像 tar 带入与 sha256 旁路文件**（见 `docs/open-questions.md` D2）。**设计结论写在各特性的 `specs/<特性>/design.md`，跨特性底座写在 `docs/research/` 各册，都不在 `spec.md` 里**——`spec.md` 只写需求与验收标准，其 §8 指向已拍板的设计条目。
 
 **未定项不允许 AI 自行决定。** 完整清单以 `docs/open-questions.md` 为准（**本文件不复述那份清单**——两处各写一份，必然产生分歧）。写代码时若发现「必须现在选一个」，就**停下来问所有者**，不要用「合理的默认值」糊过去——这类默认值一旦落到表结构或接口上，改回来的代价极高。
 
@@ -60,7 +60,7 @@ bash scripts/dev-up.sh
 
 项目命令一律**以 root 身份**执行；`uv` 装在 `/home/tao/.local/bin/`，**该目录不在 root 的 PATH 上**，需要时先 `export PATH=/home/tao/.local/bin:$PATH`。
 
-部署脚本与交付链**尚未实现**——`deploy/` 目前是空的（只留一份职责 `README.md`）。**不要擅自新建部署脚本**：新链路（在 CentOS 8 生产服务器上本地构建 + 基础镜像以 tar 带入）的脚本形态仍是未定项，见 `docs/open-questions.md` D2。
+交付脚本已落地三件（`deploy/migrate.sh` 迁移入口、`deploy/run.sh` 起服务 + `/healthz` 探活、`deploy/check_archive.py` 交付前归档自检），但**交付链整体仍未落地**（镜像构建、基础镜像 tar 带入、sha256 旁路文件等）。**不要擅自新建部署脚本**：新链路（在 CentOS 8 生产服务器上本地构建 + 基础镜像以 tar 带入）的脚本形态仍是未定项，见 `docs/open-questions.md` D2。
 
 ---
 
@@ -86,7 +86,7 @@ bash scripts/dev-up.sh
 | `docs/` 其余 | `architecture.md`（**代码分层与依赖方向的唯一出处**）、`code-style.md`（**代码风格与自查/评审清单的唯一出处**）、`contributing.md`、`security.md` 的正文；后续的数据模型 / API / 配置 / 部署说明 | 需求与验收标准（那属于 `specs/`） |
 | `specs/` | **每个特性一个目录**的需求、设计、计划、任务（`spec.md` / `design.md` / `plan.md` / `tasks.md`，见 §5） | 实现代码 |
 | `skills/` | 可复用的固定流程（见 `skills/README.md`） | 一次性任务说明 |
-| `deploy/` | 部署脚本与交付链的落点（**当前为空，待实现**，见 `docs/open-questions.md` D2） | 应用代码 |
+| `deploy/` | 部署脚本与交付链的落点（迁移 / 启动 / 归档自检三件已落地，构建与打包仍待实现，见 `docs/open-questions.md` D2） | 应用代码 |
 | `scripts/` | 本地开发与门禁脚本 | 部署与交付脚本（放 `deploy/`） |
 | `migrations/` | Alembic 迁移 | 手工 DDL |
 

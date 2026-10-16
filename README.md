@@ -6,12 +6,12 @@
 
 ## 当前状态
 
-**预研阶段已收口，正进入需求阶段。业务逻辑尚未实现。**
+**预研、需求、设计与实现阶段已推进到阶段 5：四条业务流、保留期清理流、仓储层、API 契约与集成测试均已落地，本地门禁五步全绿（`505 passed`、覆盖率 90%）。**
 
-- 仓库里已落地的是目录分层、工程配置、规则文件，以及一个能返回 `/healthz` 的最小 FastAPI 入口。
-- 四条轮询流、数据库表结构、SMTP / IMAP 对接、审查逻辑均**尚未实现**。
+- 已实现：目录分层与工程配置、PostgreSQL 表结构与 Alembic 迁移、`/healthz` 与投递 / 回复查询 API（契约真源 `docs/api-contract.yaml`）、四条轮询流与保留期清理流、仓储层，以及 SMTP 与 IMAP 两处适配器。
+- 交付链：迁移（`deploy/migrate.sh`）、启动（`deploy/run.sh`）与归档自检（`deploy/check_archive.py`）三件脚本已落地；**仍待实现的是镜像构建、基础镜像 tar 的带入与 sha256 旁路文件**（见 `docs/open-questions.md` D2）。
 - **安全审查目前是「永远通过」的空实现占位**——在真实审查接入之前，不得把本服务当作内容安全边界。
-- 需求阶段的第一个入口是数据模型：按 `AGENTS.md` §5 在 `specs/` 下写第一个特性的 `spec.md`。
+- 实现进度与逐条验收结论见 `specs/0001-email-forwarding-service/spec.md` §9；未定项以 `docs/open-questions.md` 为准。
 
 ---
 
@@ -19,7 +19,7 @@
 
 ```bash
 uv sync                                               # 按 .python-version 准备 Python 3.13 并同步依赖
-uv run uvicorn vs_email_forwarding.main:app --reload  # 本地起服务（当前只有 /healthz）
+uv run uvicorn vs_email_forwarding.main:app --reload  # 本地起服务
 bash scripts/check.sh                                 # 一键门禁
 bash scripts/dev-up.sh                                # 起开发依赖（PostgreSQL + GreenMail，需要 Docker）
 ```
@@ -38,7 +38,7 @@ bash scripts/dev-up.sh                                # 起开发依赖（Postgr
 
 生产是 **CentOS 8**；镜像**在服务器上本地构建**，**基础镜像以 tar 带入**。环境前提是**与公网隔离、可达内网镜像源**，且**运行时不得依赖任何外部网络**。
 
-**交付与部署脚本尚未实现**——`deploy/` 目前只有一份职责 `README.md`，不要擅自新建部署脚本。
+**交付脚本已落地三件**——`deploy/migrate.sh`（数据库迁移的唯一入口）、`deploy/run.sh`（起服务并以 `/healthz` 探活）、`deploy/check_archive.py`（交付前归档自检）；判据与约束仍以 `docs/research/01-delivery-and-deploy.md` 为准，不要擅自另起第二套脚本。
 
 新交付形态的未定项与形态见 `docs/open-questions.md` D2，当前结论见 `docs/research/01-delivery-and-deploy.md`。
 
@@ -75,7 +75,7 @@ scripts/                   本地开发与门禁脚本
 docs/                      文档唯一入口、跨特性底座结论真源、未定项清单
 specs/                     每个特性一个目录（spec.md / design.md / plan.md / tasks.md）
 skills/                    可复用的固定流程
-deploy/                    部署脚本与交付链的落点（当前只有职责 README，待实现）
+deploy/                    交付脚本：migrate.sh / run.sh / check_archive.py
 ```
 
 各目录「放什么 / 不放什么」以 `AGENTS.md` §4 的目录职责表为准；**代码分层与依赖方向**见 `docs/architecture.md`。
@@ -105,7 +105,7 @@ deploy/                    部署脚本与交付链的落点（当前只有职�
 - **一期不支持附件。**
 - **审查是空实现**：一期审查逻辑必定通过，在真实审查接入前不构成安全边界。
 - **无鉴权**：服务仅内网可达，一期不做鉴权，但 API 层已预留鉴权位置。
-- **部署脚本尚未实现**：新交付形态的脚本尚未落地，见 `docs/open-questions.md` D2。
+- **交付链尚未全部落地**：迁移、启动与归档自检三件脚本已就位，但镜像构建、基础镜像 tar 的带入与 sha256 旁路文件等仍待实现，见 `docs/open-questions.md` D2。
 
 ---
 
