@@ -8,8 +8,10 @@
 # 交付方式（见 docs/research/01-delivery-and-deploy.md）：镜像**在 CentOS 8 生产服务器上本地构建**，
 # 基础镜像以镜像 tar 形式从外部带入服务器并 `docker load`。
 # 环境前提：**与公网隔离、可达内网镜像源；运行时不得依赖任何外部网络**。
-# 所以本文件**只写 image、不写 build**：构建在服务器上单独进行（`deploy/` 下
-# 脚本尚未同步更新），compose 只负责把已 load 到本地的镜像跑起来。
+# 所以本文件**只写 image、不写 build**：构建在服务器上单独进行——消费侧三件脚本
+# （迁移 / 启动 + `/healthz` 探活 / 交付前归档自检）**已交付**，用法与判据出处见
+# `deploy/README.md`；仍未落地的只是**镜像构建脚本**（含基础镜像 tar 的导出与带入），
+# 属未定项，见 `docs/open-questions.md` D2。compose 只负责把已 load 到本地的镜像跑起来。
 # 镜像名用 ${VS_EMAIL_FORWARDING_IMAGE} 是为了 load 后能指定具体版本 tag（便于回滚）。
 #
 # 前提：服务器上必须是 Docker Compose v2（`docker compose` 子命令）。
@@ -35,7 +37,7 @@ services:
     container_name: vs-email-forwarding-app
     # platform 字段在这里只是**运行期保险**，不是架构的真正保证：
     #   * 真正决定镜像架构的是**构建期**（服务器侧构建脚本里的
-    #     `docker build --platform linux/amd64`——该脚本尚未实现，见
+    #     `docker build --platform linux/amd64`——该脚本的形态仍是未定项，见
     #     docs/open-questions.md D2）；写在这里只能让 compose 在
     #     「镜像架构与声明不符」时更早报错，并不会把镜像变成 amd64；
     #   * 交付链的 save / load **不带** `--platform`：服务器实测 Client / Server 均为
@@ -91,7 +93,7 @@ services:
     image: postgres:17
     container_name: vs-email-forwarding-postgres
     # 与 app 声明同一架构，避免 amd64/arm64 混用导致数据文件不可读。
-    # 同样只是**运行期保险**：架构由构建期（服务器侧构建脚本，待实现）与交付前归档自检保证。
+    # 同样只是**运行期保险**：架构由构建期（服务器侧构建脚本，形态仍属未定项）与交付前归档自检保证。
     # 该字段依赖 compose v2：部署时用 `docker compose version` 核对（Engine 26 自带该插件）。
     platform: linux/amd64
     restart: unless-stopped
