@@ -106,7 +106,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 **机器与环境**
 
 - **发行版与内核**：`CentOS Linux release 8.5.2111`；内核 `4.18.0-348.el8.x86_64`。
-- **资源**：8 vCPU；内存 total 15 GiB、available 13 GiB；`/` 为 `/dev/nvme0n1p3` 36G、可用 28G（23% 已用）；**无 `/data` 盘**。
+- **资源**：8 vCPU；内存 total 15 GiB、available 11 GiB（随负载浮动）；`/` 为 `/dev/nvme0n1p3` 36G、可用 23G（36% 已用）；**本机没有 `/data` 盘**——那是生产宿主才有的盘，见 `docs/open-questions.md` D15。
 - **安全与网络**：`getenforce` = `Enforcing`；firewalld `active`；`iptables v1.8.4 (nf_tables)`。
 - **`uv` 的路径**：`uv --version` → `uv 0.13.0 (x86_64-unknown-linux-gnu)`，装在 `/home/tao/.local/bin/uv`——**该目录只加在 tao 的 PATH 上，root 会话里要显式引入**。
 - **Python**：`python3 --version` → `3.13.16`（解析到 `/usr/local/bin/python3`）；`/usr/bin/python3 --version` → `3.6.8`。
@@ -165,7 +165,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 | `.gitattributes` | 换行符强制规则（一切文本文件 LF） |
 | `.pre-commit-config.yaml` | pre-commit 钩子定义（钩子已 `install`，见上文） |
 | `pyproject.toml` | dev 依赖组与工具链配置；依赖清单与门禁配置的结论见 `docs/research/03-dependencies-and-toolchain.md` |
-| `deploy/` | 部署脚本与交付链的落点：新链路脚本尚未实现，其形态属未定项 |
+| `deploy/` | 部署脚本与交付链的落点：消费侧三件脚本（`migrate.sh` / `run.sh` / `check_archive.py`）与职责 `README` 已落地；产出方一侧（镜像构建 / tar 打包带入 / 打包脚本）仍属未定项，见 `docs/open-questions.md` D2 与 D13（**此处为摘要，完整未定项以 `docs/open-questions.md` D2 全文为准**） |
 | `docs/research/01-delivery-and-deploy.md` | 生产服务器与交付链事实（本册不重复） |
 | `docs/open-questions.md` | 未定项的唯一清单 |
 

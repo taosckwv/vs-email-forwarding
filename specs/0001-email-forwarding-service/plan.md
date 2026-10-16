@@ -127,7 +127,7 @@
 | `docs/configuration.md` | `新增` | 配置项清单文档：逐项写用途、默认值、是否必填、启动即校验的三条判据；`docs/README.md` §3 的「尚未创建的文档」清单要**同时移除它** |
 | `docs/README.md` | `修改` | ① §2 导航表加两行「改配置项 → `configuration.md`」「查接口契约 → `api-contract.yaml`」；② §3 的「尚未创建的文档」清单移除 `configuration.md` |
 | `docs/research/01-delivery-and-deploy.md` | `修改` | 按本轮裁决记两件事：**D2-甲** 三件脚本的落地位置与判据、**D2-乙 随 D13 推迟**；「落地位置」段的「待实现」列表相应收窄 |
-| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那侧脚本（构建 / tar 导出 / load / 构建输入传输），随 D13 推迟」；已定的 D2-甲 从该条移除 |
+| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那一侧的脚本（镜像构建 / tar 的导出与带入含 sha256 旁路 / 产出方打包脚本），与 D13 同题一并推迟」；已定的 D2-甲 从该条移除。**依据**：产出方未定（D13：由哪台机器、用什么工具产出）就意味着「构建输入怎么送、由谁送」同属那一侧、随之推迟——D2 的现行标题与范围即按此写；输入传输的**方式**已由 `docs/research/01-delivery-and-deploy.md` 的「结论」段定为 `rsync` / 归档，不再列为未定项 |
 | `deploy/migrate.sh` | `新增` | 迁移入口（**唯一入口**）：容器内 `docker compose run --rm app uv run alembic -c migrations/alembic.ini upgrade head`，不加 `--no-deps`、不用 `exec`，并打印「无版本时的失败属预期」这条判别法。**LF、无 BOM**（`AGENTS.md` §7） |
 | `deploy/run.sh` | `新增` | 起服务 + 冒烟：`docker compose up -d` 后轮询 `/healthz`（默认 30 次 × 2s，可用环境变量覆盖）；从 `.env` 解析端口要容忍 CR、引号与行尾注释；宿主无 `curl` 时降级为容器内 Python 标准库探测。**`compose.yaml` 的注释已经引用了这个名字** |
 | `deploy/check_archive.py` | `新增` | 交付前单平台归档自检：**不依赖 Docker、只用 Python 标准库**；支持 OCI（`index.json`）与 legacy docker-archive（`manifest.json`）两种布局；显式指定期望基础镜像个数（新链路 = 3）；退出码固定 `0` / `1` / `2`；**必须在生成 `.sha256` 旁路文件之前执行** |
@@ -356,7 +356,7 @@
 | `migrations/README.md` | `修改` | 三处就地改写：① 「约定」清单的第 3 条文件名约定（计划正文里也写成「第 23 条」，指的就是这一条）改为**序号前缀 + 下划线**（例 `0001_create_mail_tables.py`），删掉「保留 Alembic 自动生成的 revision 哈希前缀」；② 删掉「不要提前 `alembic init`」这段指引与「当前状态：尚未初始化」段，改为已初始化的现状；③ 「约定」清单的第 6 条迁移入口确认为 `deploy/migrate.sh` |
 | `deploy/README.md` | `修改` | 从纯职责说明改为脚本清单：`migrate.sh` / `run.sh` / `check_archive.py` 各自的用途、入口、判据出处；写明 **D2-乙（产出方那一侧的打包脚本）本期不在范围、随 D13 推迟** |
 | `docs/research/01-delivery-and-deploy.md` | `修改` | 按本轮裁决记两件事：**D2-甲** 三件脚本的落地位置与判据；**D2-乙 随 D13 推迟**。「落地位置」段的「待实现」列表相应收窄 |
-| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那侧脚本（构建 / tar 导出 / load / 构建输入传输），随 D13 推迟」；已定的 D2-甲从该条移除。**不要新增条目** |
+| `docs/open-questions.md` | `修改` | D2 就地**收窄**为「剩余：产出方那一侧的脚本（镜像构建 / tar 的导出与带入含 sha256 旁路 / 产出方打包脚本），与 D13 同题一并推迟」；已定的 D2-甲从该条移除。**依据**同 §4.2：产出方（D13）未定即含「构建输入怎么送上去」，输入传输的方式已定为 `rsync` / 归档（`docs/research/01-delivery-and-deploy.md` 的「结论」段）。**不要新增条目** |
 | `README.md` | `修改` | ① 「当前状态」段的「需求阶段」表述改为「设计阶段已收口、进入实现」；② 「生产部署（现状）」段的「`deploy/` 目前只有一份职责 `README.md`」改为三件脚本已落地；③ 目录结构块补 `constants.py` 一行 |
 | `src/vs_email_forwarding/**/__init__.py` | `修改` | §2.10 列出的 **7 个包占位文件**的过时 docstring（逐个指向当前真源）；`providers/review/__init__.py` 里「真实审查能力何时补上仍未定」这半句**保留** |
 | `tests/integration/README.md` | `修改` | 「覆盖重点」第 1 条仍写着旧词「待审 → 已排队 → 已发送 → 已收到 / 拒审 / 终态失败」——与本特性已拍板的六态取值（`constants.MESSAGE_STATES`）不一致，按 `docs/README.md` §4 的「文档与代码不一致时以代码为准」就地改写；同时补上集成夹具的实际落点（`tests/integration/conftest.py`）与测试库准备命令 |
