@@ -43,7 +43,7 @@ def _repo_root() -> Path:
     断言因此读的是**未变异**的真契约文件（与被变异的 ``schemas/`` 比对，判定力不受影响）。
     找不到即说明测试脱离了仓库检出，直接失败而不是静默跳过。
 
-    本函数**有意自包含**、不抽公共 helper：三处同名函数的取根需求不同——两处锤
+    本函数**有意自包含**、不抽公共 helper：三处同名函数的**锚两处相同、一处不同**——两处锤
     ``docs/api-contract.yaml``（本文件与 `tests/unit/test_constants_consistency.py`）、
     一处锤 ``docs/security.md``（`tests/unit/test_review_placeholder.py`），而
     `tests/unit/test_constants_consistency.py` 还另需 `migrations/`；三处都为在 mutmut

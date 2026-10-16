@@ -54,7 +54,7 @@ def _repo_root() -> Path:
     三方比对因此读的是**未变异**的真契约与真迁移文件。找不到即说明测试脱离了仓库检出，直接
     失败而不是静默跳过。
 
-    本函数**有意自包含**、不抽公共 helper：三处同名函数的取根需求不同——本文件与
+    本函数**有意自包含**、不抽公共 helper：三处同名函数的**锚两处相同、一处不同**——本文件与
     `tests/unit/test_openapi_contract.py` 锤 ``docs/api-contract.yaml``、
     `tests/unit/test_review_placeholder.py` 锤 ``docs/security.md``，且本文件还另需
     `migrations/`（故另有 ``_MIGRATIONS_DIR``）；三处都为在 mutmut 沙箱内**零导入耦合**
