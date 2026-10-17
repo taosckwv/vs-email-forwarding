@@ -38,6 +38,13 @@
 - 风险如实登记：内网服务一旦跨网段暴露即为未授权可用，需与服务监听地址、端口与暴露范围一并评估。
 - 后续**何时补、采用何种方式**（API Key / mTLS / 内网白名单）尚未决定，见未定项。
 
+### 对外邮件连接：默认校验证书与主机名，关闭校验必须留痕
+
+- SMTP 与 IMAP 的直连 TLS 连接（隐式 TLS）**默认校验证书链与主机名**（`TLS_VERIFY=true`）。两条路必须同口径——标准库 `smtplib.SMTP_SSL` 的默认上下文**不校验**（`verify_mode=0`、`check_hostname=False`），而 `IMAPClient(ssl=True)` 默认校验；不显式统一，发信方向就是「加密但不认证对端」。
+- 私有 CA / 自签网关通过可选的 `TLS_CA_BUNDLE`（PEM 路径）注入，未配置时用运行环境默认信任库；配置为非空但不可读时**启动即拒绝**。
+- `TLS_VERIFY=false` 是**显式逃生门**：连接仍然加密，只是不验证对端身份；服务启动阶段必须记一条结构化告警 `tls_verify_disabled`，使「校验被关掉」可观察、可审计。不提供「默认不校验」的形态。
+- TLS 握手失败、证书不受信任、主机名不匹配一律按**连接类临时故障**处理（`code=None`、可重试），不判永久失败——网关证书轮换期不应把邮件打成终态；连续失败仍需人工介入证书问题。
+
 ### 日志与信息红线
 
 - **任何日志、CHANGELOG、异常信息、PR 描述都不得泄露**：邮件正文、附件内容、账号口令、收件人地址、原始 MIME。
@@ -56,12 +63,21 @@
 - 业务逻辑面已实现（阶段 5）：`providers/`、`flows/`、`service/`、`db/` 均已落地并通过门禁；**业务逻辑面的空实现只剩「审查」一处**（见上一条；**鉴权同样是一期刻意不做、只预留位置的占位**，见前一条与 `docs/research/03-dependencies-and-toolchain.md` 的口径——**全仓空实现不止「审查」一处**）。
 - 门禁全绿（`ruff format --check`、`ruff check`、`mypy src`、`pytest`、`mutmut`），即「空实现未接入」的现状并不表现为任何失败——这也印证了空实现的标注只能靠纪律维持；门禁定义与判据见 `docs/research/03-dependencies-and-toolchain.md`。
 
+- `tests/fixtures/tls/` 已提交一套测试 CA 与服务器证书（SAN 含 `IP:127.0.0.1` 与 `DNS:localhost`、带 SKID/AKID）。Python 3.13 的严格校验要求 SAN 与 SKID/AKID，缺任一项会报 `Missing Authority Key Identifier` 或主机名不匹配——这是证书可用性的实测判据，不是推测。
+- 进程内真实 TLS 替身已实测可用于两条连接路径：SMTP 侧 `_ResponseCheckedSmtpSSL(_ResponseCheckedSmtp, smtplib.SMTP_SSL)` 的 MRO 为 `[_RespSSL, _Resp, SMTP_SSL, SMTP, object]`，`context=` 注入后握手成功；IMAP 侧 `IMAPClient(ssl=True, ssl_context=...)` 对最小 IMAP TLS 服务器可完成 `SELECT` + `UID FETCH`。
+- `ssl.SSLError` 是 `OSError` 子类：证书 / 主机名 / 握手类失败自然落进适配器既有的 `except OSError` 分支，归 transient 且不改变对外返回类型。
+- `TLS_VERIFY=false` 的实现形态是同一个 `ssl.create_default_context()` 上先关 `check_hostname`、再设 `verify_mode=CERT_NONE`；顺序反了标准库抛 `ValueError`。不使用私有 API `ssl._create_unverified_context`。
+
 ## 已否决方向
 
 - 一期就接入真实审查（本地规则 / 外部内容安全 API / 病毒扫描引擎）—— 原因：一期目标是先打通端到端闭环；外部 API 与「运行时不得依赖任何外部网络」冲突，本地病毒库还需额外的更新机制。
 - 一期不建拒审链路 —— 原因：审查通过 / 不通过的完整状态流转是主流程的一部分，缺表会让后续实现返工。
 - 等审查能力定了再动手做流水线 —— 原因：整条流水线会被一个尚未选型的依赖卡住；先做空实现占位可以不阻塞闭环验证。
 - 把审查开关做成可硬编码关闭的旁路 —— 原因：审查被跳过或被短路属于安全问题，而不是「配置灵活性」。
+- 对外邮件连接沿用 `smtplib.SMTP_SSL` 的默认上下文（不校验）—— 原因：证书与主机名都不验，等于加密但不认证对端，网关可被冒充；两条路默认行为还不一致。
+- 只提供「关校验」开关、不提供 CA bundle —— 原因：私有 CA / 自签网关只能靠关校验通过，等于把一次兼容需求变成长期的不校验。
+- 只提供 CA bundle、不给逃生门 —— 原因：证书主机名不匹配（例如只能拿 IP 连、证书只签了域名）时没有可用的过渡手段，只能等证书重签；保留显式关闭并强制留痕是代价最小的折中。
+- 让 SMTP / IMAP 各自配置校验开关与 CA —— 原因：单网关场景下配置组合爆炸，容易一半路程校验、一半不校验；真有需求再回规格改。
 
 ## 落地位置
 
@@ -71,6 +87,7 @@
 | `SECURITY.md` | 仓库根的**短壳**（3–5 行，只指向 `docs/security.md`）：GitHub 只识别根目录的 `SECURITY.md`，正文不在根文件里重复 |
 | `AGENTS.md` §4 / §8 | 目录职责（`providers/` 只放外部能力适配、不放业务状态流转）；硬约束：日志不得泄露邮件正文、收件人地址、凭据（`From` 固定与显式 `Reply-To` 的结论见 `specs/0001-email-forwarding-service/design.md`） |
 | `docs/research/02-runtime-and-scheduling.md` | 调度载体、幂等抢占硬约束与重试语义的数字（本册不重复） |
+| `specs/0002-smtp-imap-implicit-tls/design.md` | 连接模式、TLS 校验上下文构建与失败归类的特性设计结论（本册只记安全取向） |
 | `docs/open-questions.md` | 未定项的唯一清单 |
 
 ## 未定项

@@ -54,7 +54,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vs_email_forwarding.config import Settings
+from vs_email_forwarding.config import Settings, build_tls_context
 from vs_email_forwarding.constants import (
     ERROR_CLASS_INTERNAL,
     ERROR_CLASS_PERMANENT,
@@ -325,7 +325,8 @@ def _build_sender(settings: Settings) -> SmtplibSender:
             port=settings.smtp_port,
             username=settings.smtp_username,
             password=settings.smtp_password,
-            starttls=settings.smtp_starttls,
+            tls_mode=settings.smtp_tls_mode,
+            ssl_context=(build_tls_context(settings) if settings.smtp_tls_mode == "ssl" else None),
             timeout_seconds=settings.smtp_timeout_seconds,
             mail_from=settings.mail_from_address,
             reply_to=settings.reply_to_address,

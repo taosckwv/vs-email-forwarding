@@ -39,6 +39,7 @@ import io
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -333,7 +334,11 @@ class FakeSmtpServer:
     （`5xx`，直接终态）、`hang`（接受连接后一个字节都不返回，由调用方的墙钟上界收场）。
     """
 
-    def __init__(self, *, host: str = "127.0.0.1") -> None:
+    def __init__(
+        self, *, host: str = "127.0.0.1", ssl_context: ssl.SSLContext | None = None
+    ) -> None:
+        #: 非空时先做 TLS 握手再进 SMTP 会话（`AC-2` 的直连 SSL 档位）。
+        self._tls_server_context = ssl_context
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listener.bind((host, 0))
@@ -401,7 +406,16 @@ class FakeSmtpServer:
                     # SMTP_TIMEOUT_SECONDS 收场。
                     self._stop.wait(timeout=_HANG_SECONDS)
                     return
-                self._converse(connection)
+                if self._tls_server_context is not None:
+                    try:
+                        connection = self._tls_server_context.wrap_socket(
+                            connection, server_side=True
+                        )
+                    except (ssl.SSLError, OSError):
+                        # 客户端不握手 / 证书不被接受：TLS 层本来就该断，服务端只收摊。
+                        return
+                with contextlib.suppress(OSError):
+                    self._converse(connection)
         finally:
             with self._lock:
                 if connection in self._connections:
@@ -480,6 +494,50 @@ def _read_message(reader: io.BufferedReader) -> bytes:
         chunks.append(line[1:] if line.startswith(b".") else line)
 
 
+#: 测试 CA / 服务器证书目录（`tests/fixtures/tls/README.md` 是重生成说明）。
+_TLS_FIXTURES = _INTEGRATION_DIR.parent / "fixtures" / "tls"
+
+#: 服务器证书主机名之一（证书 SAN 含 `IP:127.0.0.1` 与 `DNS:localhost`）。
+_TLS_HOST = "localhost"
+
+
+def _tls_server_context() -> ssl.SSLContext:
+    """服务端上下文：用提交进仓库的测试证书与私钥（仅测试用）。"""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(
+        certfile=_TLS_FIXTURES / "server.pem", keyfile=_TLS_FIXTURES / "server.key"
+    )
+    return context
+
+
+def _trusted_client_context() -> ssl.SSLContext:
+    """客户端上下文：**只**信任测试 CA（与 `TLS_CA_BUNDLE` 的语义一致）。"""
+    return ssl.create_default_context(cafile=str(_TLS_FIXTURES / "ca.pem"))
+
+
+def _untrusted_client_context() -> ssl.SSLContext:
+    """客户端上下文：系统信任库（不含测试 CA），用于验证「证书不受信任 → transient」。"""
+    return ssl.create_default_context()
+
+
+@pytest.fixture()
+def tls_ca_bundle() -> Path:
+    """测试 CA 的 PEM 路径（装配给 `TLS_CA_BUNDLE` 用）。"""
+    return _TLS_FIXTURES / "ca.pem"
+
+
+@pytest.fixture()
+def trusted_tls_context() -> ssl.SSLContext:
+    """信任测试 CA 的客户端上下文（`ssl` 模式的成功路径用它）。"""
+    return _trusted_client_context()
+
+
+@pytest.fixture()
+def untrusted_tls_context() -> ssl.SSLContext:
+    """不信任测试 CA 的客户端上下文（`ssl` 模式的失败路径用它）。"""
+    return _untrusted_client_context()
+
+
 @pytest.fixture(scope="session")
 def smtp_server() -> Iterator[FakeSmtpServer]:
     """会话级假 SMTP 服务：整个运行共用一个监听端口，用例之间只重置捕获记录。"""
@@ -489,6 +547,171 @@ def smtp_server() -> Iterator[FakeSmtpServer]:
         yield server
     finally:
         server.stop()
+
+
+@pytest.fixture(scope="session")
+def smtp_tls_server() -> Iterator[FakeSmtpServer]:
+    """会话级假 SMTP 服务（TLS 档位）：建连先做真实 TLS 握手，再走同一套 SMTP 会话。"""
+    server = FakeSmtpServer(ssl_context=_tls_server_context())
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+class FakeTlsImapServer:
+    """进程内最小 IMAP TLS 服务器：只实现本服务实际发出的命令（`AC-4`）。
+
+    真替身而不是接口假件：`ImapClientFetcher` 与 `IMAPClient` 走真实 TLS 与真实
+    IMAP 报文，覆盖的正是「建连即 TLS」这条新路径。实现范围刻意窄——greeting /
+    `CAPABILITY` / `LOGIN` / `SELECT` / `UID FETCH` / `NOOP` / `LOGOUT`，够
+    `read_mailbox_state` 与 `fetch_messages` 各跑完一次会话即可。
+
+    ``commands`` 记录收到的每条命令原文：用例据此断言**没有** `STARTTLS`
+    （`AC-4` 的「会话中没有 STARTTLS 升级」）。
+    """
+
+    def __init__(
+        self,
+        *,
+        raw_message: bytes,
+        uid: int = 1,
+        uidvalidity: int = 1000,
+        host: str = "127.0.0.1",
+        ssl_context: ssl.SSLContext | None = None,
+    ) -> None:
+        self.raw_message = raw_message
+        self.uid = uid
+        self.uidvalidity = uidvalidity
+        self.commands: list[str] = []
+        self._tls_server_context = ssl_context or _tls_server_context()
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind((host, 0))
+        self._listener.listen(4)
+        self._listener.settimeout(0.5)
+        self.port = int(self._listener.getsockname()[1])
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._connections: list[socket.socket] = []
+        self._thread = threading.Thread(target=self._serve, name="fake-imap-tls", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+        with self._lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for connection in connections:
+            with contextlib.suppress(OSError):
+                connection.close()
+        self._listener.close()
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                connection, _ = self._listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with self._lock:
+                self._connections.append(connection)
+            threading.Thread(target=self._handle, args=(connection,), daemon=True).start()
+
+    def _handle(self, connection: socket.socket) -> None:
+        try:
+            try:
+                connection = self._tls_server_context.wrap_socket(connection, server_side=True)
+            except (ssl.SSLError, OSError):
+                return
+            with (
+                connection,
+                connection.makefile("rb") as reader,
+                connection.makefile("wb") as writer,
+            ):
+                writer.write(b"* OK fake-imap ready\r\n")
+                writer.flush()
+                while True:
+                    line = reader.readline()
+                    if not line:
+                        return
+                    with self._lock:
+                        self.commands.append(line.decode("utf-8", "replace").strip())
+                    tag, _, remainder = line.strip().partition(b" ")
+                    command = remainder.strip().upper()
+                    if not self._respond(writer, tag, command):
+                        return
+        finally:
+            with self._lock:
+                if connection in self._connections:
+                    self._connections.remove(connection)
+
+    def _respond(self, writer: io.BufferedWriter, tag: bytes, command: bytes) -> bool:
+        """按命令回一个够用的回答；返回 ``False`` 表示会话结束（LOGOUT）。"""
+        if command.startswith(b"CAPABILITY"):
+            writer.write(b"* CAPABILITY IMAP4rev1 UIDPLUS\r\n")
+            writer.write(tag + b" OK CAPABILITY completed\r\n")
+        elif command.startswith(b"LOGIN"):
+            writer.write(tag + b" OK LOGIN completed\r\n")
+        elif command.startswith(b"SELECT") or command.startswith(b"EXAMINE"):
+            writer.write(b"* 1 EXISTS\r\n* 0 RECENT\r\n")
+            writer.write(f"* OK [UIDVALIDITY {self.uidvalidity}] UIDs valid\r\n".encode())
+            writer.write(f"* OK [UIDNEXT {self.uid + 1}] Predicted next UID\r\n".encode())
+            writer.write(tag + b" OK [READ-ONLY] SELECT completed\r\n")
+        elif command.startswith(b"UID FETCH"):
+            # RFC 3501 同步字面量：`{N}\r\n` 之后是恰好 N 字节报文，再收尾 `)`。
+            writer.write(
+                f"* {self.uid} FETCH (UID {self.uid} RFC822 {{{len(self.raw_message)}}}\r\n".encode()
+            )
+            writer.write(self.raw_message)
+            writer.write(b")\r\n")
+            writer.write(tag + b" OK FETCH completed\r\n")
+        elif command.startswith(b"NOOP"):
+            writer.write(tag + b" OK NOOP completed\r\n")
+        elif command.startswith(b"LOGOUT"):
+            writer.write(b"* BYE fake-imap closing\r\n")
+            writer.write(tag + b" OK LOGOUT completed\r\n")
+            writer.flush()
+            return False
+        else:
+            writer.write(tag + b" BAD unsupported command\r\n")
+        writer.flush()
+        return True
+
+
+#: 假 IMAP TLS 服务器交出的报文：足够让 `_parse_message` 产出 neutrals。
+_FAKE_IMAP_RAW_MESSAGE = (
+    b"From: someone@example.com\r\n"
+    b"To: reply@example.com\r\n"
+    b"Subject: Re: hello\r\n"
+    b"Message-ID: <reply-1@example.com>\r\n"
+    b"\r\n"
+    b"reply body\r\n"
+)
+
+
+@pytest.fixture(scope="session")
+def imap_tls_server() -> Iterator[FakeTlsImapServer]:
+    """会话级假 IMAP TLS 服务器：整个运行共用一个临时端口。"""
+    server = FakeTlsImapServer(raw_message=_FAKE_IMAP_RAW_MESSAGE)
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+@pytest.fixture()
+def imap_tls_capture(imap_tls_server: FakeTlsImapServer) -> FakeTlsImapServer:
+    """干净起步的 IMAP TLS 捕获端（清空上一用例的命令记录）。"""
+    with imap_tls_server._lock:
+        imap_tls_server.commands = []
+    return imap_tls_server
 
 
 @pytest.fixture
@@ -661,19 +884,23 @@ def integration_environment(
     """把配置指向本次运行的测试库与进程内替身（只写环境变量，不改仓库里的配置文件）。
 
     这些取值同时让「测试不依赖某台开发机的 `.env`」成立：数据库是隔离库、SMTP 是进程内替身、
-    身份与信箱用 `example.com` 占位地址（`AGENTS.md` §8 第 4 条）。启动校验的三条判据
+    身份与信箱用 `example.com` 占位地址（`AGENTS.md` §8 第 4 条）。启动校验的四条判据
     （`design.md` §4.4）在这里也满足：`IMAP_ADDRESS` 与 `REPLY_TO_ADDRESS` 取同一个值。
     """
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("DATABASE_URL", test_database.url)
     monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
     monkeypatch.setenv("SMTP_PORT", str(smtp_server.port))
-    monkeypatch.setenv("SMTP_STARTTLS", "false")
+    monkeypatch.setenv("SMTP_TLS_MODE", "plain")
     monkeypatch.setenv("SMTP_USERNAME", "")
     monkeypatch.setenv("SMTP_PASSWORD", "")
     monkeypatch.setenv("MAIL_FROM_ADDRESS", _PLACEHOLDER_FROM)
     monkeypatch.setenv("REPLY_TO_ADDRESS", _PLACEHOLDER_REPLY_TO)
     monkeypatch.setenv("IMAP_ADDRESS", _PLACEHOLDER_REPLY_TO)
+    monkeypatch.setenv("IMAP_TLS_MODE", "plain")
+    # 显式压掉开发机 `.env` 里的 TLS 项：集成环境固定「明文 + 校验开 + 无自定义 CA」。
+    monkeypatch.setenv("TLS_VERIFY", "true")
+    monkeypatch.setenv("TLS_CA_BUNDLE", "")
     get_settings.cache_clear()
     yield get_settings()
     get_settings.cache_clear()

@@ -72,7 +72,9 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 
 #### 开发依赖（本机现在起得来）
 
-- 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 **`greenmail/standalone:2.1.14`**；两者都**只绑回环**。GreenMail 同时提供 **SMTP（3025）与 IMAP（3143）**，因此流②的发信侧与**流③的入站回路都能在本地离线跑通**（另有 POP3 3110、SMTP API 8080；SMTPS 3465 / IMAPS 3993 未映射）。
+- 开发依赖由 `compose.dev.yaml` 定义，只有两个服务：`postgres:17` 与 **`greenmail/standalone:2.1.14`**；两者都**只绑回环**。GreenMail 同时提供 **SMTP（3025）与 IMAP（3143）**，因此流②的发信侧与**流③的入站回路都能在本地离线跑通**（另有 POP3 3110、SMTP API 8080；SMTPS 3465 / IMAPS 3993 未映射）。本服务的 `plain` 模式正是为这组明文端口保留的本地联调口径。
+- GreenMail 的 TLS 端口（3465 / 3993）**不能用于严格校验的自动化测试**：它的证书是自签的 `CN=GreenMail selfsigned Test Certificate`，无 SAN、无扩展项，Python 3.13 的默认严格校验必然握手失败；要连它只能关校验，那会把「不校验」变成测试口径。因此本特性的 TLS 用例改用 `tests/fixtures/tls/` 的测试 CA + 服务器证书与进程内替身（见 `specs/0002-smtp-imap-implicit-tls/design.md` §5）。
+
 - 一键起依赖：`scripts/dev-up.sh`（Linux）。应用本体**不在容器里跑**，用 `uv run uvicorn vs_email_forwarding.main:app --reload` 在宿主机跑。
 - **两个镜像均已在开发机上实测拉取成功**（`postgres:17` 与 `greenmail/standalone:2.1.14`）。
 - 交付链需要的三个基础镜像**也都能在本机拉到**：`python:3.13-slim-trixie`（经 mirror）、`ghcr.io/astral-sh/uv:0.12.20`（直连 ghcr.io）、`postgres:17`（经 mirror）。**本机就是产出方**（所有者裁决，2026-10）：镜像在开发机构建（`deploy/build.sh`，`docker build --platform linux/amd64`），构建期基础镜像按 digest 钉在 `Dockerfile` 里；服务器只消费 tar。
@@ -80,7 +82,8 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 - GreenMail 的三个实测行为要记住：① **按账号分信箱**——投给 `reply@example.com` 的信要用该账号登录才看得到（正好贴合 `IMAP_USERNAME` 的用法）；② **消息只活在容器生命周期里**（没挂卷，`down` 即清空，集成测试不必担心上一轮残留）；③ **端口与 Mailpit 完全不同**（SMTP 3025 / IMAP 3143），`.env` 与文档里的 `1025/1143` 一律作废。
 - GreenMail 官方镜像**没有 healthcheck 命令**（镜像里只有 JRE 与一个启动脚本），所以 `compose.dev.yaml` 里不给它写 healthcheck；判断它好了没有看容器日志里的 `Starting GreenMail standalone v2.1.14 ... protocol='imap'`。
 
-### 本机侧的执行环境
+- **GreenMail 的 TLS 证书实测**：`docker exec` 读出 3465 / 3993 使用的证书主体为 `CN=GreenMail selfsigned Test Certificate`，**没有 SAN、没有任何 X.509v3 扩展**，自签（无 CA 链）。因此只能用 `TLS_VERIFY=false` 或自定义信任库连它，但自签证书没有可导入的 CA 身份，严格校验下无法通过；`tests/fixtures/tls/` 的测试 CA 方案因此与 GreenMail 解耦。
+- **本机侧的执行环境**
 
 - 门禁的五步定义与判据见 `docs/research/03-dependencies-and-toolchain.md`；脚本侧说明见 `scripts/README.md`。
 - 本册只记**本机特有的执行前提**：项目命令以 root 跑、`uv` 要显式入 PATH、`python3` 是 3.13。
@@ -150,6 +153,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 - **本机直接 `docker pull registry-1.docker.io/...`** —— 原因：该域名被 DNS 污染，解析到 Meta 的 IPv6 地址，报 connection refused；必须走 registry mirror。
 - **把 `registry.cn-hangzhou.aliyuncs.com` 当 Docker Hub mirror** —— 原因：它是完整的独立 registry，不是 Hub 的 mirror，写进 `registry-mirrors` 语义错误。
 - **用状态码判断 mirror 是否可用** —— 原因：401 / 302 都只说明端点活着。`docker.1ms.run` 401、`hub.rat.dev` 302 都不足以证明能拉；必须端到端真拉一次（见「实测证据」）。
+- **用 GreenMail 的 SMTPS / IMAPS 做 TLS 自动化测试** —— 原因：其证书自签、无 SAN、无扩展，严格校验下必然握手失败；要过只能关校验，等于让测试口径默认「不验证对端」，且把门禁绑到容器可用性上（`docs/testing.md` §8 的「跳过不等于通过」）。
 - **在仓库里保留 Windows 脚本（`scripts/*.ps1`）与配套的 BOM / CRLF 例外规则** —— 原因：开发机已无 Windows，无人运行这些脚本；留着就是一份没人维护、还带特殊编码要求的死代码。已删除 `scripts/check.ps1` 与 `scripts/dev-up.ps1`，并去掉 `.gitattributes` 与 `.pre-commit-config.yaml` 里的 CRLF 例外。
 
 ## 落地位置
@@ -159,6 +163,7 @@ DSH 会话与 bash 工具**以 root 运行**，仓库与 `.venv` 的属主**也�
 | `scripts/check.sh` | 门禁入口；五步定义与判据见 `docs/research/03-dependencies-and-toolchain.md` 与 `scripts/README.md` |
 | `scripts/dev-up.sh` | 起开发依赖（读 `compose.dev.yaml`） |
 | `compose.dev.yaml` | 开发依赖定义：PostgreSQL + GreenMail（SMTP/IMAP/POP3），只绑回环 |
+| `tests/fixtures/tls/` | 测试 CA / 服务器证书 / 私钥与重生成说明：进程内 TLS 替身用，不依赖 GreenMail 的证书 |
 | `/usr/local/bin/git` | git 2.49.1（源码编译到 `/usr/local`，覆盖默认解析；系统 `git-2.27.0` 仍在 `/usr/bin` 后备）——**在机器上，不在仓库里** |
 | `/etc/docker/daemon.json` | registry mirror（**在机器上，不在仓库里**） |
 | `/etc/yum.repos.d/docker-ce.repo` | docker-ce 安装源，指向 aliyun（**在机器上，不在仓库里**） |

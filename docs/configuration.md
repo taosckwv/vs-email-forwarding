@@ -28,18 +28,20 @@
 | `POSTGRES_DB` | compose 里 postgres 容器 initdb 的初始库名 | `vs_email_forwarding` | compose 使用 | **compose 专用**，`config.py` 不读；须与 `DATABASE_URL` 中的库名一致（本地开发把两处都改成 `vs_email_forwarding_dev`） |
 | `MAIL_FROM_ADDRESS` | 发信 `From` 的唯一来源，调用方不可指定；其域也用于生成 `Message-ID` | `noreply@example.com` | 部署时必填有效地址 | 启动校验判据 2：必须能解析出邮件域；真实发信身份由部署提供，仓库只有占位 |
 | `REPLY_TO_ADDRESS` | 服务端显式写入的 `Reply-To`，回复经它路由回本服务 | `reply@example.com` | 部署时必填（须与 `IMAP_ADDRESS` 一致） | 启动校验判据 1 / 3 兜底一致性 |
-| `SMTP_HOST` | SMTP 服务器地址 | 空串 | 部署时必填（留空则发信流无法投递；不在启动校验三判据内） | 真实值由所有者提供，仓库只有假值 |
-| `SMTP_PORT` | SMTP 端口 | `587` | 否 | |
+| `SMTP_HOST` | SMTP 服务器地址 | 空串 | 部署时必填（留空则发信流无法投递；不在启动校验四判据内） | 真实值由所有者提供，仓库只有假值 |
+| `SMTP_PORT` | SMTP 端口 | `465` | 否 | 465 是隐式 TLS（SMTPS）口，与 `SMTP_TLS_MODE=ssl` 配对 |
 | `SMTP_USERNAME` | SMTP 账号 | 空串 | 随 `SMTP_HOST` 一并提供 | |
 | `SMTP_PASSWORD` | SMTP 口令 | 空串 | 随 `SMTP_HOST` 一并提供 | 绝不提交真实口令 |
-| `SMTP_STARTTLS` | SMTP 是否启用 STARTTLS | `true` | 否 | 本地 GreenMail（明文口）用 `false` |
-| `IMAP_HOST` | IMAP 服务器地址 | 空串 | 部署时必填（留空则入站拉取不可用；不在启动校验三判据内） | 真实值由所有者提供，仓库只有假值 |
-| `IMAP_PORT` | IMAP 端口 | `993` | 否 | `.env.example` 示例填 `3143`，是本地 GreenMail 的明文口；`993` 是隐式 TLS（连上即 TLS）端口，本服务 IMAP 侧只有 `IMAP_STARTTLS` 一个 TLS 开关（`design.md` §4.5），明文连 `993` 只会在 greeting 就失败 |
+| `SMTP_TLS_MODE` | SMTP 连接形态：`ssl`（建连即 TLS）/ `plain`（明文，本地联调） | `ssl` | 否 | 取值严格限定；STARTTLS 已移除，连只接受 STARTTLS 的端口会失败 |
+| `IMAP_HOST` | IMAP 服务器地址 | 空串 | 部署时必填（留空则入站拉取不可用；不在启动校验四判据内） | 真实值由所有者提供，仓库只有假值 |
+| `IMAP_PORT` | IMAP 端口 | `993` | 否 | 993 是隐式 TLS（IMAPS）口，与 `IMAP_TLS_MODE=ssl` 配对；本地 GreenMail 的明文口是 3143 |
 | `IMAP_USERNAME` | IMAP 登录名 | 空串 | 随 `IMAP_HOST` 一并提供 | **不**作为被拉取信箱地址的默认值（登录名不保证是邮箱地址） |
 | `IMAP_PASSWORD` | IMAP 口令 | 空串 | 随 `IMAP_HOST` 一并提供 | 绝不提交真实口令 |
 | `IMAP_MAILBOX` | 拉取回复的信箱**文件夹**；入站回复行 `mailbox` 列的取值来源 | `INBOX` | 否 | |
 | `IMAP_ADDRESS` | 被拉取信箱**地址**（不是文件夹），拿去与 `REPLY_TO_ADDRESS` 比对 | 空串 | **必填**：启动校验拒绝空值 | 判据 1：须与 `REPLY_TO_ADDRESS` 相同且非空，否则拒绝启动 |
-| `IMAP_STARTTLS` | 入站拉取是否启用 STARTTLS | `true` | 否 | `.env.example` 示例填 `false`，与本地 3143 明文口配对；置 `true` 走「明文连上再升级」 |
+| `IMAP_TLS_MODE` | IMAP 连接形态：`ssl`（建连即 TLS）/ `plain`（明文，本地联调） | `ssl` | 否 | 取值严格限定；STARTTLS 已移除 |
+| `TLS_VERIFY` | 对外 TLS 连接是否校验证书链与主机名（SMTP / IMAP 共用） | `true` | 否 | 设 `false` 时仍加密但不验证对端，启动会记 `tls_verify_disabled` 告警；只在网关证书不可信且拿不到 CA 时使用 |
+| `TLS_CA_BUNDLE` | 私有 CA / 自签网关的 PEM 路径（SMTP / IMAP 共用） | 空串 | 否 | 留空 = 运行环境默认信任库；配置为非空但不可读时启动校验拒绝启动（判据 4） |
 | `POLL_REVIEW_OUTBOUND_SECONDS` | 流① 安全审查出站邮件的轮询间隔（秒） | `10` | 否 | 间隔必须是配置项，不得硬编码（`AGENTS.md` §8） |
 | `POLL_SEND_SECONDS` | 流② 发送邮件的轮询间隔（秒） | `10` | 否 | 同上 |
 | `POLL_FETCH_INBOUND_SECONDS` | 流③ 拉取入站回复的轮询间隔（秒） | `10` | 否 | 同上 |
@@ -68,14 +70,15 @@
 - 丢弃原因：入站分拣的受控原因集合（`design.md` §3.4）。
 - 保留期与时间戳格式（`NFR-8` / `NFR-7`）：保留期是产品语义，可配置的只有清理**间隔**（`POLL_CLEANUP_SECONDS`）。
 
-## 启动即校验三判据
+## 启动即校验四判据
 
 判据在 `config.py` 的 `validate_startup()`，调用点在 `main.py` 的 lifespan 显式启动步骤（不在 import 期，
-见 `design.md` §4.4）。三条一次性全部检查后统一报出，**任一违规即拒绝启动、不监听端口**（fail-fast）：
+见 `design.md` §4.4）。四条一次性全部检查后统一报出，**任一违规即拒绝启动、不监听端口**（fail-fast）：
 
 1. `IMAP_ADDRESS` 与 `REPLY_TO_ADDRESS` 相等且非空——不一致时回复回路是静默断掉的；
 2. `MAIL_FROM_ADDRESS` 能解析出邮件域——出站 `Message-ID` 的域取自它；
-3. `REPLY_TO_ADDRESS` 本身是合法地址（含 `@`、无空白）。
+3. `REPLY_TO_ADDRESS` 本身是合法地址（含 `@`、无空白）；
+4. `TLS_CA_BUNDLE` 若配置为非空，文件必须可读——否则第一次 TLS 握手才报错、还会被归成临时故障。
 
 校验信息里只出现**配置项名**，不出现地址本身（`NFR-5`）。
 

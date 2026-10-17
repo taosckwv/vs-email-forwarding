@@ -7,12 +7,18 @@
 
 from __future__ import annotations
 
+import os
+import ssl
 from functools import lru_cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from vs_email_forwarding.core.message_id import extract_domain
+
+#: SMTP / IMAP 的连接形态：`ssl` = 建连即 TLS（隐式 TLS）；`plain` = 全程明文（本地联调）。
+#: STARTTLS 已移除——连到只接受 STARTTLS 的端口会失败，这是有意的边界。
+TlsMode = Literal["plain", "ssl"]
 
 
 class Settings(BaseSettings):
@@ -53,10 +59,11 @@ class Settings(BaseSettings):
 
     # SMTP 发信配置；真实主机与凭据由所有者后续提供，预研阶段允许留空。
     smtp_host: str = ""
-    smtp_port: int = 587
+    smtp_port: int = 465
     smtp_username: str = ""
     smtp_password: str = ""
-    smtp_starttls: bool = True
+    # 连接形态：`ssl`（默认，465 隐式 TLS）/ `plain`（本地 GreenMail 明文口）。
+    smtp_tls_mode: TlsMode = "ssl"
 
     # IMAP 收信配置；真实主机与凭据由所有者后续提供，预研阶段允许留空。
     imap_host: str = ""
@@ -64,13 +71,20 @@ class Settings(BaseSettings):
     imap_username: str = ""
     imap_password: str = ""
     imap_mailbox: str = "INBOX"
+    # 连接形态：`ssl`（默认，993 隐式 TLS）/ `plain`（本地 GreenMail 明文口）。
+    imap_tls_mode: TlsMode = "ssl"
+
+    # 对外 TLS 连接是否校验证书链与主机名（SMTP / IMAP 共用）；默认校验。
+    # 显式关闭时连接仍然加密、只是不验证对端身份，启动阶段会记一条结构化告警。
+    tls_verify: bool = True
+
+    # 私有 CA / 自签网关的 PEM 路径（SMTP / IMAP 共用）；空串 = 运行环境默认信任库。
+    # 配置为非空但不可读时启动即拒绝（validate_startup 的第 4 条判据）。
+    tls_ca_bundle: str = ""
 
     # 被拉取信箱**地址**（不是文件夹）：启动即校验，必须与 reply_to_address 相同；
     # 为空或不一致都拒绝启动。它**不默认取 imap_username**——登录名不保证是邮箱地址。
     imap_address: str = ""
-
-    # 入站拉取是否启用 STARTTLS。
-    imap_starttls: bool = True
 
     # 单次外部调用的墙钟上界（秒）；FR-15 的 3 分钟由它们与退避表共同推出。
     smtp_timeout_seconds: int = 10
@@ -109,16 +123,45 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def validate_startup(settings: Settings | None = None) -> None:
-    """启动即校验：三条判据任一不满足就抛 ``ValueError``，拒绝启动（``design.md`` §4.4）。
+def build_tls_context(settings: Settings | None = None) -> ssl.SSLContext:
+    """按配置构建对外 TLS 连接用的 ``SSLContext``（SMTP 与 IMAP 共用）。
 
-    三条判据（一次性全部检查后统一报出，部署配置写错时一轮就能改完）：
+    - 默认**校验**证书链与主机名（``TLS_VERIFY=true``）；
+    - ``TLS_VERIFY=false`` 时**仍然加密**，只是跳过对端身份校验——先关
+      ``check_hostname`` 再设 ``verify_mode=CERT_NONE``（顺序反了标准库抛
+      ``ValueError``）；
+    - ``TLS_CA_BUNDLE`` 非空时以它为受信任 CA（私有 CA / 自签网关），否则用运行
+      环境的默认信任库。
+
+    上下文按 ``(verify, ca_bundle)`` 缓存：适配器每个 tick 装配一次，没必要反复加载
+    系统证书。调用点在 ``flows/`` 的装配函数（``providers/`` 不读配置）。
+    """
+    resolved = get_settings() if settings is None else settings
+    return _build_tls_context(resolved.tls_verify, resolved.tls_ca_bundle)
+
+
+@lru_cache(maxsize=8)
+def _build_tls_context(verify: bool, ca_bundle: str) -> ssl.SSLContext:
+    """``build_tls_context`` 的缓存实现；参数必须可哈希。"""
+    context = ssl.create_default_context(cafile=ca_bundle or None)
+    if not verify:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def validate_startup(settings: Settings | None = None) -> None:
+    """启动即校验：四条判据任一不满足就抛 ``ValueError``，拒绝启动（``design.md`` §4.4）。
+
+    四条判据（一次性全部检查后统一报出，部署配置写错时一轮就能改完）：
 
     1. ``IMAP_ADDRESS`` 与 ``REPLY_TO_ADDRESS`` 相等且非空——两者不一致时回复回路是**静默断掉**
        的（邮件照发、回复永远拉不回来），这正是本设计已经否决过的隐式依赖；
     2. ``MAIL_FROM_ADDRESS`` 能解析出邮件域（取域函数在 :mod:`vs_email_forwarding.core.message_id`，
        出站 ``Message-ID`` 的域取自它）——``<uuid@>`` 这类残缺值必须在这里被拦住；
-    3. ``REPLY_TO_ADDRESS`` 本身是合法地址（含 ``@``、无空白）。
+    3. ``REPLY_TO_ADDRESS`` 本身是合法地址（含 ``@``、无空白）；
+    4. ``TLS_CA_BUNDLE`` 若配置为非空，则文件必须可读——否则第一次 TLS 握手才报错，
+       而且会被归成临时故障、看不出根因。
 
     **调用点在 ``main.py`` 的 lifespan 显式启动步骤，不在 import 期**：多 worker 或 ``--reload``
     下，import 期异常会表现为「每个 worker 各拒一次」的无尽重启循环，而不是一条清晰的启动错误。
@@ -133,6 +176,8 @@ def validate_startup(settings: Settings | None = None) -> None:
         failures.append("MAIL_FROM_ADDRESS 解析不出邮件域")
     if not _is_valid_address(resolved.reply_to_address):
         failures.append("REPLY_TO_ADDRESS 不是合法地址（须含 @ 且不含空白）")
+    if resolved.tls_ca_bundle and not os.access(resolved.tls_ca_bundle, os.R_OK):
+        failures.append("TLS_CA_BUNDLE 指向的文件不可读")
     if failures:
         raise ValueError("启动校验未通过：" + "；".join(failures))
 
@@ -142,4 +187,4 @@ def _is_valid_address(value: str) -> bool:
     return "@" in value and not any(char.isspace() for char in value)
 
 
-__all__ = ["Settings", "get_settings", "validate_startup"]
+__all__ = ["Settings", "TlsMode", "build_tls_context", "get_settings", "validate_startup"]

@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from functools import partial
 
+import structlog
 from fastapi import FastAPI
 
 from vs_email_forwarding import __version__, constants
@@ -35,8 +36,11 @@ from vs_email_forwarding.logging import configure_logging
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """进程生命周期钩子：启动校验 → 引擎 → 五条后台任务；关闭时反向收尾。
 
-    1. :func:`~vs_email_forwarding.config.validate_startup` 校验三条判据（``design.md`` §4.4）：
+    1. :func:`~vs_email_forwarding.config.validate_startup` 校验四条判据（``design.md`` §4.4）：
        这是**显式启动步骤**，不放在 import 期——不满足即抛出，进程非零退出、不监听端口。
+       ``TLS_VERIFY=false``（显式关闭对外 TLS 校验）在通过校验后记一条结构化告警
+       ``tls_verify_disabled``：关闭校验是允许的逃生门，但必须可观察。该事件只带
+       ``tls_verify`` 字段，不含地址、口令与路径（`docs/research/04-security-and-review.md`）。
     2. 建进程级引擎（:func:`~vs_email_forwarding.db.session.get_engine` 懒建单例），并取一个
        会话工厂给五条流共用（短会话按阶段开、用完即关）。
     3. 五条任务（四条业务流 + 保留期清理）交给 :class:`Scheduler` 并发启动：间隔只从配置读，
@@ -47,6 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     validate_startup(settings)
+    if not settings.tls_verify:
+        # 关闭校验是显式逃生门：连接仍然加密，但「校验被关掉」必须可观察。
+        structlog.get_logger(__name__).warning("tls_verify_disabled", tls_verify=False)
 
     get_engine()
     factory = session_factory()

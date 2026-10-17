@@ -55,7 +55,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vs_email_forwarding.config import Settings
+from vs_email_forwarding.config import Settings, build_tls_context
 from vs_email_forwarding.constants import (
     BODY_FORMAT_HTML,
     BODY_FORMAT_TEXT,
@@ -502,7 +502,8 @@ def _build_fetcher(settings: Settings) -> ImapFetcher:
             username=settings.imap_username,
             password=settings.imap_password,
             mailbox=settings.imap_mailbox,
-            starttls=settings.imap_starttls,
+            tls_mode=settings.imap_tls_mode,
+            ssl_context=(build_tls_context(settings) if settings.imap_tls_mode == "ssl" else None),
             timeout_seconds=settings.imap_timeout_seconds,
         )
     )

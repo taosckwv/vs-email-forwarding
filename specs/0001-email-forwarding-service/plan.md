@@ -501,7 +501,7 @@
 
 | 风险 | 影响 | 缓解措施 |
 |---|---|---|
-| **假 SMTP / 假 IMAP 与真实服务的语义偏差**：GreenMail 与进程内替身都不完全等价于企业邮箱（STARTTLS 行为、UID 语义、DSN 生成方式、超时表现） | 集成测试全绿但真实联调失败 | 假替身只承担「回路与幂等」的验证；`docs/research/05-dev-and-build-environment.md` 已登记 GreenMail 的两条已知差异（按账号分信箱、`auth.disabled`）；真实参数联调是 `docs/open-questions.md` B2，属交付后动作 |
+| **假 SMTP / 假 IMAP 与真实服务的语义偏差**：GreenMail 与进程内替身都不完全等价于企业邮箱（连接形态（直连 TLS / 明文）、UID 语义、DSN 生成方式、超时表现） | 集成测试全绿但真实联调失败 | 假替身只承担「回路与幂等」的验证；`docs/research/05-dev-and-build-environment.md` 已登记 GreenMail 的两条已知差异（按账号分信箱、`auth.disabled`）；真实参数联调是 `docs/open-questions.md` B2，属交付后动作 |
 | **把 `10` / `100` / `3600` 这类数值写死进代码**（`AGENTS.md` §8.2、`NFR-2`） | 间隔与批量不可配，`AC-23` 直接失败 | 六条流的循环、批量、分页一律从 `config.py` 取值；`AC-23` 用「改配置即生效」反证，代码里不得出现字面量 |
 | **用两步写法（先 `SELECT` 判断、再 `UPDATE`）实现认领**（`AGENTS.md` §8.1） | 并发下重复投递，`AC-26` / `AC-29` 失败 | 认领一律 `select(...).with_for_update(skip_locked=True)`（写法与编译产物见 §2.9）；`AC-26` 的静态检查 + `AC-29` 的并发用例双向兜住 |
 | **结果事务的 `rowcount = 0` 被当成错误处理** | 幂等窗口内重跑时报错、留下无法自愈的行 | 明确口径：`rowcount = 0` 与撞唯一键 / 主键**按幂等忽略**（`design.md` §3 阶段③）；`AC-11` / `AC-29` 断言的是「没有副作用」，不是「没有异常」 |

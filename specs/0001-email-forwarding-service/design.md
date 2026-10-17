@@ -275,7 +275,7 @@
 
 ### 3.3 流② 发信
 - 认领：`messages` 中 `direction = outbound`、`status = sending`、`attempt_count <= 4` 且 `next_attempt_at <= now()` 的行（`FR-4`）；`attempt_count = 4` 时走收割支（不发起 SMTP，直接置终态 `failed`）。
-- 调用：SMTP 直连（企业邮箱 / 自建 MTA），用 Python 标准库 `smtplib` 并通过 `asyncio.to_thread` 调用（与 IMAP 侧同构），不新增运行时依赖。主机、端口、账号、口令、是否 STARTTLS 等参数全部来自 `.env`（见 §4.5）。
+- 调用：SMTP 直连（企业邮箱 / 自建 MTA），用 Python 标准库 `smtplib` 并通过 `asyncio.to_thread` 调用（与 IMAP 侧同构），不新增运行时依赖。主机、端口、账号、口令、连接形态（直连 TLS / 明文）等参数全部来自 `.env`（见 §4.5）。
 - 落库：结果事务只写 `status` / `last_error_class` / `last_smtp_code` / `sent_at`，**不写** `attempt_count` 与 `next_attempt_at`；状态写入一律**带谓词**（只允许 §2.3 声明的起点），`rowcount = 0` 按幂等忽略。
 - 成功 → `status = sent` 并写 `sent_at`；失败 → 写 `last_error_class` 与 `last_smtp_code`：`attempt_count` 已达 4 则置终态 `failed`，未达上限则 `status` 保持 `sending`（退避由认领时写好的 `next_attempt_at` 承担）。
 
@@ -416,7 +416,7 @@
 - 代价如实登记：部署时多一个必填配置项（连同上面第 2、3 条校验，共三条判据）；配置写错时服务直接起不来（这是有意为之）。校验信息里只出现**配置项名**，不出现地址本身（`NFR-5`）。
 
 ### 4.5 SMTP / IMAP 参数来源
-SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取信箱地址与信箱文件夹等参数全部来自 `.env`，只经 `config.py`（pydantic-settings）这唯一入口读取，仓库只提交 `.env.example` 占位（见 `AGENTS.md` §7 与 `NFR-4`）；各字段的落点与命名见 §7 落地位置。
+SMTP 与 IMAP 的主机、端口、账号、口令、连接形态（直连 TLS / 明文）、TLS 校验与 CA bundle、被拉取信箱地址与信箱文件夹等参数全部来自 `.env`，只经 `config.py`（pydantic-settings）这唯一入口读取，仓库只提交 `.env.example` 占位（见 `AGENTS.md` §7 与 `NFR-4`）；各字段的落点与命名见 §7 落地位置。
 
 ### 4.6 日志输出格式
 `LOG_FORMAT` 的两条渲染分支都必须遵守同一个口径：**异常由 processor 渲染进结构化字段 `exception` 一次，渲染器只负责排版**。落点是 `logging.py`，下面两条配置必须同时成立，删改其中任一条即破坏本节承诺：
@@ -566,7 +566,7 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 - `providers/review/` —— 审查供应商接口（`base.py`：中性输入对象 + `pass` / `reject` 受控枚举）与空实现的落点；必须在此标注「空实现、永远通过」（`NFR-6`）；实现由工厂函数按配置选取（见 §4.2）。
 - `providers/smtp/` 与 `providers/imap/` —— 发信适配器（`From` 取自配置、显式写入 `Reply-To`）与入站拉取适配器（拉取所用的信箱地址即 `Reply-To` 的取值来源）。
 - `api/` —— HTTP 接口层（请求校验、响应序列化、依赖注入），业务编排在 `service/`；鉴权位置预留的**形态**定为 router 级依赖（在 `api_router` 上挂一个当前为空的依赖，后续替换成真实校验即可、不重排路由结构），「何时补、用什么方式」仍未定（`docs/open-questions.md` F3）；`/healthz` 只表达进程可用（§4.1）。
-- `config.py` —— 唯一的配置入口（pydantic-settings），四条业务流间隔字段与保留期清理间隔的默认值为 10 / 3600（`NFR-2`）；每批条数、主题与正文长度上限、被拉取信箱地址、IMAP 是否 STARTTLS、三个外部调用超时与回复分页条数都收敛在这一层（见下面的配置项清单）。启动即校验的**判据**也在这层（`validate_startup`），**调用点**在 `main.py` 的 lifespan 显式启动步骤（§4.4）。
+- `config.py` —— 唯一的配置入口（pydantic-settings），四条业务流间隔字段与保留期清理间隔的默认值为 10 / 3600（`NFR-2`）；每批条数、主题与正文长度上限、被拉取信箱地址、SMTP / IMAP 连接模式（`ssl` / `plain`）、TLS 校验与 CA bundle、三个外部调用超时与回复分页条数都收敛在这一层（见下面的配置项清单）。启动即校验的**判据**也在这层（`validate_startup`），**调用点**在 `main.py` 的 lifespan 显式启动步骤（§4.4）。
 
 仓库其他位置：
 
@@ -593,11 +593,12 @@ SMTP 与 IMAP 的主机、端口、账号、口令、是否 STARTTLS、被拉取
 | `MAIL_FROM_ADDRESS` | 发信 `From` 的唯一来源；其域也用于生成 `Message-ID` | 已定（仓库已有） |
 | `REPLY_TO_ADDRESS` | 服务显式写入的 `Reply-To`，必须等于被拉取信箱地址 | 已定（仓库已有） |
 | `IMAP_ADDRESS` | 被拉取信箱地址（地址，不是信箱文件夹）：与 `REPLY_TO_ADDRESS` 启动即校验，为空或不一致都拒绝启动 | 已定（仓库已有；字段默认空串，空值由启动校验拒绝） |
-| `IMAP_STARTTLS` | IMAP 是否启用 STARTTLS（布尔，默认 true） | 已定（仓库已有） |
-| `IMAP_HOST` / `IMAP_PORT` / `IMAP_PASSWORD` | IMAP 主机、端口、口令 | 已定（仓库已有） |
+| `SMTP_TLS_MODE` / `IMAP_TLS_MODE` | 连接形态：`ssl`（建连即 TLS，默认）或 `plain`（全程明文，本地联调）；STARTTLS 已移除（见 `specs/0002-smtp-imap-implicit-tls/design.md`） | 已定（仓库已有） |
+| `TLS_VERIFY` / `TLS_CA_BUNDLE` | 对外 TLS 连接是否校验证书与主机名（默认 true）；私有 CA / 自签网关用的 PEM 路径（默认空串 = 运行环境默认信任库） | 已定（仓库已有；取向见 `docs/research/04-security-and-review.md`） |
+| `IMAP_HOST` / `IMAP_PORT` / `IMAP_PASSWORD` | IMAP 主机、端口（默认 993）、口令 | 已定（仓库已有） |
 | `IMAP_USERNAME` | IMAP 登录名；不作为被拉取信箱地址的默认值 | 已定（仓库已有） |
 | `IMAP_MAILBOX` | 信箱文件夹：入站回复行 `mailbox` 列的取值来源（见 §2.1） | 已定（仓库已有） |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_STARTTLS` | SMTP 主机、端口、账号、口令、是否 STARTTLS | 已定（仓库已有） |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | SMTP 主机、端口（默认 465）、账号、口令 | 已定（仓库已有） |
 | `DATABASE_URL` | 异步驱动连接串，形如 `postgresql+asyncpg://…` | 已定（仓库已有） |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | compose 里 postgres 容器的初始化参数，须与 `DATABASE_URL` 一致 | 已定（仓库已有） |
 | `VS_EMAIL_FORWARDING_IMAGE` | 部署镜像 tag：`compose.yaml` 据它选应用镜像、留空退回 compose 默认 tag，回滚改回旧 tag 再重启；**部署专用**（只在服务器 `.env`），`config.py` 不读 | 已定（仓库已有） |

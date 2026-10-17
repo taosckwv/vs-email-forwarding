@@ -558,7 +558,8 @@ class TestDoubleContractConsistency:
                         username="placeholder",
                         password="placeholder",
                         mailbox="INBOX",
-                        starttls=False,
+                        tls_mode="plain",
+                        ssl_context=None,
                         timeout_seconds=10,
                     )
                 ),

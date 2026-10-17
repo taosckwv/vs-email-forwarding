@@ -127,9 +127,10 @@ networks:
 #   所以主机名用 127.0.0.1，与生产用服务名 postgres 的写法不同）：
 #     DATABASE_URL=postgresql+asyncpg://vs_email_forwarding:vs_email_forwarding_dev@127.0.0.1:5432/vs_email_forwarding_dev
 #   同理 SMTP/IMAP 指向 GreenMail：
-#     SMTP_HOST=127.0.0.1  SMTP_PORT=3025  SMTP_STARTTLS=false
-#     IMAP_HOST=127.0.0.1  IMAP_PORT=3143
-#   注意 SMTP_STARTTLS=false：GreenMail 的 3025 是明文端口（STARTTLS 在 3465 的 smtps 上）。
+#     SMTP_HOST=127.0.0.1  SMTP_PORT=3025  SMTP_TLS_MODE=plain
+#     IMAP_HOST=127.0.0.1  IMAP_PORT=3143  IMAP_TLS_MODE=plain
+#   注意 SMTP_TLS_MODE=plain / IMAP_TLS_MODE=plain：3025 / 3143 是明文端口；本服务已不再支持
+#   STARTTLS，TLS 只走直连 SSL（465 / 993）。
 #
 #   # 如果确实想连容器里的应用冒烟（可选，需先在本机构建镜像）：
 #   # app:

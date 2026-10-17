@@ -46,6 +46,8 @@
 
 **本特性的设计结论集中在 `specs/0001-email-forwarding-service/design.md`**：数据模型、流水线细节、集成契约与依赖选型都以那一个文件为唯一真源，`research/` 各册不再重复。
 
+**对外邮件连接的直连 TLS（隐式 TLS）口径**在 `specs/0002-smtp-imap-implicit-tls/design.md`：连接模式（`ssl` / `plain`）、证书校验与 CA bundle、失败归类都以那份文件为唯一真源；安全取向在 `research/04-security-and-review.md`，环境事实在 `research/05-dev-and-build-environment.md`。
+
 下面这张表只回答「**跨特性底座**去哪儿看」：
 
 | 底座主题 | 在哪一册 |

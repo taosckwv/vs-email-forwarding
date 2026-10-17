@@ -17,8 +17,8 @@
 
 ### B2. SMTP 与 IMAP 的真实参数
 
-- **已定**：账号与密码由所有者提供；**证书信任随账号一并确认**（若为私有 CA，需要把根证书带入宿主 / 镜像）。
-- **未定**：SMTP 主机 / 端口 / 是否 STARTTLS；IMAP 主机 / 端口 / 专用回复邮箱地址 / 目标邮箱文件夹；证书信任的具体内容。
+- **已定**：账号与密码由所有者提供；连接形态只支持 `ssl`（直连 TLS）与 `plain`（明文，本地联调）二态，**STARTTLS 已移除**（`specs/0002-smtp-imap-implicit-tls/`）；对外 TLS **默认校验证书与主机名**，私有 CA 走 `TLS_CA_BUNDLE`，确需关闭校验时用 `TLS_VERIFY=false` 且启动会留结构化告警（取向见 `docs/research/04-security-and-review.md`）。
+- **未定**：SMTP 主机 / 端口、IMAP 主机 / 端口、专用回复邮箱地址、目标邮箱文件夹；网关证书的签发者与实际连接主机名（决定是否需要 `TLS_CA_BUNDLE`，或只能 `TLS_VERIFY=false`）。
 - **当前状态**：全部收敛到 `.env`，仓库只提供 `.env.example` 占位值。
 - **阻塞**：真实环境联调。
 

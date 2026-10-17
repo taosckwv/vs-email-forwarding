@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import smtplib
+import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Literal
@@ -57,6 +58,10 @@ from vs_email_forwarding.providers.smtp.base import (
 )
 
 __all__ = ["SmtpConfig", "SmtplibSender"]
+
+#: 连接形态：`ssl` = 建连即 TLS（隐式 TLS，465）；`plain` = 全程明文（本地联调）。
+#: STARTTLS 升级能力已整体移除——配置里不再有对应开关，本层也不再有调用路径。
+SmtpTlsMode = Literal["plain", "ssl"]
 
 #: 正文格式到 MIME 子类型的映射（`constants.BodyFormat` 的两个取值，一期形态
 #: 只有纯文本与 HTML，`design.md` §4.3）。新增正文格式时这里会因 mypy 而红。
@@ -109,8 +114,13 @@ class SmtpConfig:
     username: str
     password: str
 
-    #: 是否用 STARTTLS 升级连接（`SMTP_STARTTLS`）。
-    starttls: bool
+    #: 连接形态（`SMTP_TLS_MODE`）：`ssl` 走 `smtplib.SMTP_SSL`，`plain` 走明文 `SMTP`。
+    tls_mode: SmtpTlsMode
+
+    #: `ssl` 模式所用的 TLS 上下文（`TLS_VERIFY` / `TLS_CA_BUNDLE` 的构建结果）。
+    #: `plain` 模式必须为 ``None``；`ssl` 模式必须非 ``None``——契约违反在构造时就报，
+    #: 不拖到工作线程里才炸。上下文由 `flows/` 装配时从 `config.build_tls_context` 注入。
+    ssl_context: ssl.SSLContext | None
 
     #: 单次投递的墙钟上界（秒，`SMTP_TIMEOUT_SECONDS`；`send_message` 的实参
     #: 未给时用它）。
@@ -120,6 +130,11 @@ class SmtpConfig:
     #: `MAIL_FROM_ADDRESS` 与 `REPLY_TO_ADDRESS`，**不允许调用方指定**。
     mail_from: str
     reply_to: str
+
+    def __post_init__(self) -> None:
+        """把「模式与上下文必须配对」的契约前移到构造时刻（`design.md` §4.1）。"""
+        if self.tls_mode == "ssl" and self.ssl_context is None:
+            raise ValueError("ssl 模式必须提供 ssl_context")
 
 
 class _ResponseCheckedSmtp(smtplib.SMTP):
@@ -132,22 +147,26 @@ class _ResponseCheckedSmtp(smtplib.SMTP):
     :class:`smtplib.SMTPConnectError`。后三者本身带 ``smtp_code``；第一种
     **不带**，只能在抛出点从它携带的 ``recipients`` 字典里取。取码与分类因此
     收敛到 :meth:`_respond`，每个交互点各有一个**私有**包装方法
-    （:meth:`_connect` / :meth:`_starttls` / :meth:`_login` / :meth:`_sendmail`，
+    （:meth:`_connect` / :meth:`_login` / :meth:`_sendmail`，
     收尾用 :meth:`_quit`）。
 
     为什么用私有方法而不是覆写标准库方法：override 的返回类型要带上
     `SmtpDeliveryResult`，就不再是 typeshed 里 ``sendmail -> _SendErrs``、
-    ``starttls`` / ``login -> _Reply`` 这些返回值的子类型，mypy 会报
-    ``[override]``；为它再补一条类型抑制注释，等于把「类型标注必须完整」的门禁
-    凿洞（`AGENTS.md` §7）。私有方法按 typeshed 逐参标注，调用方只走唯一的公开
-    入口 :meth:`deliver`：全仓不留抑制注释，也没有 LSP 违例。
+    ``login -> _Reply`` 这些返回值的子类型，mypy 会报 ``[override]``；为它再补
+    一条类型抑制注释，等于把「类型标注必须完整」的门禁凿洞（`AGENTS.md` §7）。
+    私有方法按 typeshed 逐参标注，调用方只走唯一的公开入口 :meth:`deliver`：
+    全仓不留抑制注释，也没有 LSP 违例。
 
     对端每一次回复的原始文本都在这里被丢弃（只保留数字返回码），所以包装
     方法里不再出现 ``errmsg`` / ``recipients`` 的文本部分（`design.md` §2.4）。
     """
 
     def deliver(self, config: SmtpConfig, message: EmailMessage) -> SmtpDeliveryResult:
-        """一次投递的完整序列：连接 →（按需）STARTTLS →（有登录名时）认证 → 投递。
+        """一次投递的完整序列：（按模式建连）→（有登录名时）认证 → 投递。
+
+        连接形态由 `config.tls_mode` 在装配时决定：`ssl` 模式用
+        :class:`_ResponseCheckedSmtpSSL`（建连即 TLS 握手），`plain` 模式用本类
+        （明文）。两种模式都不发送 STARTTLS——升级能力已整体移除。
 
         这是本类唯一的公开入口。序列中的每一步都可能被对端拒绝，拒绝一律由
         :meth:`_respond` 转成受控判定并**短路**返回，后面的步骤不再执行；收尾
@@ -168,10 +187,6 @@ class _ResponseCheckedSmtp(smtplib.SMTP):
             connected = self._connect(config.host, config.port)
             if isinstance(connected, SmtpDeliveryResult):
                 return connected
-            if config.starttls:
-                upgraded = self._starttls()
-                if isinstance(upgraded, SmtpDeliveryResult):
-                    return upgraded
             if config.username:
                 authenticated = self._login(config.username, config.password)
                 if isinstance(authenticated, SmtpDeliveryResult):
@@ -199,13 +214,6 @@ class _ResponseCheckedSmtp(smtplib.SMTP):
         try:
             return super().connect(host, port)
         except smtplib.SMTPConnectError as refusal:
-            return self._respond(refusal.smtp_code)
-
-    def _starttls(self) -> tuple[int, bytes] | SmtpDeliveryResult:
-        """STARTTLS 被拒同样是一个对端返回码。"""
-        try:
-            return super().starttls()
-        except smtplib.SMTPResponseException as refusal:
             return self._respond(refusal.smtp_code)
 
     def _login(self, user: str, password: str) -> tuple[int, bytes] | SmtpDeliveryResult:
@@ -257,6 +265,17 @@ class _ResponseCheckedSmtp(smtplib.SMTP):
         return self._respond(code)
 
 
+class _ResponseCheckedSmtpSSL(_ResponseCheckedSmtp, smtplib.SMTP_SSL):
+    """直连 SSL 变体：建连即完成 TLS 握手，取码与收尾逻辑从 :class:`_ResponseCheckedSmtp` 复用。
+
+    MRO 为 ``[_ResponseCheckedSmtpSSL, _ResponseCheckedSmtp, SMTP_SSL, SMTP, object]``：
+    :meth:`deliver` / :meth:`_respond` / :meth:`_connect` 等来自前一项，构造与
+    ``connect`` 最终落到 `smtplib.SMTP_SSL`。构造时必须注入 ``context``——标准库
+    `SMTP_SSL` 的默认上下文**不校验证书**（`verify_mode=0`），不能让它落回默认值；
+    注入的上下文由 `config.build_tls_context` 按 `TLS_VERIFY` / `TLS_CA_BUNDLE` 构建。
+    """
+
+
 class SmtplibSender:
     """用标准库 `smtplib` 投递邮件，经 `asyncio.to_thread` 调用。
 
@@ -266,8 +285,8 @@ class SmtplibSender:
     ::
 
         SmtplibSender(SmtpConfig(host=..., port=..., username=..., password=...,
-                                 starttls=..., timeout_seconds=..., mail_from=...,
-                                 reply_to=...))
+                                 tls_mode=..., ssl_context=..., timeout_seconds=...,
+                                 mail_from=..., reply_to=...))
 
     本类不读环境变量、不 import `config`——「装配」发生在阶段 4 的 `flows/`。
     """
@@ -312,7 +331,11 @@ class SmtplibSender:
         ``finally`` 上收（`docs/code-style.md` §1.4），本方法只把注入的配置与
         构造好的报文递过去——序列、取码与分类都在会话类内，不在这里摊开。
         """
-        client = _ResponseCheckedSmtp(timeout=timeout)
+        client: _ResponseCheckedSmtp
+        if config.tls_mode == "ssl":
+            client = _ResponseCheckedSmtpSSL(timeout=timeout, context=config.ssl_context)
+        else:
+            client = _ResponseCheckedSmtp(timeout=timeout)
         return client.deliver(config, self._build_message(config, message))
 
     def _build_message(self, config: SmtpConfig, message: OutboundMessage) -> EmailMessage:

@@ -34,11 +34,13 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from email import message_from_bytes
 from email.message import Message
+from typing import Literal
 
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError, LoginError
@@ -61,6 +63,10 @@ __all__ = [
     "ImapErrorClass",
     "MailboxStateResult",
 ]
+
+#: 连接形态：`ssl` = 建连即 TLS（隐式 TLS，993）；`plain` = 全程明文（本地联调）。
+#: STARTTLS 升级能力已整体移除——配置里不再有对应开关，本层也不再有调用路径。
+ImapTlsMode = Literal["plain", "ssl"]
 
 #: 文本负载解码的兜底字符集：部件没声明字符集、或声明了 Python 不认识的字符集名
 #: （现实里存在 ``unknown-8bit`` 这类取值）时用它再解一次，绝不因编码问题让整封
@@ -93,14 +99,22 @@ class ImapConfig:
     #: （§4.4 特意拆成两个配置项）。
     mailbox: str
 
-    #: 是否用 STARTTLS 升级连接（`IMAP_STARTTLS`）。配置里只有这一个 TLS 开关，
-    #: 本层就不发明第二个：连接一律以明文建立、`starttls()` 按需升级（与
-    #: `providers/smtp/` 的 `starttls` 同构）。
-    starttls: bool
+    #: 连接形态（`IMAP_TLS_MODE`）：`ssl` 走 `IMAPClient(ssl=True)`，`plain` 走明文。
+    tls_mode: ImapTlsMode
+
+    #: `ssl` 模式所用的 TLS 上下文（`TLS_VERIFY` / `TLS_CA_BUNDLE` 的构建结果）：
+    #: `plain` 模式必须为 ``None``，`ssl` 模式必须非 ``None``（构造时校验）。
+    #: 上下文由 `flows/` 装配时从 `config.build_tls_context` 注入。
+    ssl_context: ssl.SSLContext | None
 
     #: 单次调用的墙钟上界（秒，`IMAP_TIMEOUT_SECONDS`；方法的 ``timeout_seconds``
     #: 实参未给时用它）。
     timeout_seconds: int
+
+    def __post_init__(self) -> None:
+        """把「模式与上下文必须配对」的契约前移到构造时刻（`design.md` §4.2）。"""
+        if self.tls_mode == "ssl" and self.ssl_context is None:
+            raise ValueError("ssl 模式必须提供 ssl_context")
 
 
 class ImapClientFetcher:
@@ -112,7 +126,8 @@ class ImapClientFetcher:
     ::
 
         ImapClientFetcher(ImapConfig(host=..., port=..., username=..., password=...,
-                                     mailbox=..., starttls=..., timeout_seconds=...))
+                                     mailbox=..., tls_mode=..., ssl_context=...,
+                                     timeout_seconds=...))
 
     本类不读环境变量、不 import `config`——「装配」发生在阶段 4 的 `flows/`。
     方法名与形参跟 `providers/imap/base.py` 的 `ImapFetcher` 逐项对齐（同一道
@@ -255,15 +270,21 @@ def _fetch(
 
 @contextmanager
 def _session(config: ImapConfig, timeout: int) -> Iterator[IMAPClient]:
-    """打开一次会话（连接 + 可选的 STARTTLS + 登录），退出路径一律收尾。
+    """打开一次会话（按模式建连 + 登录），退出路径一律收尾。
 
     用 `with` 管连接的释放（`docs/code-style.md` §1.4）：取回成功、对端拒绝、
-    I/O 故障三条路径都必须在退出时收掉连接。`ssl=False` + 显式 `starttls()` 是
-    `IMAP_STARTTLS` 的字面口径（与 `providers/smtp/` 的 `starttls` 同构）。
+    I/O 故障三条路径都必须在退出时收掉连接。`ssl` 模式把注入的 ``ssl_context``
+    交给 `IMAPClient`（建连即 TLS 握手、默认校验上下文由配置层构建）；`plain`
+    模式显式 ``ssl=False`` 且不传上下文。两种模式都不发起 STARTTLS 升级——升级
+    能力已整体移除。
     """
-    with IMAPClient(config.host, config.port, ssl=False, timeout=timeout) as client:
-        if config.starttls:
-            client.starttls()
+    with IMAPClient(
+        config.host,
+        config.port,
+        ssl=config.tls_mode == "ssl",
+        ssl_context=config.ssl_context,
+        timeout=timeout,
+    ) as client:
         client.login(config.username, config.password)
         yield client
 
