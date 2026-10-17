@@ -62,3 +62,5 @@ mutants/
 # --- AI 协作工具的运行时状态 ---
 # .agent-teams/ 是 AgentTeams 插件的任务簿与邮箱等运行状态，不属于本仓库，不提交。
 .agent-teams/
+# .dsh-im/ 是 DSH 会话回传文件（IM 交付）的收发落点，属于运行时产物，不提交。
+.dsh-im/
